@@ -115,6 +115,9 @@ namespace cAlgo.Robots
         [Parameter("Max Drawdown % (halt)", Group = "Risk", DefaultValue = 15, MinValue = 1, MaxValue = 50, Step = 1)]
         public double MaxDrawdownPercent { get; set; }
 
+        [Parameter("Drawdown Halt Pause (bars)", Group = "Risk", DefaultValue = 20, MinValue = 1, MaxValue = 250, Step = 1)]
+        public int DrawdownPauseBars { get; set; }
+
         [Parameter("Reset Drawdown Halt On Start", Group = "Risk", DefaultValue = false)]
         public bool ResetDrawdownHalt { get; set; }
 
@@ -175,7 +178,7 @@ namespace cAlgo.Robots
         // ------------------------------------------------------------------ State
         private const string BreakoutTag = "-BO";
         private const string PullbackTag = "-PB";
-        private const string PeakEquityKey = "PeakEquity";
+        private const string PeakBalanceKey = "PeakBalance";
         private const int MinSpreadSamples = 30;
         private const int MaxSpreadSamples = 1440;
 
@@ -191,8 +194,8 @@ namespace cAlgo.Robots
         private readonly List<double> _spreadSamples = new List<double>();
         private DateTime _lastSpreadSampleTime = DateTime.MinValue;
         private DateTime _lastTickTime = DateTime.MinValue;
-        private double _peakEquity;
-        private bool _drawdownHaltLogged;
+        private double _peakBalance;
+        private DateTime _haltUntil = DateTime.MinValue;
         private PendingSignal _pending;
         private readonly Dictionary<long, PendingClose> _closeQueue = new Dictionary<long, PendingClose>();
 
@@ -245,7 +248,7 @@ namespace cAlgo.Robots
             }
 
             LoadDollarProxy();
-            InitPeakEquity();
+            InitPeakBalance();
 
             Positions.Closed += OnPositionClosed;
             Timer.Start(TimeSpan.FromSeconds(15));
@@ -257,7 +260,7 @@ namespace cAlgo.Robots
         protected override void OnStop()
         {
             Positions.Closed -= OnPositionClosed;
-            PersistPeakEquity();
+            PersistPeakBalance();
         }
 
         protected override void OnTick()
@@ -269,7 +272,6 @@ namespace cAlgo.Robots
 
                 _lastTickTime = Server.Time;
                 SampleSpread();
-                UpdatePeakEquity();
             }
             catch (Exception ex)
             {
@@ -288,7 +290,7 @@ namespace cAlgo.Robots
 
                 ManageOpenPositions(i);
                 EvaluateSignals(i);
-                PersistPeakEquity();
+                PersistPeakBalance();
             }
             catch (Exception ex)
             {
@@ -314,6 +316,7 @@ namespace cAlgo.Robots
             var p = args.Position;
             if (!IsOurs(p))
                 return;
+            UpdatePeakBalance();
             Print("Closed {0} {1} {2:F2} lots | reason={3} | net={4:F2} | swap={5:F2}",
                 p.Label, p.TradeType, Symbol.VolumeInUnitsToQuantity(p.VolumeInUnits), args.Reason, p.NetProfit, p.Swap);
         }
@@ -525,7 +528,8 @@ namespace cAlgo.Robots
                 double rMultiple = pos.Pips / initialRiskPips;
 
                 // --- Time stop: pullback trades that go nowhere free up risk budget.
-                if (TimeStopBars > 0 && pos.Label.EndsWith(PullbackTag, StringComparison.Ordinal))
+                // A trade whose stop already sits at/beyond entry carries no risk - let the trail manage it.
+                if (TimeStopBars > 0 && pos.Label.EndsWith(PullbackTag, StringComparison.Ordinal) && !StopLocksBreakeven(pos))
                 {
                     int barsHeld = i - entryIdx + 1;
                     if (barsHeld >= TimeStopBars && rMultiple < TimeStopMinR)
@@ -645,6 +649,15 @@ namespace cAlgo.Robots
             }
         }
 
+        private static bool StopLocksBreakeven(Position pos)
+        {
+            if (!pos.StopLoss.HasValue)
+                return false;
+            return pos.TradeType == TradeType.Buy
+                ? pos.StopLoss.Value >= pos.EntryPrice
+                : pos.StopLoss.Value <= pos.EntryPrice;
+        }
+
         private void ModifyStop(Position pos, double newStop)
         {
             TradeResult r = pos.ModifyStopLossPrice(newStop);
@@ -690,15 +703,28 @@ namespace cAlgo.Robots
             }
 
             // Size off a gap-inflated stop so weekend/news gaps don't blow through the risk target.
-            double units = riskCash / (stopPips * GapBufferMultiplier * pipValue);
-            units = Math.Min(units, Symbol.QuantityToVolumeInUnits(MaxLots));
-            units = Math.Min(units, Symbol.VolumeInUnitsMax);
-            units = Symbol.NormalizeVolumeInUnits(units, RoundingMode.Down);
+            double riskPerUnit = stopPips * GapBufferMultiplier * pipValue;
+            double rawUnits = riskCash / riskPerUnit;
+            rawUnits = Math.Min(rawUnits, Symbol.QuantityToVolumeInUnits(MaxLots));
+            rawUnits = Math.Min(rawUnits, Symbol.VolumeInUnitsMax);
 
-            if (units < Symbol.VolumeInUnitsMin)
+            // Check BEFORE normalizing: NormalizeVolumeInUnits lifts sub-minimum volumes up to
+            // VolumeInUnitsMin (observed in backtests), which would silently multiply the risk.
+            if (rawUnits < Symbol.VolumeInUnitsMin)
             {
-                // Never round UP to the minimum: that would exceed the risk target.
-                Print("Computed volume below broker minimum ({0} < {1}) - skipping trade.", units, Symbol.VolumeInUnitsMin);
+                double minLotRiskPct = Symbol.VolumeInUnitsMin * riskPerUnit / equity * 100.0;
+                Print("SKIP: broker minimum {0} units would risk {1:F1}% of equity (target {2:F2}%). " +
+                      "Account too small for this stop distance.", Symbol.VolumeInUnitsMin, minLotRiskPct, riskPct);
+                return 0;
+            }
+
+            double units = Symbol.NormalizeVolumeInUnits(rawUnits, RoundingMode.Down);
+
+            // Final hard check on the volume that will actually be sent.
+            double actualRisk = units * riskPerUnit;
+            if (units <= 0 || actualRisk > riskCash * 1.001)
+            {
+                Print("SKIP: normalized volume {0} risks {1:F2} > budget {2:F2}.", units, actualRisk, riskCash);
                 return 0;
             }
             return units;
@@ -755,34 +781,39 @@ namespace cAlgo.Robots
             return barsSince < CooldownBars;
         }
 
+        // Drawdown is measured on CLOSED balance: open-profit giveback on a protected trade
+        // is the trailing stop's job, not a reason to stop trading. After a breach the bot
+        // pauses for N bars, then resumes with the peak re-based to the current balance.
         private bool IsDrawdownHalted()
         {
-            if (_peakEquity <= 0)
+            DateTime now = Server.Time;
+            if (now < _haltUntil)
+                return true;
+
+            if (_peakBalance <= 0)
                 return false;
 
-            double dd = (_peakEquity - Account.Equity) / _peakEquity * 100.0;
+            double dd = (_peakBalance - Account.Balance) / _peakBalance * 100.0;
             if (dd < MaxDrawdownPercent)
                 return false;
 
-            if (!_drawdownHaltLogged)
-            {
-                Print("DRAWDOWN HALT: equity {0:F2} is {1:F1}% below peak {2:F2}. No new entries. " +
-                      "Review, then restart with 'Reset Drawdown Halt On Start' = true.",
-                      Account.Equity, dd, _peakEquity);
-                _drawdownHaltLogged = true;
-            }
+            _haltUntil = now.AddDays(DrawdownPauseBars * 7.0 / 5.0);
+            Print("DRAWDOWN HALT: balance {0:F2} is {1:F1}% below peak {2:F2}. Pausing new entries until {3:yyyy-MM-dd}.",
+                Account.Balance, dd, _peakBalance, _haltUntil);
+            _peakBalance = Account.Balance;
+            PersistPeakBalance();
             return true;
         }
 
-        private void UpdatePeakEquity()
+        private void UpdatePeakBalance()
         {
-            if (Account.Equity > _peakEquity)
-                _peakEquity = Account.Equity;
+            if (Account.Balance > _peakBalance)
+                _peakBalance = Account.Balance;
         }
 
-        private void InitPeakEquity()
+        private void InitPeakBalance()
         {
-            _peakEquity = Account.Equity;
+            _peakBalance = Account.Balance;
             if (RunningMode != RunningMode.RealTime)
                 return;
 
@@ -790,31 +821,31 @@ namespace cAlgo.Robots
             {
                 if (ResetDrawdownHalt)
                 {
-                    PersistPeakEquity();
+                    PersistPeakBalance();
                     return;
                 }
-                string stored = LocalStorage.GetString(PeakEquityKey);
+                string stored = LocalStorage.GetString(PeakBalanceKey);
                 double value;
                 if (!string.IsNullOrEmpty(stored) &&
                     double.TryParse(stored, NumberStyles.Float, CultureInfo.InvariantCulture, out value) &&
-                    value > _peakEquity)
+                    value > _peakBalance)
                 {
-                    _peakEquity = value;
+                    _peakBalance = value;
                 }
             }
             catch (Exception ex)
             {
-                Print("LocalStorage read failed ({0}) - peak equity starts at current equity.", ex.Message);
+                Print("LocalStorage read failed ({0}) - peak balance starts at current balance.", ex.Message);
             }
         }
 
-        private void PersistPeakEquity()
+        private void PersistPeakBalance()
         {
             if (RunningMode != RunningMode.RealTime)
                 return;
             try
             {
-                LocalStorage.SetString(PeakEquityKey, _peakEquity.ToString(CultureInfo.InvariantCulture));
+                LocalStorage.SetString(PeakBalanceKey, _peakBalance.ToString(CultureInfo.InvariantCulture));
             }
             catch (Exception ex)
             {
