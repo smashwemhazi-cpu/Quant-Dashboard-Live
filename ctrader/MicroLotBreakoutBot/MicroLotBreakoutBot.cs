@@ -62,6 +62,14 @@ namespace cAlgo.Robots
         RiskPercent
     }
 
+    public enum MicroStopTrigger
+    {
+        // Stop fires on the first price beyond it (cTrader default).
+        SingleTick,
+        // Stop fires only after two consecutive prices beyond it: ignores one-tick spikes.
+        DoubleTick
+    }
+
     public enum MicroStopMode
     {
         // Use the structural stop; skip the trade if it costs more than the risk cap.
@@ -152,6 +160,9 @@ namespace cAlgo.Robots
 
         [Parameter("Min Stop (ATR x)", Group = "Stops", DefaultValue = 1.5, MinValue = 0.3, MaxValue = 4.0, Step = 0.1)]
         public double MinStopAtr { get; set; }
+
+        [Parameter("Stop Trigger", Group = "Stops", DefaultValue = MicroStopTrigger.DoubleTick)]
+        public MicroStopTrigger StopTrigger { get; set; }
 
         [Parameter("Breakeven At (R, 0=off)", Group = "Stops", DefaultValue = 1.0, MinValue = 0.0, MaxValue = 3.0, Step = 0.25)]
         public double BreakevenR { get; set; }
@@ -245,6 +256,9 @@ namespace cAlgo.Robots
         private readonly HashSet<long> _breakevenDone = new HashSet<long>();
         private readonly Dictionary<string, int> _rejections = new Dictionary<string, int>();
         private int _ordersPlaced;
+        private int _stopFills;
+        private double _stopSlippageCash;
+        private double _maxStopSlippageCash;
 
         private enum Regime
         {
@@ -318,8 +332,8 @@ namespace cAlgo.Robots
         // logs the settings it actually used.
         private void PrintConfig()
         {
-            Print("CONFIG | label={0} sizing={1} stopMode={2} minStopATR={3} riskPct={4} maxTrades/day={5} commission/lot={6}",
-                BotLabel, SizingMode, StopMode, MinStopAtr, MaxRiskPercent, MaxTradesPerDay, CommissionPerLot);
+            Print("CONFIG | label={0} sizing={1} stopMode={2} minStopATR={3} riskPct={4} maxTrades/day={5} commission/lot={6} stopTrigger={7}",
+                BotLabel, SizingMode, StopMode, MinStopAtr, MaxRiskPercent, MaxTradesPerDay, CommissionPerLot, StopTrigger);
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
                 Session1Start, Session1End, Session2Start, Session2End, UseBreakout, UseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
             if (CommissionPerLot <= 0)
@@ -465,7 +479,7 @@ namespace cAlgo.Robots
 
             double volume = TradeVolume(stopDist);
             TradeResult r = PlaceStopLimitOrder(side, SymbolName, volume, entry, MaxSlippagePips, BotLabel + BreakoutTag,
-                sl, tp, ProtectionType.Absolute, expiry);
+                sl, tp, ProtectionType.Absolute, expiry, null, false, TriggerMethod());
 
             if (r.IsSuccessful)
             {
@@ -546,7 +560,7 @@ namespace cAlgo.Robots
             double volume = TradeVolume(stopDist);
 
             TradeResult r = ExecuteMarketRangeOrder(side, SymbolName, volume, MaxSlippagePips, entry,
-                BotLabel + FadeTag, slPips, tpPips);
+                BotLabel + FadeTag, slPips, tpPips, null, false, TriggerMethod());
 
             if (r.IsSuccessful && r.Position != null)
             {
@@ -792,6 +806,7 @@ namespace cAlgo.Robots
                 return;
             _breakevenDone.Remove(p.Id);
             Print("CLOSED {0} {1} | reason={2} | net={3:F2} | equity={4:F2}", p.Label, p.TradeType, args.Reason, p.NetProfit, Account.Equity);
+            RecordStopSlippage(p, args.Reason);
         }
 
         private void CancelOurOrders()
@@ -826,9 +841,35 @@ namespace cAlgo.Robots
                 Print("REJECT: {0}", reason);
         }
 
+        // How much worse than the stop price each stop-loss filled. This was the deciding cost
+        // in every M5 gold backtest, so every run reports it.
+        private void RecordStopSlippage(Position p, PositionCloseReason reason)
+        {
+            if (reason != PositionCloseReason.StopLoss || !p.StopLoss.HasValue)
+                return;
+            HistoricalTrade t = History.Where(h => h.PositionId == p.Id).OrderByDescending(h => h.ClosingTime).FirstOrDefault();
+            if (t == null)
+                return;
+            double slip = p.TradeType == TradeType.Buy ? p.StopLoss.Value - t.ClosingPrice : t.ClosingPrice - p.StopLoss.Value;
+            double cash = Math.Max(0, CashForPriceMove(slip, p.VolumeInUnits));
+            _stopFills++;
+            _stopSlippageCash += cash;
+            _maxStopSlippageCash = Math.Max(_maxStopSlippageCash, cash);
+            if (cash > 2.0 * CashForPriceMove(Symbol.Spread, p.VolumeInUnits) && cash > 1.0)
+                Print("STOP SLIPPAGE | {0} stop {1} filled {2} -> ${3:F2} worse than planned", p.Id, p.StopLoss.Value, t.ClosingPrice, cash);
+        }
+
+        private StopTriggerMethod TriggerMethod()
+        {
+            return StopTrigger == MicroStopTrigger.DoubleTick ? StopTriggerMethod.DoubleTrade : StopTriggerMethod.Trade;
+        }
+
         private void PrintRejectionSummary()
         {
             Print("RUN SUMMARY | orders placed/filled: {0} | closed trades: {1}", _ordersPlaced, OurHistory().Count());
+            double net = OurHistory().Sum(t => t.NetProfit);
+            Print("RUN SUMMARY | stop-loss fills: {0} | slippage total ${1:F2} (avg ${2:F2}, max ${3:F2}) | net ${4:F2} | net if stops filled exactly ${5:F2}",
+                _stopFills, _stopSlippageCash, _stopFills > 0 ? _stopSlippageCash / _stopFills : 0, _maxStopSlippageCash, net, net + _stopSlippageCash);
             foreach (var kv in _rejections.OrderByDescending(k => k.Value))
                 Print("RUN SUMMARY | rejected {0,6} x  {1}", kv.Value, kv.Key);
         }

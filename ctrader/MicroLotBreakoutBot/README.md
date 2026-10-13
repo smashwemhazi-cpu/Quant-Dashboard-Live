@@ -88,6 +88,21 @@ The preset applied correctly (log: `PRESET RangeFadeV1 applied`). Result: 95 tra
 
 Four configurations, ≈ 390 trades, the same answer: **no edge after costs.** Stop slippage alone (≈ 25% of R on $4–5 stops) is larger than the net loss in every run. At a fixed 1 oz on a $180 account, stops can't be wide enough to make execution costs small relative to R. That constraint, not the parameters, is the problem. Further tuning on these nine months would be data mining.
 
+## Gold fix: the signal works, stop execution doesn't
+`tools/stop_slippage.py` on runs 1, 3 and 4 shows the entry signals were **profitable before stop slippage** in all three:
+
+| Run | Net | Stop slippage | Net if stops filled at their price | Median slip per stop |
+|---|---|---|---|---|
+| 1 | −$30.82 | $67.72 | **+$36.90** | $0.60 |
+| 3 | −$24.33 | $38.84 | **+$14.51** | $0.71 |
+| 4 | −$25.18 | $66.61 | **+$41.43** | $0.71 |
+
+The worst five fills account for 28–40% of all slippage. So the fix targets stop execution, not new signals:
+- **`Stop Trigger = DoubleTick` (new default):** a stop triggers only after **two consecutive** prices beyond it, so a single-tick wick no longer stops the trade out at a bad fill. This uses cTrader's `StopTriggerMethod.DoubleTrade`.
+- **Slippage accounting:** every stop-loss fill is measured. `STOP SLIPPAGE` lines flag bad fills, and `RUN SUMMARY` prints total, average and maximum slippage plus *net if stops had filled exactly*. Each run now shows directly whether execution is still the problem.
+
+**How to test it:** run the same preset twice, once with `Stop Trigger = SingleTick` and once with `DoubleTick`, on **2025 data** (not 2026). Compare `RUN SUMMARY`. The double trigger has to win on net profit, not only on slippage: it also lets some losing trades run past the stop before they close.
+
 ## Honest limits
 - 3% risk per trade on $200 is aggressive: 10 losses in a row cost about 26%.
 - Stops tightened by `CappedAtRisk` get hit more often. Whether the higher trade count still makes money after costs is exactly what the backtest has to show. The design doesn't guarantee it.
