@@ -61,6 +61,19 @@ A trade is taken only if its target is at least **3× the round-trip cost** (spr
 
 Run `python3 ctrader/tools/analyze_events.py events.json 2026-06-01` on every new export.
 
+## Backtest reviews #2 and #3 → preset `RangeFadeV1`
+- **Run #2** reused stale saved settings, so it repeated run #1 (116 trades, PF 0.91).
+- **Run #3** used `Stop Mode = Structural`: 62 trades, all range fades, PF 0.87. The breakout engine placed **zero** trades, because its structural stops never fit the $5.40 cap.
+- **Across runs 1 and 3** (`tools/compare_runs.py`):
+
+| Slice | Run 1 | Run 3 |
+|---|---|---|
+| Range fade, excluding 07:00 and 12:00–13:59 UTC | 56 trades, **PF 1.39** | 38 trades, **PF 1.25** |
+| 12:00–13:59 UTC (US data and New York open) | PF 0.47 | PF 0.30 |
+| Range-fade buys vs sells | Inconsistent | Inconsistent |
+
+The buy/sell split reflects which way gold moved that year rather than an edge, so it isn't used as a filter. **The new `Preset` parameter (default `RangeFadeV1`) applies the configuration that held up**, and because it's a new parameter it overrides stale saved instances. It is still in-sample: it has to be confirmed on a period never used before (see below).
+
 ## Honest limits
 - 3% risk per trade on $200 is aggressive: 10 losses in a row cost about 26%.
 - Stops tightened by `CappedAtRisk` get hit more often. Whether the higher trade count still makes money after costs is exactly what the backtest has to show. The design doesn't guarantee it.

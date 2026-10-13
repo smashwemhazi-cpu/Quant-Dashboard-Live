@@ -46,6 +46,14 @@ namespace cAlgo.Robots
         Hour4
     }
 
+    public enum MicroPreset
+    {
+        // Range fade only, at the hours where it held up across backtests 1 and 3.
+        RangeFadeV1,
+        // Use every parameter exactly as set in the panel.
+        Custom
+    }
+
     public enum MicroSizingMode
     {
         // Always trade Fixed Lots.
@@ -68,6 +76,9 @@ namespace cAlgo.Robots
         // ------------------------------------------------------------------ General
         [Parameter("Label", Group = "General", DefaultValue = "MLB")]
         public string BotLabel { get; set; }
+
+        [Parameter("Preset", Group = "General", DefaultValue = MicroPreset.RangeFadeV1)]
+        public MicroPreset Preset { get; set; }
 
         [Parameter("Direction", Group = "General", DefaultValue = MicroDirection.Both)]
         public MicroDirection Direction { get; set; }
@@ -254,6 +265,8 @@ namespace cAlgo.Robots
                 return;
             }
 
+            ApplyPreset();
+
             _volume = ResolveVolume();
             if (_volume <= 0)
             {
@@ -279,6 +292,28 @@ namespace cAlgo.Robots
             PrintFeasibilityReport();
         }
 
+        // A NEW parameter takes its default even on an old saved instance, so the preset
+        // reaches runs that never loaded a .cbotset. Values match the configuration that
+        // was profitable in backtests 1 and 3 (fade only, no 07:00 or 12:00-13:59 UTC).
+        private void ApplyPreset()
+        {
+            if (Preset != MicroPreset.RangeFadeV1)
+                return;
+
+            UseBreakout = false;
+            UseRangeFade = true;
+            StopMode = MicroStopMode.CappedAtRisk;
+            MinStopAtr = 1.0;
+            AtrPeriod = 20;
+            MaxTradesPerDay = 2;
+            Session1Start = 800;
+            Session1End = 1100;
+            Session2Start = 1400;
+            Session2End = 1630;
+            Print("PRESET RangeFadeV1 applied: breakout off, fade on, CappedAtRisk, minStopATR=1.0, ATR=20, " +
+                  "2 trades/day, sessions 0800-1100 & 1400-1630 UTC. Set Preset = Custom to use panel values.");
+        }
+
         // Saved instances keep old parameter values when the code changes, so every run
         // logs the settings it actually used.
         private void PrintConfig()
@@ -287,9 +322,10 @@ namespace cAlgo.Robots
                 BotLabel, SizingMode, StopMode, MinStopAtr, MaxRiskPercent, MaxTradesPerDay, CommissionPerLot);
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
                 Session1Start, Session1End, Session2Start, Session2End, UseBreakout, UseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
-            if (MinStopAtr < 1.5 || Minutes(Session1Start) < Minutes(800) || CommissionPerLot <= 0)
-                Print("CONFIG WARNING: settings differ from the backtest-review recommendations " +
-                      "(Min Stop ATR >= 1.5, sessions from 08:00, commission entered). Load recommended.cbotset.");
+            if (CommissionPerLot <= 0)
+                Print("CONFIG WARNING: Commission $ per Lot is 0 - the cost hurdle ignores commission. Enter your broker's round-turn rate.");
+            if (Preset == MicroPreset.Custom && (Minutes(Session1Start) < Minutes(800) || Minutes(Session2Start) < Minutes(1400)))
+                Print("CONFIG WARNING: sessions include 07:00 or 12:00-13:59 UTC, the hours that lost money in every backtest.");
         }
 
         protected override void OnStop()
