@@ -275,7 +275,21 @@ namespace cAlgo.Robots
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
+            PrintConfig();
             PrintFeasibilityReport();
+        }
+
+        // Saved instances keep old parameter values when the code changes, so every run
+        // logs the settings it actually used.
+        private void PrintConfig()
+        {
+            Print("CONFIG | label={0} sizing={1} stopMode={2} minStopATR={3} riskPct={4} maxTrades/day={5} commission/lot={6}",
+                BotLabel, SizingMode, StopMode, MinStopAtr, MaxRiskPercent, MaxTradesPerDay, CommissionPerLot);
+            Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
+                Session1Start, Session1End, Session2Start, Session2End, UseBreakout, UseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
+            if (MinStopAtr < 1.5 || Minutes(Session1Start) < Minutes(800) || CommissionPerLot <= 0)
+                Print("CONFIG WARNING: settings differ from the backtest-review recommendations " +
+                      "(Min Stop ATR >= 1.5, sessions from 08:00, commission entered). Load recommended.cbotset.");
         }
 
         protected override void OnStop()
