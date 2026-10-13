@@ -123,6 +123,13 @@ This copies the structure of the manual trades you showed: **several limit order
 
 **Test:** run `Entry Mode = Market` and `Entry Mode = LimitLadder` with otherwise identical settings on **2025 data**. Then compare `RUN SUMMARY` and `tools/analyze_events.py` output. Keep the ladder only if it improves **net profit and profit factor**, not just win rate.
 
+## Parameter review
+- **The `RangeFadeV1` preset is removed.** It silently overwrote what you set in the panel (minimum stop 1.0 ATR, ATR 20, 2 trades a day, fixed hours), and backtest #4 showed it lost money (PF 0.91). Every value in the panel now applies as shown, and the `CONFIG` lines print what was actually used.
+- **Commission default changed from $0 to $8 per lot round turn,** which matches your reports. With $0, the cost hurdle was ignoring commission.
+- **`Ladder Min Order Stop` raised from 0.5 to 1.0 ATR.** At 0.5 ATR (≈ $1.60), the typical $0.65 stop slippage would be about 40% of each ladder order's risk.
+- **New config warnings** flag a `Max Spread` over 20 pips (saved instances still carry 80, which is $8 on gold) and ladder stops far tighter than `Min Stop`.
+- **`recommended.cbotset`** holds the reviewed settings. Load it, or create a fresh instance, because saved instances keep their old values.
+
 ## Honest limits
 - 3% risk per trade on $200 is aggressive: 10 losses in a row cost about 26%.
 - Stops tightened by `CappedAtRisk` get hit more often. Whether the higher trade count still makes money after costs is exactly what the backtest has to show. The design doesn't guarantee it.

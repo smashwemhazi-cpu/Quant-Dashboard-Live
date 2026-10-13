@@ -46,14 +46,6 @@ namespace cAlgo.Robots
         Hour4
     }
 
-    public enum MicroPreset
-    {
-        // Range fade only, at the hours where it held up across backtests 1 and 3.
-        RangeFadeV1,
-        // Use every parameter exactly as set in the panel.
-        Custom
-    }
-
     public enum MicroSizingMode
     {
         // Always trade Fixed Lots.
@@ -92,9 +84,6 @@ namespace cAlgo.Robots
         // ------------------------------------------------------------------ General
         [Parameter("Label", Group = "General", DefaultValue = "MLB")]
         public string BotLabel { get; set; }
-
-        [Parameter("Preset", Group = "General", DefaultValue = MicroPreset.RangeFadeV1)]
-        public MicroPreset Preset { get; set; }
 
         [Parameter("Direction", Group = "General", DefaultValue = MicroDirection.Both)]
         public MicroDirection Direction { get; set; }
@@ -175,7 +164,7 @@ namespace cAlgo.Robots
         [Parameter("Ladder Stop Beyond Zone (ATR x)", Group = "Ladder", DefaultValue = 0.75, MinValue = 0.2, MaxValue = 3.0, Step = 0.05)]
         public double LadderStopAtr { get; set; }
 
-        [Parameter("Ladder Min Order Stop (ATR x)", Group = "Ladder", DefaultValue = 0.5, MinValue = 0.1, MaxValue = 3.0, Step = 0.05)]
+        [Parameter("Ladder Min Order Stop (ATR x)", Group = "Ladder", DefaultValue = 1.0, MinValue = 0.1, MaxValue = 3.0, Step = 0.05)]
         public double LadderMinStopAtr { get; set; }
 
         [Parameter("Ladder Expiry (bars)", Group = "Ladder", DefaultValue = 3, MinValue = 1, MaxValue = 24, Step = 1)]
@@ -204,7 +193,7 @@ namespace cAlgo.Robots
         public int FridayFlatTimeUtc { get; set; }
 
         // ------------------------------------------------------------------ Costs
-        [Parameter("Commission $ per Lot (round turn)", Group = "Costs", DefaultValue = 0, MinValue = 0, Step = 0.5)]
+        [Parameter("Commission $ per Lot (round turn)", Group = "Costs", DefaultValue = 8, MinValue = 0, Step = 0.5)]
         public double CommissionPerLot { get; set; }
 
         [Parameter("Cost Hurdle (target / cost x)", Group = "Costs", DefaultValue = 3.0, MinValue = 1.0, MaxValue = 10.0, Step = 0.5)]
@@ -312,8 +301,6 @@ namespace cAlgo.Robots
                 return;
             }
 
-            ApplyPreset();
-
             _volume = ResolveVolume();
             if (_volume <= 0)
             {
@@ -339,28 +326,6 @@ namespace cAlgo.Robots
             PrintFeasibilityReport();
         }
 
-        // A NEW parameter takes its default even on an old saved instance, so the preset
-        // reaches runs that never loaded a .cbotset. Values match the configuration that
-        // was profitable in backtests 1 and 3 (fade only, no 07:00 or 12:00-13:59 UTC).
-        private void ApplyPreset()
-        {
-            if (Preset != MicroPreset.RangeFadeV1)
-                return;
-
-            UseBreakout = false;
-            UseRangeFade = true;
-            StopMode = MicroStopMode.CappedAtRisk;
-            MinStopAtr = 1.0;
-            AtrPeriod = 20;
-            MaxTradesPerDay = 2;
-            Session1Start = 800;
-            Session1End = 1100;
-            Session2Start = 1400;
-            Session2End = 1630;
-            Print("PRESET RangeFadeV1 applied: breakout off, fade on, CappedAtRisk, minStopATR=1.0, ATR=20, " +
-                  "2 trades/day, sessions 0800-1100 & 1400-1630 UTC. Set Preset = Custom to use panel values.");
-        }
-
         // Saved instances keep old parameter values when the code changes, so every run
         // logs the settings it actually used.
         private void PrintConfig()
@@ -371,9 +336,13 @@ namespace cAlgo.Robots
                 EntryMode, LadderOrders, LadderDepthAtr, LadderStopAtr, LadderMinStopAtr, LadderExpiryBars, UseTrendLadder);
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
                 Session1Start, Session1End, Session2Start, Session2End, UseBreakout, UseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
+            if (MaxSpreadPips > 20)
+                Print("CONFIG WARNING: Max Spread {0} pips is very wide (on XAUUSD 1 pip = $0.10 at 0.01 lot). Recommended: 6.", MaxSpreadPips);
+            if (LadderMinStopAtr < MinStopAtr * 0.66)
+                Print("CONFIG WARNING: Ladder Min Order Stop {0} ATR is far below Min Stop {1} ATR - ladder stops will sit inside the slippage noise.", LadderMinStopAtr, MinStopAtr);
             if (CommissionPerLot <= 0)
                 Print("CONFIG WARNING: Commission $ per Lot is 0 - the cost hurdle ignores commission. Enter your broker's round-turn rate.");
-            if (Preset == MicroPreset.Custom && (Minutes(Session1Start) < Minutes(800) || Minutes(Session2Start) < Minutes(1400)))
+            if (Minutes(Session1Start) < Minutes(800) || Minutes(Session2Start) < Minutes(1400))
                 Print("CONFIG WARNING: sessions include 07:00 or 12:00-13:59 UTC, the hours that lost money in every backtest.");
         }
 
