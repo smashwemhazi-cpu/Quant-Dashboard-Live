@@ -62,6 +62,14 @@ namespace cAlgo.Robots
         RiskPercent
     }
 
+    public enum MicroEntryMode
+    {
+        // Original behaviour: one market / stop-limit order per setup.
+        Market,
+        // Several limit orders spread across a price zone, one shared structural stop.
+        LimitLadder
+    }
+
     public enum MicroStopTrigger
     {
         // Stop fires on the first price beyond it (cTrader default).
@@ -154,6 +162,28 @@ namespace cAlgo.Robots
         [Parameter("Fade Target (fraction to mid band)", Group = "Range Fade", DefaultValue = 1.0, MinValue = 0.3, MaxValue = 1.0, Step = 0.05)]
         public double FadeTargetFraction { get; set; }
 
+        // ------------------------------------------------------------------ Limit ladder
+        [Parameter("Entry Mode", Group = "Ladder", DefaultValue = MicroEntryMode.LimitLadder)]
+        public MicroEntryMode EntryMode { get; set; }
+
+        [Parameter("Ladder Orders", Group = "Ladder", DefaultValue = 3, MinValue = 1, MaxValue = 10, Step = 1)]
+        public int LadderOrders { get; set; }
+
+        [Parameter("Ladder Depth (ATR x)", Group = "Ladder", DefaultValue = 1.0, MinValue = 0.2, MaxValue = 4.0, Step = 0.1)]
+        public double LadderDepthAtr { get; set; }
+
+        [Parameter("Ladder Stop Beyond Zone (ATR x)", Group = "Ladder", DefaultValue = 0.75, MinValue = 0.2, MaxValue = 3.0, Step = 0.05)]
+        public double LadderStopAtr { get; set; }
+
+        [Parameter("Ladder Min Order Stop (ATR x)", Group = "Ladder", DefaultValue = 0.5, MinValue = 0.1, MaxValue = 3.0, Step = 0.05)]
+        public double LadderMinStopAtr { get; set; }
+
+        [Parameter("Ladder Expiry (bars)", Group = "Ladder", DefaultValue = 3, MinValue = 1, MaxValue = 24, Step = 1)]
+        public int LadderExpiryBars { get; set; }
+
+        [Parameter("Trend Pullback Ladder", Group = "Ladder", DefaultValue = true)]
+        public bool UseTrendLadder { get; set; }
+
         // ------------------------------------------------------------------ Stops & exits
         [Parameter("Stop Mode", Group = "Stops", DefaultValue = MicroStopMode.CappedAtRisk)]
         public MicroStopMode StopMode { get; set; }
@@ -242,6 +272,9 @@ namespace cAlgo.Robots
         // ------------------------------------------------------------------ State
         private const string BreakoutTag = "-BO";
         private const string FadeTag = "-RF";
+        private const string LadderTag = "-LD";
+        private int _ladderSetups;
+        private int _ladderFills;
 
         private AverageTrueRange _atr;
         private BollingerBands _bb;
@@ -334,6 +367,8 @@ namespace cAlgo.Robots
         {
             Print("CONFIG | label={0} sizing={1} stopMode={2} minStopATR={3} riskPct={4} maxTrades/day={5} commission/lot={6} stopTrigger={7}",
                 BotLabel, SizingMode, StopMode, MinStopAtr, MaxRiskPercent, MaxTradesPerDay, CommissionPerLot, StopTrigger);
+            Print("CONFIG | entry={0} ladder: {1} orders over {2} ATR, stop {3} ATR beyond, min order stop {4} ATR, expiry {5} bars, trend ladder {6}",
+                EntryMode, LadderOrders, LadderDepthAtr, LadderStopAtr, LadderMinStopAtr, LadderExpiryBars, UseTrendLadder);
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
                 Session1Start, Session1End, Session2Start, Session2End, UseBreakout, UseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
             if (CommissionPerLot <= 0)
@@ -376,6 +411,11 @@ namespace cAlgo.Robots
 
                 HandleClock();
 
+                // An unfilled ladder is re-priced every bar from fresh bands; a partly filled
+                // ladder keeps its remaining orders (that is the scale-in).
+                if (EntryMode == MicroEntryMode.LimitLadder && OurOrders().Any() && !OurPositions().Any())
+                    CancelOurOrders();
+
                 string reason;
                 if (!CanOpenNew(out reason))
                 {
@@ -388,6 +428,12 @@ namespace cAlgo.Robots
                 if (regime == Regime.Unknown)
                 {
                     Reject("trend data not ready");
+                    return;
+                }
+
+                if (EntryMode == MicroEntryMode.LimitLadder)
+                {
+                    TryLadder(i, regime);
                     return;
                 }
 
@@ -581,6 +627,106 @@ namespace cAlgo.Robots
             }
         }
 
+        // ================================================================== Engine 3: limit ladder
+        // Flat H1 regime  -> FADE ladder: sell limits stacked above the upper Bollinger band
+        //                    (buy limits below the lower band), target the middle band.
+        // Trend H1 regime -> PULLBACK ladder in the trend direction: buy limits from the middle
+        //                    band down toward the lower band in an uptrend (mirror for downtrend),
+        //                    target = Reward R x the shallowest order's risk.
+        // All orders share ONE stop beyond the zone. Total risk if every order fills and the stop
+        // is hit must fit the risk cap; shallow orders (largest risk) are dropped until it does.
+        private void TryLadder(int i, Regime regime)
+        {
+            double atr = _atr.Result[i];
+            double top = _bb.Top[i], bottom = _bb.Bottom[i], mid = _bb.Main[i];
+            if (double.IsNaN(atr) || atr <= 0 || double.IsNaN(top) || double.IsNaN(bottom) || double.IsNaN(mid))
+                return;
+
+            TradeType side;
+            double near, far;     // zone edge closest to price, and deepest edge
+            bool fade;
+            if (regime == Regime.Flat)
+            {
+                if (!UseRangeFade) { Reject("LD: flat regime but fade engine off"); return; }
+                fade = true;
+                // Fade whichever band price is closer to.
+                double close = Bars.ClosePrices[i];
+                side = (top - close) < (close - bottom) ? TradeType.Sell : TradeType.Buy;
+                near = side == TradeType.Sell ? top : bottom;
+                far = side == TradeType.Sell ? top + LadderDepthAtr * atr : bottom - LadderDepthAtr * atr;
+            }
+            else
+            {
+                if (!UseTrendLadder) { Reject("LD: trend regime but trend ladder off"); return; }
+                fade = false;
+                side = regime == Regime.Up ? TradeType.Buy : TradeType.Sell;
+                near = mid;
+                far = side == TradeType.Buy ? mid - LadderDepthAtr * atr : mid + LadderDepthAtr * atr;
+            }
+
+            if (!DirectionAllowed(side)) { Reject("direction filter"); return; }
+
+            double spread = Symbol.Spread;
+            // Bars are Bid: sell limits fill on Bid, buy limits on Ask (enter spread lower).
+            double stop = side == TradeType.Buy ? far - LadderStopAtr * atr : far + LadderStopAtr * atr + spread;
+            double price = side == TradeType.Buy ? Symbol.Ask : Symbol.Bid;
+
+            // Build levels from near to far; only levels price has not already passed.
+            var levels = new List<double>();
+            int n = Math.Max(1, LadderOrders);
+            for (int k = 0; k < n; k++)
+            {
+                double f = n == 1 ? 0.0 : (double)k / (n - 1);
+                double lvl = near + (far - near) * f;
+                if (side == TradeType.Buy) lvl -= spread;
+                bool valid = side == TradeType.Buy ? lvl < price : lvl > price;
+                double risk = Math.Abs(lvl - stop);
+                if (valid && risk >= LadderMinStopAtr * atr)
+                    levels.Add(Math.Round(lvl, Symbol.Digits));
+            }
+            if (levels.Count == 0) { Reject("LD: no valid level (price already through the zone)"); return; }
+
+            // Fit total ladder risk inside the cap by dropping the shallowest (largest-risk) orders.
+            double cap = RiskCapCash();
+            Func<IEnumerable<double>, double> totalRisk = ls => ls.Sum(l => CashForPriceMove(Math.Abs(l - stop)));
+            while (levels.Count > 0 && totalRisk(levels) > cap)
+                levels.RemoveAt(0);
+            if (levels.Count == 0) { Reject("LD: one order alone exceeds the risk cap"); return; }
+
+            double shallow = levels[0];
+            double tp = fade
+                ? mid
+                : (side == TradeType.Buy ? shallow + RewardR * (shallow - stop) : shallow - RewardR * (stop - shallow));
+            double targetDist = side == TradeType.Buy ? tp - shallow : shallow - tp;
+            if (targetDist <= 0) { Reject("LD: target not beyond entries"); return; }
+            if (!PassesCostAndSpread(Math.Abs(shallow - stop), targetDist, "LD"))
+                return;
+
+            DateTime expiry = Server.Time.AddMinutes(LadderExpiryBars * _barMinutes);
+            DateTime sessionEnd = CurrentSessionEnd(Server.Time);
+            if (sessionEnd > Server.Time && sessionEnd < expiry)
+                expiry = sessionEnd;
+
+            string setupId = "L" + Server.Time.ToString("yyyyMMddHHmm", CultureInfo.InvariantCulture);
+            stop = Math.Round(stop, Symbol.Digits);
+            tp = Math.Round(tp, Symbol.Digits);
+            int placed = 0;
+            foreach (double lvl in levels)
+            {
+                TradeResult r = PlaceLimitOrder(side, SymbolName, _volume, lvl, BotLabel + LadderTag, stop, tp,
+                    ProtectionType.Absolute, expiry, setupId, false, TriggerMethod());
+                if (r.IsSuccessful) placed++;
+                else Print("LD order at {0} rejected: {1}", lvl, r.Error);
+            }
+            if (placed == 0) { Reject("LD: all orders rejected by server"); return; }
+
+            _ladderSetups++;
+            Print("LADDER {0} {1} {2}x{3} lots @ {4} | shared SL {5} | TP {6} | max risk ${7:F2} ({8:F1}% eq) | expires {9:HH:mm}",
+                fade ? "FADE" : "PULLBACK", side, placed, Symbol.VolumeInUnitsToQuantity(_volume),
+                string.Join("/", levels.Select(l => l.ToString(CultureInfo.InvariantCulture))), stop, tp,
+                totalRisk(levels), totalRisk(levels) / Account.Equity * 100.0, expiry);
+        }
+
         // ================================================================== Shared trade checks
         // Applies the risk cap. In CappedAtRisk mode an over-wide stop is tightened to the cap,
         // but never below Min Stop ATR - a stop inside normal noise is just a donation.
@@ -691,22 +837,33 @@ namespace cAlgo.Robots
             if (InNewsWindow(now)) { reason = "news window"; return false; }
 
             DateTime dayStart = now.Date;
-            int tradesToday = OurHistory().Count(t => t.EntryTime >= dayStart);
+            // A ladder's fills share one comment (setup id) and count as ONE trade.
+            int tradesToday = OurHistory().Where(t => t.EntryTime >= dayStart).Select(SetupKey).Distinct().Count();
             if (tradesToday >= MaxTradesPerDay) { reason = "daily trade cap"; return false; }
 
-            var closedToday = OurHistory().Where(t => t.ClosingTime >= dayStart).OrderByDescending(t => t.ClosingTime).ToList();
-            double dayPnl = closedToday.Sum(t => t.NetProfit);
+            var closedToday = OurHistory().Where(t => t.ClosingTime >= dayStart)
+                .GroupBy(SetupKey)
+                .Select(g => new { Net = g.Sum(t => t.NetProfit), Closed = g.Max(t => t.ClosingTime) })
+                .OrderByDescending(x => x.Closed).ToList();
+            double dayPnl = closedToday.Sum(x => x.Net);
             if (dayPnl <= -Account.Balance * MaxDailyLossPercent / 100.0) { reason = "daily loss cap"; return false; }
 
             int streak = 0;
-            foreach (HistoricalTrade t in closedToday)
+            foreach (var t in closedToday)
             {
-                if (t.NetProfit < 0) streak++;
+                if (t.Net < 0) streak++;
                 else break;
             }
             if (streak >= MaxDailyLossStreak) { reason = "loss streak today"; return false; }
 
             return true;
+        }
+
+        private static string SetupKey(HistoricalTrade t)
+        {
+            return !string.IsNullOrEmpty(t.Comment) && t.Comment.StartsWith("L", StringComparison.Ordinal)
+                ? t.Comment
+                : "P" + t.PositionId.ToString(CultureInfo.InvariantCulture);
         }
 
         private double RiskCapCash()
@@ -792,6 +949,8 @@ namespace cAlgo.Robots
                 return;
 
             Print("FILLED {0} {1} @ {2} | SL {3} | TP {4}", p.Label, p.TradeType, p.EntryPrice, p.StopLoss, p.TakeProfit);
+            if (p.Label == BotLabel + LadderTag)
+                _ladderFills++;
             if (!p.StopLoss.HasValue)
             {
                 Print("Filled without a stop - closing immediately.");
@@ -807,6 +966,9 @@ namespace cAlgo.Robots
             _breakevenDone.Remove(p.Id);
             Print("CLOSED {0} {1} | reason={2} | net={3:F2} | equity={4:F2}", p.Label, p.TradeType, args.Reason, p.NetProfit, Account.Equity);
             RecordStopSlippage(p, args.Reason);
+
+            if (p.Label == BotLabel + LadderTag && !OurPositions().Any())
+                CancelOurOrders();
         }
 
         private void CancelOurOrders()
@@ -866,7 +1028,8 @@ namespace cAlgo.Robots
 
         private void PrintRejectionSummary()
         {
-            Print("RUN SUMMARY | orders placed/filled: {0} | closed trades: {1}", _ordersPlaced, OurHistory().Count());
+            Print("RUN SUMMARY | orders placed/filled: {0} | closed trades: {1} | ladder setups {2}, ladder fills {3}",
+                _ordersPlaced, OurHistory().Count(), _ladderSetups, _ladderFills);
             double net = OurHistory().Sum(t => t.NetProfit);
             Print("RUN SUMMARY | stop-loss fills: {0} | slippage total ${1:F2} (avg ${2:F2}, max ${3:F2}) | net ${4:F2} | net if stops filled exactly ${5:F2}",
                 _stopFills, _stopSlippageCash, _stopFills > 0 ? _stopSlippageCash / _stopFills : 0, _maxStopSlippageCash, net, net + _stopSlippageCash);
@@ -982,7 +1145,7 @@ namespace cAlgo.Robots
 
         private bool IsOurLabel(string label)
         {
-            return label == BotLabel + BreakoutTag || label == BotLabel + FadeTag;
+            return label == BotLabel + BreakoutTag || label == BotLabel + FadeTag || label == BotLabel + LadderTag;
         }
 
         private IEnumerable<PendingOrder> OurOrders()

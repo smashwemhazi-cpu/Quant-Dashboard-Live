@@ -103,6 +103,26 @@ The worst five fills account for 28–40% of all slippage. So the fix targets st
 
 **How to test it:** run the same preset twice, once with `Stop Trigger = SingleTick` and once with `DoubleTick`, on **2025 data** (not 2026). Compare `RUN SUMMARY`. The double trigger has to win on net profit, not only on slippage: it also lets some losing trades run past the stop before they close.
 
+## Limit ladder entries (`Entry Mode = LimitLadder`, the new default)
+This copies the structure of the manual trades you showed: **several limit orders spread across a price zone, all sharing one stop beyond the zone.**
+
+| H1 regime | Ladder | Zone | Shared stop | Target |
+|---|---|---|---|---|
+| Flat | **Fade the spike.** Sell limits above the upper Bollinger band (buy limits below the lower band) | From the band out to `Ladder Depth` × ATR | `Ladder Stop Beyond Zone` × ATR past the deepest order | Middle band |
+| Trending | **Buy the pullback** in an uptrend (mirror in a downtrend) | Middle band down to `Ladder Depth` × ATR | Same rule | `Reward R` × the shallowest order's risk |
+
+- **Limit orders fill at their price, or better.** There's no entry slippage. The stop can still slip, and the `RUN SUMMARY` slippage line tracks that.
+- **Risk fit:** total risk if every order fills and the stop is hit must stay within `Max Risk Per Trade`. Shallow orders, which carry the most risk, are dropped first. Orders whose own stop distance would be under `Ladder Min Order Stop` × ATR are also dropped, so stops aren't placed inside normal price noise.
+- **Order lifecycle:**
+  - Unfilled ladders are cancelled and re-priced each bar.
+  - A partly filled ladder keeps its remaining orders. That is the scale-in.
+  - When a ladder position closes and none are left open, the rest of that ladder is cancelled.
+- **Daily limits:** all fills from one ladder count as **one trade** toward the daily trade cap and the loss streak.
+
+**Account-size note:** with the defaults (3 orders, 1.0 ATR depth, stop 0.75 ATR beyond), a full ladder risks about 3.75 ATR, roughly $12 at a typical in-session ATR of about $3.20. At 3% risk per trade, that needs about **$400 of equity**. On $180 (cap $5.40), the ladder usually shrinks to its 1–2 deepest orders. You still get the better entry price, but not the scale-in. Each `LADDER` log line shows exactly what was placed.
+
+**Test:** run `Entry Mode = Market` and `Entry Mode = LimitLadder` with otherwise identical settings on **2025 data**. Then compare `RUN SUMMARY` and `tools/analyze_events.py` output. Keep the ladder only if it improves **net profit and profit factor**, not just win rate.
+
 ## Honest limits
 - 3% risk per trade on $200 is aggressive: 10 losses in a row cost about 26%.
 - Stops tightened by `CappedAtRisk` get hit more often. Whether the higher trade count still makes money after costs is exactly what the backtest has to show. The design doesn't guarantee it.
