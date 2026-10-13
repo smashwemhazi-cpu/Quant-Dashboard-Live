@@ -2,19 +2,22 @@
 //  MicroLotBreakoutBot  -  cTrader Automate cBot for SMALL accounts at a FIXED minimum lot
 // -------------------------------------------------------------------------------------
 //  Built for a ~$200 account that can only trade 0.01 lot (1 oz on XAUUSD). At a fixed
-//  lot, "position sizing" is impossible - the only risk lever is the STOP DISTANCE.
-//  So the bot only trades setups whose natural stop is small enough:
+//  lot the only risk lever is the STOP DISTANCE, so every trade's stop is bounded by a
+//  cash cap, and stops are never allowed inside market noise (>= Min Stop ATR).
 //
-//  Strategy : Volatility-compression breakout (Crabel-style NR box) in the direction of
-//             the higher-timeframe trend, during liquid London / New York hours only.
-//  Entry    : Stop-limit order beyond a tight N-bar box (slippage-capped, auto-expiring).
-//  Stop     : Opposite side of the box (structural, small by construction).
-//  Exit     : Fixed R target, breakeven at +1R, flat before the daily rollover - no swap,
-//             no weekend gap.
-//  Risk gate: Trade is skipped unless min-lot loss <= Max Risk % of equity. Daily trade
-//             cap, daily loss cap, intraday loss-streak stop, hard equity floor.
-//  Report   : On start, prints a FEASIBILITY report measured on YOUR broker's data:
-//             how many setups were affordable at your account size.
+//  Engine 1 - Breakout (trend days):
+//      Volatility-compression box (Crabel-style) broken in the direction of the H1 trend.
+//      Stop-limit entry beyond the box, structural stop (capped), fixed R target.
+//  Engine 2 - Range fade (range days, optional):
+//      Only when the H1 trend is FLAT. Price closes outside a Bollinger band, then closes
+//      back inside -> fade toward the middle band. Stop beyond the extreme (capped).
+//  The two engines are mutually exclusive by regime, so adding the fade raises trade
+//  count without diluting the breakout logic.
+//
+//  Shared: London / New York hours only, flat before rollover (no swap, no weekend gap),
+//  cost hurdle (target must pay N x spread+commission), daily trade cap, daily loss cap,
+//  intraday loss-streak stop, equity floor, spread/stale-quote guards, news blackout.
+//  Diagnostics: start-up FEASIBILITY report + end-of-run REJECTION summary.
 //
 //  Verified against cTrader.Automate 1.0.21 (cAlgo.API). Attach to an M5 or M15 chart.
 //  Research code - backtest and demo-test before risking capital.
@@ -43,6 +46,14 @@ namespace cAlgo.Robots
         Hour4
     }
 
+    public enum MicroStopMode
+    {
+        // Use the structural stop; skip the trade if it costs more than the risk cap.
+        Structural,
+        // Tighten the structural stop to the risk cap, provided it stays >= Min Stop ATR.
+        CappedAtRisk
+    }
+
     [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
     public class MicroLotBreakoutBot : Robot
     {
@@ -66,37 +77,72 @@ namespace cAlgo.Robots
         [Parameter("Trend EMA Slope (bars)", Group = "Trend", DefaultValue = 5, MinValue = 1, MaxValue = 30, Step = 1)]
         public int TrendSlopeBars { get; set; }
 
-        // ------------------------------------------------------------------ Setup
-        [Parameter("Box Bars", Group = "Setup", DefaultValue = 12, MinValue = 4, MaxValue = 48, Step = 2)]
+        [Parameter("Flat Trend Slope (trend ATR x)", Group = "Trend", DefaultValue = 0.3, MinValue = 0.05, MaxValue = 2.0, Step = 0.05)]
+        public double FlatSlopeAtr { get; set; }
+
+        // ------------------------------------------------------------------ Breakout engine
+        [Parameter("Use Breakout Engine", Group = "Breakout", DefaultValue = true)]
+        public bool UseBreakout { get; set; }
+
+        [Parameter("Box Bars", Group = "Breakout", DefaultValue = 12, MinValue = 4, MaxValue = 48, Step = 2)]
         public int BoxBars { get; set; }
 
-        [Parameter("ATR Period", Group = "Setup", DefaultValue = 14, MinValue = 5, MaxValue = 50, Step = 1)]
+        [Parameter("ATR Period", Group = "Breakout", DefaultValue = 14, MinValue = 5, MaxValue = 50, Step = 1)]
         public int AtrPeriod { get; set; }
 
-        [Parameter("Box Max Height (ATR x)", Group = "Setup", DefaultValue = 2.5, MinValue = 1.0, MaxValue = 6.0, Step = 0.25)]
+        [Parameter("Box Max Height (ATR x)", Group = "Breakout", DefaultValue = 3.0, MinValue = 1.0, MaxValue = 6.0, Step = 0.25)]
         public double BoxMaxAtr { get; set; }
 
-        [Parameter("Box Min Height (ATR x)", Group = "Setup", DefaultValue = 0.8, MinValue = 0.2, MaxValue = 3.0, Step = 0.1)]
+        [Parameter("Box Min Height (ATR x)", Group = "Breakout", DefaultValue = 0.8, MinValue = 0.2, MaxValue = 3.0, Step = 0.1)]
         public double BoxMinAtr { get; set; }
 
-        [Parameter("Breakout Buffer (ATR x)", Group = "Setup", DefaultValue = 0.1, MinValue = 0.0, MaxValue = 1.0, Step = 0.05)]
+        [Parameter("Breakout Buffer (ATR x)", Group = "Breakout", DefaultValue = 0.1, MinValue = 0.0, MaxValue = 1.0, Step = 0.05)]
         public double BufferAtr { get; set; }
 
-        [Parameter("Order Expiry (bars)", Group = "Setup", DefaultValue = 6, MinValue = 1, MaxValue = 48, Step = 1)]
+        [Parameter("Order Expiry (bars)", Group = "Breakout", DefaultValue = 6, MinValue = 1, MaxValue = 48, Step = 1)]
         public int OrderExpiryBars { get; set; }
 
-        // ------------------------------------------------------------------ Exits
-        [Parameter("Reward (R)", Group = "Exits", DefaultValue = 2.0, MinValue = 1.0, MaxValue = 5.0, Step = 0.25)]
+        [Parameter("Breakout Reward (R)", Group = "Breakout", DefaultValue = 2.0, MinValue = 1.0, MaxValue = 5.0, Step = 0.25)]
         public double RewardR { get; set; }
 
-        [Parameter("Breakeven At (R, 0=off)", Group = "Exits", DefaultValue = 1.0, MinValue = 0.0, MaxValue = 3.0, Step = 0.25)]
+        // ------------------------------------------------------------------ Range-fade engine
+        [Parameter("Use Range Fade Engine", Group = "Range Fade", DefaultValue = true)]
+        public bool UseRangeFade { get; set; }
+
+        [Parameter("Bollinger Period", Group = "Range Fade", DefaultValue = 20, MinValue = 10, MaxValue = 50, Step = 1)]
+        public int BbPeriod { get; set; }
+
+        [Parameter("Bollinger Std Dev", Group = "Range Fade", DefaultValue = 2.0, MinValue = 1.0, MaxValue = 3.5, Step = 0.1)]
+        public double BbStdDev { get; set; }
+
+        [Parameter("Fade Stop Buffer (ATR x)", Group = "Range Fade", DefaultValue = 0.25, MinValue = 0.0, MaxValue = 2.0, Step = 0.05)]
+        public double FadeStopBufferAtr { get; set; }
+
+        [Parameter("Fade Min Reward/Risk", Group = "Range Fade", DefaultValue = 1.0, MinValue = 0.5, MaxValue = 3.0, Step = 0.1)]
+        public double FadeMinRewardRisk { get; set; }
+
+        // ------------------------------------------------------------------ Stops & exits
+        [Parameter("Stop Mode", Group = "Stops", DefaultValue = MicroStopMode.CappedAtRisk)]
+        public MicroStopMode StopMode { get; set; }
+
+        [Parameter("Min Stop (ATR x)", Group = "Stops", DefaultValue = 1.0, MinValue = 0.3, MaxValue = 4.0, Step = 0.1)]
+        public double MinStopAtr { get; set; }
+
+        [Parameter("Breakeven At (R, 0=off)", Group = "Stops", DefaultValue = 1.0, MinValue = 0.0, MaxValue = 3.0, Step = 0.25)]
         public double BreakevenR { get; set; }
 
-        [Parameter("Flat Time (UTC hhmm)", Group = "Exits", DefaultValue = 2030, MinValue = 0, MaxValue = 2359)]
+        [Parameter("Flat Time (UTC hhmm)", Group = "Stops", DefaultValue = 2030, MinValue = 0, MaxValue = 2359)]
         public int FlatTimeUtc { get; set; }
 
-        [Parameter("Friday Flat Time (UTC hhmm)", Group = "Exits", DefaultValue = 1930, MinValue = 0, MaxValue = 2359)]
+        [Parameter("Friday Flat Time (UTC hhmm)", Group = "Stops", DefaultValue = 1930, MinValue = 0, MaxValue = 2359)]
         public int FridayFlatTimeUtc { get; set; }
+
+        // ------------------------------------------------------------------ Costs
+        [Parameter("Commission $ per Lot (round turn)", Group = "Costs", DefaultValue = 0, MinValue = 0, Step = 0.5)]
+        public double CommissionPerLot { get; set; }
+
+        [Parameter("Cost Hurdle (target / cost x)", Group = "Costs", DefaultValue = 3.0, MinValue = 1.0, MaxValue = 10.0, Step = 0.5)]
+        public double CostHurdle { get; set; }
 
         // ------------------------------------------------------------------ Risk
         [Parameter("Max Risk Per Trade %", Group = "Risk", DefaultValue = 3.0, MinValue = 0.5, MaxValue = 10.0, Step = 0.25)]
@@ -105,7 +151,7 @@ namespace cAlgo.Robots
         [Parameter("Max Risk Per Trade $ (0=off)", Group = "Risk", DefaultValue = 0, MinValue = 0, Step = 1)]
         public double MaxRiskCash { get; set; }
 
-        [Parameter("Max Trades Per Day", Group = "Risk", DefaultValue = 2, MinValue = 1, MaxValue = 10, Step = 1)]
+        [Parameter("Max Trades Per Day", Group = "Risk", DefaultValue = 4, MinValue = 1, MaxValue = 20, Step = 1)]
         public int MaxTradesPerDay { get; set; }
 
         [Parameter("Max Daily Loss %", Group = "Risk", DefaultValue = 6.0, MinValue = 1.0, MaxValue = 20.0, Step = 0.5)]
@@ -118,8 +164,8 @@ namespace cAlgo.Robots
         public double EquityFloor { get; set; }
 
         // ------------------------------------------------------------------ Execution
-        [Parameter("Stop-Limit Range (pips)", Group = "Execution", DefaultValue = 5, MinValue = 0, Step = 1)]
-        public double StopLimitRangePips { get; set; }
+        [Parameter("Max Slippage (pips)", Group = "Execution", DefaultValue = 5, MinValue = 0, Step = 1)]
+        public double MaxSlippagePips { get; set; }
 
         [Parameter("Max Spread (pips)", Group = "Execution", DefaultValue = 6, MinValue = 0.1, Step = 0.5)]
         public double MaxSpreadPips { get; set; }
@@ -134,13 +180,13 @@ namespace cAlgo.Robots
         [Parameter("Session 1 Start (UTC hhmm)", Group = "Sessions", DefaultValue = 700, MinValue = 0, MaxValue = 2359)]
         public int Session1Start { get; set; }
 
-        [Parameter("Session 1 End (UTC hhmm)", Group = "Sessions", DefaultValue = 1030, MinValue = 0, MaxValue = 2359)]
+        [Parameter("Session 1 End (UTC hhmm)", Group = "Sessions", DefaultValue = 1100, MinValue = 0, MaxValue = 2359)]
         public int Session1End { get; set; }
 
         [Parameter("Session 2 Start (UTC hhmm)", Group = "Sessions", DefaultValue = 1230, MinValue = 0, MaxValue = 2359)]
         public int Session2Start { get; set; }
 
-        [Parameter("Session 2 End (UTC hhmm)", Group = "Sessions", DefaultValue = 1530, MinValue = 0, MaxValue = 2359)]
+        [Parameter("Session 2 End (UTC hhmm)", Group = "Sessions", DefaultValue = 1700, MinValue = 0, MaxValue = 2359)]
         public int Session2End { get; set; }
 
         // ------------------------------------------------------------------ News
@@ -154,16 +200,34 @@ namespace cAlgo.Robots
         [Parameter("Feasibility Report Bars", Group = "Report", DefaultValue = 3000, MinValue = 200, Step = 100)]
         public int FeasibilityBars { get; set; }
 
+        [Parameter("Print Each Rejection", Group = "Report", DefaultValue = false)]
+        public bool VerboseRejections { get; set; }
+
         // ------------------------------------------------------------------ State
+        private const string BreakoutTag = "-BO";
+        private const string FadeTag = "-RF";
+
         private AverageTrueRange _atr;
+        private BollingerBands _bb;
         private Bars _trendBars;
         private ExponentialMovingAverage _trendEma;
+        private AverageTrueRange _trendAtr;
         private double _volume;
         private double _barMinutes;
         private DateTime _lastTickTime = DateTime.MinValue;
         private bool _floorBreached;
         private readonly List<DateTime> _news = new List<DateTime>();
         private readonly HashSet<long> _breakevenDone = new HashSet<long>();
+        private readonly Dictionary<string, int> _rejections = new Dictionary<string, int>();
+        private int _ordersPlaced;
+
+        private enum Regime
+        {
+            Unknown,
+            Up,
+            Down,
+            Flat
+        }
 
         // ================================================================== Lifecycle
         protected override void OnStart()
@@ -184,8 +248,10 @@ namespace cAlgo.Robots
             }
 
             _atr = Indicators.AverageTrueRange(AtrPeriod, MovingAverageType.Simple);
+            _bb = Indicators.BollingerBands(Bars.ClosePrices, BbPeriod, BbStdDev, MovingAverageType.Simple);
             _trendBars = MarketData.GetBars(MapTimeFrame(TrendTimeFrame));
             _trendEma = Indicators.ExponentialMovingAverage(_trendBars.ClosePrices, TrendEmaPeriod);
+            _trendAtr = Indicators.AverageTrueRange(_trendBars, 14, MovingAverageType.Simple);
             _barMinutes = EstimateBarMinutes();
 
             ParseNewsTimes();
@@ -202,6 +268,7 @@ namespace cAlgo.Robots
         {
             PendingOrders.Filled -= OnOrderFilled;
             Positions.Closed -= OnPositionClosed;
+            PrintRejectionSummary();
         }
 
         protected override void OnTick()
@@ -226,16 +293,37 @@ namespace cAlgo.Robots
             try
             {
                 int i = Bars.Count - 2; // last closed bar
-                if (i < Math.Max(BoxBars, AtrPeriod) + 2 || _floorBreached)
+                if (i < Math.Max(Math.Max(BoxBars, AtrPeriod), BbPeriod) + 2 || _floorBreached)
                     return;
 
                 HandleClock();
 
                 string reason;
                 if (!CanOpenNew(out reason))
+                {
+                    if (reason != null)
+                        Reject(reason);
                     return;
+                }
 
-                TryPlaceSetup(i);
+                Regime regime = CurrentRegime();
+                if (regime == Regime.Unknown)
+                {
+                    Reject("trend data not ready");
+                    return;
+                }
+
+                if (regime == Regime.Flat)
+                {
+                    if (UseRangeFade)
+                        TryRangeFade(i);
+                    else
+                        Reject("flat trend (fade engine off)");
+                }
+                else if (UseBreakout)
+                {
+                    TryBreakout(i, regime == Regime.Up ? TradeType.Buy : TradeType.Sell);
+                }
             }
             catch (Exception ex)
             {
@@ -243,9 +331,15 @@ namespace cAlgo.Robots
             }
         }
 
-        // ================================================================== Setup
-        private void TryPlaceSetup(int i)
+        // ================================================================== Engine 1: breakout
+        private void TryBreakout(int i, TradeType side)
         {
+            if (!DirectionAllowed(side))
+            {
+                Reject("direction filter");
+                return;
+            }
+
             double atr = _atr.Result[i];
             if (double.IsNaN(atr) || atr <= 0)
                 return;
@@ -257,111 +351,264 @@ namespace cAlgo.Robots
                 lo = Math.Min(lo, Bars.LowPrices[j]);
             }
             double height = hi - lo;
-            if (height > BoxMaxAtr * atr || height < BoxMinAtr * atr)
-                return; // not a compression box
-
-            int trend = TrendBias();
-            TradeType side;
-            if (trend > 0 && Direction != MicroDirection.ShortOnly)
-                side = TradeType.Buy;
-            else if (trend < 0 && Direction != MicroDirection.LongOnly)
-                side = TradeType.Sell;
-            else
+            if (height > BoxMaxAtr * atr)
+            {
+                Reject("BO: box too wide (no compression)");
                 return;
+            }
+            if (height < BoxMinAtr * atr)
+            {
+                Reject("BO: box too narrow");
+                return;
+            }
 
             double buffer = BufferAtr * atr;
             double spread = Symbol.Spread;
-            double entry, sl, tp;
-            // Bars are Bid-based: buy stops trigger on Ask and short stops are hit on Ask,
-            // so the spread is added on those sides.
+            double entry, structuralStop;
+            // Bars are Bid-based: buy stops trigger on Ask and short stops are hit on Ask.
             if (side == TradeType.Buy)
             {
                 entry = hi + buffer + spread;
-                sl = lo - buffer;
-                tp = entry + RewardR * (entry - sl);
-                if (entry <= Symbol.Ask)
-                    return;
+                structuralStop = lo - buffer;
+                if (entry <= Symbol.Ask) { Reject("BO: price already beyond box"); return; }
             }
             else
             {
                 entry = lo - buffer;
-                sl = hi + buffer + spread;
-                tp = entry - RewardR * (sl - entry);
-                if (entry >= Symbol.Bid)
-                    return;
+                structuralStop = hi + buffer + spread;
+                if (entry >= Symbol.Bid) { Reject("BO: price already beyond box"); return; }
             }
 
-            entry = Math.Round(entry, Symbol.Digits);
-            sl = Math.Round(sl, Symbol.Digits);
-            tp = Math.Round(tp, Symbol.Digits);
+            double stopDist;
+            if (!ResolveStopDistance(Math.Abs(entry - structuralStop), atr, "BO", out stopDist))
+                return;
 
-            double riskPrice = Math.Abs(entry - sl);
-            double riskCash = CashForPriceMove(riskPrice);
-            double cap = RiskCapCash();
-            if (riskCash > cap)
-            {
-                Print("SKIP {0}: box setup risks ${1:F2} at {2} lots > cap ${3:F2} ({4}% of equity).",
-                    side, riskCash, Symbol.VolumeInUnitsToQuantity(_volume), cap, MaxRiskPercent);
+            double targetDist = RewardR * stopDist;
+            if (!PassesCostAndSpread(stopDist, targetDist, "BO"))
                 return;
-            }
 
-            if (spread / Symbol.PipSize > MaxSpreadPips || spread > MaxSpreadOfRisk * riskPrice)
-            {
-                Print("SKIP {0}: spread {1:F1} pips too wide for a {2:F1}-pip stop.",
-                    side, spread / Symbol.PipSize, riskPrice / Symbol.PipSize);
-                return;
-            }
-            if ((Server.Time - _lastTickTime).TotalSeconds > StaleQuoteSeconds)
-            {
-                Print("SKIP {0}: quotes are stale (last tick {1:HH:mm:ss}).", side, _lastTickTime);
-                return;
-            }
+            double sl = side == TradeType.Buy ? entry - stopDist : entry + stopDist;
+            double tp = side == TradeType.Buy ? entry + targetDist : entry - targetDist;
 
             DateTime expiry = Server.Time.AddMinutes(OrderExpiryBars * _barMinutes);
             DateTime sessionEnd = CurrentSessionEnd(Server.Time);
             if (sessionEnd > Server.Time && sessionEnd < expiry)
                 expiry = sessionEnd;
 
-            TradeResult r = PlaceStopLimitOrder(side, SymbolName, _volume, entry, StopLimitRangePips, BotLabel,
+            entry = Math.Round(entry, Symbol.Digits);
+            sl = Math.Round(sl, Symbol.Digits);
+            tp = Math.Round(tp, Symbol.Digits);
+
+            TradeResult r = PlaceStopLimitOrder(side, SymbolName, _volume, entry, MaxSlippagePips, BotLabel + BreakoutTag,
                 sl, tp, ProtectionType.Absolute, expiry);
 
             if (r.IsSuccessful)
-                Print("ORDER {0} stop-limit @ {1} | SL {2} | TP {3} | risk ${4:F2} ({5:F1}% eq) | box {6:F2} = {7:F2} ATR | expires {8:HH:mm}",
-                    side, entry, sl, tp, riskCash, riskCash / Account.Equity * 100.0, height, height / atr, expiry);
+            {
+                _ordersPlaced++;
+                Print("BO ORDER {0} stop-limit @ {1} | SL {2} | TP {3} | risk ${4:F2} ({5:F1}% eq) | box {6:F2} = {7:F2} ATR | expires {8:HH:mm}",
+                    side, entry, sl, tp, CashForPriceMove(stopDist), CashForPriceMove(stopDist) / Account.Equity * 100.0,
+                    height, height / atr, expiry);
+            }
             else
-                Print("Order placement failed: {0} (setup re-evaluated next bar).", r.Error);
+            {
+                Reject("BO: order rejected by server");
+                Print("BO order placement failed: {0} (re-evaluated next bar).", r.Error);
+            }
         }
 
-        // +1 = uptrend, -1 = downtrend, 0 = no clear trend. Uses the last CLOSED trend bar.
-        private int TrendBias()
+        // ================================================================== Engine 2: range fade
+        private void TryRangeFade(int i)
         {
-            int t = _trendBars.Count - 2;
+            double atr = _atr.Result[i];
+            double top = _bb.Top[i], bottom = _bb.Bottom[i], mid = _bb.Main[i];
+            if (double.IsNaN(atr) || atr <= 0 || double.IsNaN(top) || double.IsNaN(bottom))
+                return;
+
+            double prevClose = Bars.ClosePrices[i - 1];
+            double close = Bars.ClosePrices[i];
+
+            // Re-entry signal: previous bar closed OUTSIDE the band, this bar closed back INSIDE.
+            TradeType side;
+            double extreme;
+            if (prevClose < _bb.Bottom[i - 1] && close > bottom)
+            {
+                side = TradeType.Buy;
+                extreme = Math.Min(Bars.LowPrices[i - 1], Bars.LowPrices[i]);
+            }
+            else if (prevClose > _bb.Top[i - 1] && close < top)
+            {
+                side = TradeType.Sell;
+                extreme = Math.Max(Bars.HighPrices[i - 1], Bars.HighPrices[i]);
+            }
+            else
+            {
+                Reject("RF: no band re-entry");
+                return;
+            }
+
+            if (!DirectionAllowed(side))
+            {
+                Reject("direction filter");
+                return;
+            }
+
+            double entry = side == TradeType.Buy ? Symbol.Ask : Symbol.Bid;
+            double buffer = FadeStopBufferAtr * atr;
+            double structuralStopDist = side == TradeType.Buy
+                ? entry - (extreme - buffer)
+                : (extreme + buffer + Symbol.Spread) - entry;
+            if (structuralStopDist <= 0)
+            {
+                Reject("RF: price already through the extreme");
+                return;
+            }
+
+            double stopDist;
+            if (!ResolveStopDistance(structuralStopDist, atr, "RF", out stopDist))
+                return;
+
+            double targetDist = side == TradeType.Buy ? mid - entry : entry - mid;
+            if (targetDist < FadeMinRewardRisk * stopDist)
+            {
+                Reject("RF: reward/risk to middle band too low");
+                return;
+            }
+            if (!PassesCostAndSpread(stopDist, targetDist, "RF"))
+                return;
+
+            double slPips = Math.Round(stopDist / Symbol.PipSize, 1);
+            double tpPips = Math.Round(targetDist / Symbol.PipSize, 1);
+
+            TradeResult r = ExecuteMarketRangeOrder(side, SymbolName, _volume, MaxSlippagePips, entry,
+                BotLabel + FadeTag, slPips, tpPips);
+
+            if (r.IsSuccessful && r.Position != null)
+            {
+                _ordersPlaced++;
+                Print("RF FILL {0} @ {1} | SL {2} | TP {3} | risk ${4:F2} ({5:F1}% eq) | target {6:F2}R",
+                    side, r.Position.EntryPrice, r.Position.StopLoss, r.Position.TakeProfit,
+                    CashForPriceMove(stopDist), CashForPriceMove(stopDist) / Account.Equity * 100.0, targetDist / stopDist);
+                if (!r.Position.StopLoss.HasValue)
+                {
+                    Print("Filled without a stop - closing immediately.");
+                    ClosePosition(r.Position);
+                }
+            }
+            else
+            {
+                Reject("RF: order rejected by server");
+                Print("RF market order failed: {0}", r.Error);
+            }
+        }
+
+        // ================================================================== Shared trade checks
+        // Applies the risk cap. In CappedAtRisk mode an over-wide stop is tightened to the cap,
+        // but never below Min Stop ATR - a stop inside normal noise is just a donation.
+        private bool ResolveStopDistance(double structural, double atr, string engine, out double stopDist)
+        {
+            double capDist = PriceForCash(RiskCapCash());
+            double minDist = MinStopAtr * atr;
+            stopDist = structural;
+
+            if (structural <= capDist)
+            {
+                if (structural >= minDist)
+                    return true;
+                if (minDist <= capDist)
+                {
+                    stopDist = minDist; // widen out of the noise band, still within the cap
+                    return true;
+                }
+                Reject(engine + ": risk cap smaller than Min Stop ATR (volatility too high for account)");
+                return false;
+            }
+
+            if (StopMode == MicroStopMode.Structural)
+            {
+                Reject(engine + ": structural stop exceeds risk cap");
+                return false;
+            }
+            if (capDist < minDist)
+            {
+                Reject(engine + ": risk cap smaller than Min Stop ATR (volatility too high for account)");
+                return false;
+            }
+            stopDist = capDist;
+            return true;
+        }
+
+        private bool PassesCostAndSpread(double stopDist, double targetDist, string engine)
+        {
+            double spread = Symbol.Spread;
+            if (spread / Symbol.PipSize > MaxSpreadPips)
+            {
+                Reject(engine + ": spread above absolute cap");
+                return false;
+            }
+            if (spread > MaxSpreadOfRisk * stopDist)
+            {
+                Reject(engine + ": spread too large vs stop");
+                return false;
+            }
+
+            double costPrice = spread + PriceForCash(CommissionPerLot * Symbol.VolumeInUnitsToQuantity(_volume));
+            if (targetDist < CostHurdle * costPrice)
+            {
+                Reject(engine + ": target fails cost hurdle");
+                return false;
+            }
+            if ((Server.Time - _lastTickTime).TotalSeconds > StaleQuoteSeconds)
+            {
+                Reject(engine + ": stale quotes");
+                return false;
+            }
+            return true;
+        }
+
+        private Regime CurrentRegime()
+        {
+            int t = _trendBars.Count - 2; // last CLOSED trend bar
             if (t < TrendEmaPeriod + TrendSlopeBars)
-                return 0;
+                return Regime.Unknown;
 
             double ema = _trendEma.Result[t];
             double emaPrev = _trendEma.Result[t - TrendSlopeBars];
             double close = _trendBars.ClosePrices[t];
-            if (double.IsNaN(ema) || double.IsNaN(emaPrev))
-                return 0;
+            double tAtr = _trendAtr.Result[t];
+            if (double.IsNaN(ema) || double.IsNaN(emaPrev) || double.IsNaN(tAtr) || tAtr <= 0)
+                return Regime.Unknown;
 
-            if (close > ema && ema > emaPrev)
-                return 1;
-            if (close < ema && ema < emaPrev)
-                return -1;
-            return 0;
+            double slope = ema - emaPrev;
+            if (Math.Abs(slope) <= FlatSlopeAtr * tAtr)
+                return Regime.Flat;
+            if (close > ema && slope > 0)
+                return Regime.Up;
+            if (close < ema && slope < 0)
+                return Regime.Down;
+
+            // Sloping EMA but price on the wrong side: transition - treat as flat (no breakout).
+            return Regime.Flat;
+        }
+
+        private bool DirectionAllowed(TradeType side)
+        {
+            return Direction == MicroDirection.Both ||
+                   (Direction == MicroDirection.LongOnly && side == TradeType.Buy) ||
+                   (Direction == MicroDirection.ShortOnly && side == TradeType.Sell);
         }
 
         // ================================================================== Guards
+        // Returns false with reason=null for routine states that need no counting.
         private bool CanOpenNew(out string reason)
         {
             DateTime now = Server.Time;
             reason = null;
 
-            if (!InSession(now)) { reason = "outside session"; return false; }
-            if (PastFlatTime(now)) { reason = "past flat time"; return false; }
+            if (!InSession(now) || PastFlatTime(now))
+                return false;
+            if (OurPositions().Any() || OurOrders().Any())
+                return false;
             if (InNewsWindow(now)) { reason = "news window"; return false; }
-            if (OurPositions().Any() || OurOrders().Any()) { reason = "already engaged"; return false; }
 
             DateTime dayStart = now.Date;
             int tradesToday = OurHistory().Count(t => t.EntryTime >= dayStart);
@@ -369,11 +616,7 @@ namespace cAlgo.Robots
 
             var closedToday = OurHistory().Where(t => t.ClosingTime >= dayStart).OrderByDescending(t => t.ClosingTime).ToList();
             double dayPnl = closedToday.Sum(t => t.NetProfit);
-            if (dayPnl <= -Account.Balance * MaxDailyLossPercent / 100.0)
-            {
-                reason = "daily loss cap";
-                return false;
-            }
+            if (dayPnl <= -Account.Balance * MaxDailyLossPercent / 100.0) { reason = "daily loss cap"; return false; }
 
             int streak = 0;
             foreach (HistoricalTrade t in closedToday)
@@ -423,9 +666,6 @@ namespace cAlgo.Robots
 
         private void ManageBreakeven()
         {
-            if (BreakevenR <= 0)
-                return;
-
             foreach (Position pos in OurPositions().ToArray())
             {
                 if (!pos.StopLoss.HasValue)
@@ -434,12 +674,11 @@ namespace cAlgo.Robots
                     ClosePosition(pos);
                     continue;
                 }
-                if (_breakevenDone.Contains(pos.Id))
+                if (BreakevenR <= 0 || _breakevenDone.Contains(pos.Id))
                     continue;
 
-                double initialRisk = pos.TakeProfit.HasValue
-                    ? Math.Abs(pos.TakeProfit.Value - pos.EntryPrice) / RewardR
-                    : Math.Abs(pos.EntryPrice - pos.StopLoss.Value);
+                // Before the breakeven move the stop is still the initial stop, so it defines 1R.
+                double initialRisk = Math.Abs(pos.EntryPrice - pos.StopLoss.Value);
                 if (initialRisk <= 0)
                     continue;
 
@@ -468,7 +707,7 @@ namespace cAlgo.Robots
             if (p == null || !IsOurs(p))
                 return;
 
-            Print("FILLED {0} @ {1} | SL {2} | TP {3}", p.TradeType, p.EntryPrice, p.StopLoss, p.TakeProfit);
+            Print("FILLED {0} {1} @ {2} | SL {3} | TP {4}", p.Label, p.TradeType, p.EntryPrice, p.StopLoss, p.TakeProfit);
             if (!p.StopLoss.HasValue)
             {
                 Print("Filled without a stop - closing immediately.");
@@ -482,7 +721,7 @@ namespace cAlgo.Robots
             if (!IsOurs(p))
                 return;
             _breakevenDone.Remove(p.Id);
-            Print("CLOSED {0} | reason={1} | net={2:F2} | equity={3:F2}", p.TradeType, args.Reason, p.NetProfit, Account.Equity);
+            Print("CLOSED {0} {1} | reason={2} | net={3:F2} | equity={4:F2}", p.Label, p.TradeType, args.Reason, p.NetProfit, Account.Equity);
         }
 
         private void CancelOurOrders()
@@ -507,7 +746,23 @@ namespace cAlgo.Robots
             }
         }
 
-        // ================================================================== Feasibility report
+        // ================================================================== Diagnostics
+        private void Reject(string reason)
+        {
+            int n;
+            _rejections.TryGetValue(reason, out n);
+            _rejections[reason] = n + 1;
+            if (VerboseRejections)
+                Print("REJECT: {0}", reason);
+        }
+
+        private void PrintRejectionSummary()
+        {
+            Print("RUN SUMMARY | orders placed/filled: {0} | closed trades: {1}", _ordersPlaced, OurHistory().Count());
+            foreach (var kv in _rejections.OrderByDescending(k => k.Value))
+                Print("RUN SUMMARY | rejected {0,6} x  {1}", kv.Value, kv.Key);
+        }
+
         // Measured on this broker's own history so the account-size verdict isn't a guess.
         private void PrintFeasibilityReport()
         {
@@ -519,72 +774,49 @@ namespace cAlgo.Robots
                 return;
             }
 
-            double spread = IsQuoteValid() ? Symbol.Spread : 0;
-            double cap = RiskCapCash();
             var atrs = new List<double>();
-            var setupRisks = new List<double>();
-            int affordable = 0;
-
             for (int j = first; j <= last; j++)
             {
                 double atr = _atr.Result[j];
-                if (double.IsNaN(atr) || atr <= 0)
-                    continue;
-                if (!InSession(Bars.OpenTimes[j]))
-                    continue;
-                atrs.Add(atr);
-
-                double hi = double.MinValue, lo = double.MaxValue;
-                for (int k = j - BoxBars + 1; k <= j; k++)
-                {
-                    hi = Math.Max(hi, Bars.HighPrices[k]);
-                    lo = Math.Min(lo, Bars.LowPrices[k]);
-                }
-                double h = hi - lo;
-                if (h > BoxMaxAtr * atr || h < BoxMinAtr * atr)
-                    continue;
-
-                double risk = CashForPriceMove(h + 2 * BufferAtr * atr + spread);
-                setupRisks.Add(risk);
-                if (risk <= cap)
-                    affordable++;
+                if (!double.IsNaN(atr) && atr > 0 && InSession(Bars.OpenTimes[j]))
+                    atrs.Add(atr);
             }
-
             if (atrs.Count == 0)
             {
                 Print("FEASIBILITY: no in-session bars in the sample.");
                 return;
             }
 
+            double cap = RiskCapCash();
+            double capDist = PriceForCash(cap);
             double medAtr = Median(atrs);
-            Print("FEASIBILITY | sample {0} in-session {1} bars | {2} lots = ${3:F2} per 1.00 price move | risk cap ${4:F2} ({5}% of ${6:F2})",
-                atrs.Count, TimeFrame, Symbol.VolumeInUnitsToQuantity(_volume), CashForPriceMove(1.0), cap, MaxRiskPercent, Account.Equity);
-            Print("FEASIBILITY | median ATR({0}) = {1:F2} -> a 1-ATR stop costs ${2:F2} ({3:F1}% of equity)",
-                AtrPeriod, medAtr, CashForPriceMove(medAtr), CashForPriceMove(medAtr) / Account.Equity * 100.0);
+            int fits = atrs.Count(a => MinStopAtr * a <= capDist);
+            double pct = 100.0 * fits / atrs.Count;
 
-            if (setupRisks.Count == 0)
-            {
-                Print("FEASIBILITY | no compression boxes found with current settings.");
-                return;
-            }
+            Print("FEASIBILITY | {0} lots = ${1:F2} per 1.00 price move | risk cap ${2:F2} ({3}% of ${4:F2}) = {5:F2} price",
+                Symbol.VolumeInUnitsToQuantity(_volume), CashForPriceMove(1.0), cap, MaxRiskPercent, Account.Equity, capDist);
+            Print("FEASIBILITY | median in-session ATR({0}, {1}) = {2:F2} price -> cap = {3:F2} ATR (minimum allowed stop {4} ATR)",
+                AtrPeriod, TimeFrame, medAtr, capDist / medAtr, MinStopAtr);
+            Print("FEASIBILITY | bars where a {0}-ATR stop fits the cap: {1:F0}%", MinStopAtr, pct);
 
-            double pct = 100.0 * affordable / setupRisks.Count;
-            Print("FEASIBILITY | compression setups: {0} | affordable: {1} ({2:F0}%) | median setup risk ${3:F2}",
-                setupRisks.Count, affordable, pct, Median(setupRisks));
-
-            if (pct < 10)
-                Print("VERDICT: under 10% of setups fit a ${0:F2} risk cap - {1} on {2} is NOT suitable for this account. " +
-                      "Try a calmer symbol or a lower timeframe, or accept that the bot will rarely trade.", cap, SymbolName, TimeFrame);
-            else if (pct < 40)
-                Print("VERDICT: only some setups fit - expect few trades. Backtest before going further.");
+            if (pct < 20)
+                Print("VERDICT: volatility is too high for a ${0:F2} cap on {1} {2}. Expect almost no trades. " +
+                      "Raise the cap, use a calmer symbol, or a lower timeframe.", cap, SymbolName, TimeFrame);
+            else if (pct < 60)
+                Print("VERDICT: trades only in calmer conditions - expect a modest trade count.");
             else
-                Print("VERDICT: most setups fit the risk cap - account size is workable for this symbol/timeframe.");
+                Print("VERDICT: the risk cap fits normal volatility - account size is workable here.");
         }
 
         // ================================================================== Helpers
         private double CashForPriceMove(double priceDistance)
         {
             return priceDistance / Symbol.PipSize * Symbol.PipValue * _volume;
+        }
+
+        private double PriceForCash(double cash)
+        {
+            return cash / (Symbol.PipValue * _volume) * Symbol.PipSize;
         }
 
         private double ResolveVolume()
@@ -611,17 +843,22 @@ namespace cAlgo.Robots
 
         private bool IsOurs(Position p)
         {
-            return p.SymbolName == SymbolName && p.Label == BotLabel;
+            return p.SymbolName == SymbolName && IsOurLabel(p.Label);
+        }
+
+        private bool IsOurLabel(string label)
+        {
+            return label == BotLabel + BreakoutTag || label == BotLabel + FadeTag;
         }
 
         private IEnumerable<PendingOrder> OurOrders()
         {
-            return PendingOrders.Where(o => o.SymbolName == SymbolName && o.Label == BotLabel);
+            return PendingOrders.Where(o => o.SymbolName == SymbolName && IsOurLabel(o.Label));
         }
 
         private IEnumerable<HistoricalTrade> OurHistory()
         {
-            return History.Where(t => t.SymbolName == SymbolName && t.Label == BotLabel);
+            return History.Where(t => t.SymbolName == SymbolName && IsOurLabel(t.Label));
         }
 
         private static int Minutes(int hhmm)

@@ -1,57 +1,53 @@
 # MicroLotBreakoutBot (cTrader cBot)
 
-An intraday breakout cBot for **small accounts trading a fixed 0.01 lot**, designed around a ~$200 account on XAUUSD.
+An intraday cBot for **small accounts at a fixed 0.01 lot**, designed around a ~$200 account on XAUUSD. It runs two engines, one for each market regime, and every trade is held within a cash risk cap.
 
 It compiles cleanly against the official `cTrader.Automate` 1.0.21 package. It has **not** been backtested yet.
 
-## Why a different design
-At a fixed minimum lot you can't size positions. With 1 oz of gold, every $1 the price moves is $1 of profit or loss, so **the only risk control left is how far away the stop is.** The daily bot needed stops of about $600, which is three times this account.
+## Why it's built this way
+At a fixed minimum lot (1 oz of gold, so $1 per $1 move), position size can't change. **The only risk control is how far away the stop is**, so every rule below exists to keep stops small without putting them inside normal market noise.
 
-This bot therefore only takes setups whose *natural* stop is small:
+## The two engines (they never overlap)
+The H1 50 EMA's slope over 5 bars, measured in H1 ATRs, sorts each moment into one of two regimes:
 
-| Step | Rule |
+| Regime | Engine | Entry | Stop | Target |
+|---|---|---|---|---|
+| **Trending** (slope > 0.3 ATR, price on the same side) | **Breakout** | Stop-limit order beyond a compression box (12 bars, 0.8–3.0 ATR tall), in the trend's direction | Opposite side of the box | 2R |
+| **Flat** (slope ≤ 0.3 ATR) | **Range fade** | Market order when a bar closes back inside the Bollinger Bands (20, 2.0) after the previous bar closed outside | Beyond the outside bar's extreme + 0.25 ATR | The middle band, which must be at least 1R away |
+
+Each regime has its own engine, so adding the fade **increases how often the bot trades without changing the breakout logic**. Either engine can be switched off.
+
+## Stops and the risk cap
+- **Risk cap:** 3% of equity per trade (about $6 on $200), or a fixed dollar cap.
+- **`Stop Mode = CappedAtRisk`** (default): if the structural stop costs more than the cap, the stop is **tightened to the cap**. It's never tightened below `Min Stop ATR` (1.0 ATR); if the cap is smaller than that, the trade is skipped.
+- **`Stop Mode = Structural`**: never tightens. Any trade whose structural stop exceeds the cap is skipped. This version made **zero trades** in your first backtest.
+- **Breakeven** at +1R. Everything is closed at 20:30 UTC (19:30 on Fridays): no swap, no weekend gap.
+
+## Cost hurdle
+A trade is taken only if its target is at least **3× the round-trip cost** (spread + `Commission $ per Lot`). **Enter your broker's commission here.** This rule stops the extra trades from simply paying the spread.
+
+## Risk limits
+| Limit | Default |
 |---|---|
-| Setup | **Compression box:** the high-low range of the last 12 bars (1 hour on M5) is between 0.8× and 2.5× ATR(14). Tight ranges like this tend to precede expansion, which is the idea behind Toby Crabel's narrow-range (NR) breakouts. |
-| Direction | Only in the direction of the H1 trend: close and 50 EMA on the same side, with the EMA sloping that way. |
-| Entry | A **stop-limit** order just beyond the box (buffer = 0.1 ATR, plus spread on the Ask side). Slippage is capped by `Stop-Limit Range`. The order expires after 6 bars or at the end of the session. |
-| Stop | The **opposite side of the box**: structural, and small by construction. |
-| Target | 2R. The stop moves to breakeven at +1R. |
-| Hours | London 07:00–10:30 UTC and New York 12:30–15:30 UTC only. Everything is closed by 20:30 UTC (19:30 on Fridays), so there's **no swap, no rollover spread and no weekend gap**. |
+| Trades per day | 4 (shared by both engines) |
+| Daily loss cap | 6% of balance |
+| Losses in a row in one day | 2, then no more trades that day |
+| Equity floor | $120: closes everything and stops the bot |
+| Spread | ≤ 6 pips and ≤ 15% of the stop |
+| Quotes | Ignored if frozen (older than 60 s) or invalid (zero, NaN or crossed) |
+| News blackout | Manual list of UTC times, ±30 minutes |
 
-## Risk controls (all adjustable)
-| Control | Default | Why |
-|---|---|---|
-| Max risk per trade | 3% of equity (about $6 on $200) | At a fixed lot, any setup whose stop costs more is **skipped**. It is never resized and never forced. |
-| Max trades per day | 2 | Stops the bot from over-trading a choppy day. |
-| Max daily loss | 6% | About two full losses, then it stops for the day. |
-| Losses in a row (per day) | 2 | Same idea, counted by trade rather than by dollars. |
-| Equity floor | $120 | Closes everything and **stops the bot** if equity falls below this. |
-| Spread filter | ≤ 6 pips and ≤ 15% of the stop | With tight stops, spread is the main cost. |
-| News blackout | Manual list | Enter FOMC, CPI and NFP times as `yyyy-MM-dd HH:mm` in UTC. No orders within ±30 minutes, and pending orders are cancelled. |
-| Stale or invalid quotes | 60 s | No order is placed on a frozen or crossed quote. |
-| Missing stop | — | A position found without a stop is closed immediately. |
-
-## The feasibility report: read it first
-At startup the bot measures **your broker's own history** and prints something like this (numbers illustrative):
-```
-FEASIBILITY | sample 2400 in-session Minute5 bars | 0.01 lots = $1.00 per 1.00 price move | risk cap $6.00 (3% of $200.00)
-FEASIBILITY | median ATR(14) = 3.10 -> a 1-ATR stop costs $3.10 (1.6% of equity)
-FEASIBILITY | compression setups: 310 | affordable: 95 (31%) | median setup risk $8.40
-VERDICT: only some setups fit - expect few trades. Backtest before going further.
-```
-If the verdict says **NOT suitable**, gold is too volatile for this account at the current settings. The honest options are then:
-- trade a symbol with a smaller minimum-lot risk (run the same bot on `USOIL.mp` or `US500.mp`; the report works on any symbol),
-- move to M1 (more noise, and costs weigh more), or
-- add capital.
+## Diagnostics: why it did or didn't trade
+- **At start, `FEASIBILITY`:** how much a 1-ATR stop costs, how many ATRs your risk cap covers, and what percentage of bars could take a trade at all.
+- **When the run ends, `RUN SUMMARY`:** orders placed, trades closed, and **a count for each rejection reason**, sorted by frequency. A zero-trade run now explains itself. Set `Print Each Rejection = Yes` to log every rejection individually.
 
 ## How to test
-1. Attach it to an **XAUUSD.mp M5** chart (M15 also works). Use a backtest starting balance equal to your real one (~$200), tick data, and commission entered.
-2. Check the `FEASIBILITY` and `VERDICT` lines in the log before looking at profit and loss.
-3. Use at least 6 months of data, and judge each month separately. Look at: number of trades, win rate (2R targets need about 34% to break even before costs), average loss in dollars (should be at or below the cap), and maximum drawdown.
-4. Run it on `USOIL.mp` and `US500.mp` too, and compare the feasibility verdicts.
+1. Attach it to **XAUUSD.mp M5** and backtest with a **$200** starting balance, tick data, and commission entered (both in the broker settings and in `Commission $ per Lot`).
+2. Read `FEASIBILITY` and `RUN SUMMARY` in the Log tab before looking at profit and loss.
+3. Compare three runs: breakout only, fade only, and both. Each engine should hold up on its own; if one loses money, switch it off rather than tuning it until it fits the past.
+4. Repeat on USOIL.mp and US500.mp.
 
 ## Honest limits
-- Even within the rules, 3% per trade on a $200 account is **aggressive**: ten losses in a row cost about 26%. That's the price of a fixed 0.01 lot on a small account. Lower `Max Risk Per Trade %` if you accept fewer trades.
-- Session times are fixed in UTC, so London and New York opens shift by an hour with daylight-saving changes. Adjust them seasonally if you want exact alignment.
-- cTrader has no economic-calendar API, so news times must be entered by hand.
-- Backtest fills on stop-limit orders depend on the tick data quality. Compare demo fills against the backtest before going live.
+- 3% risk per trade on $200 is aggressive: 10 losses in a row cost about 26%.
+- Stops tightened by `CappedAtRisk` get hit more often. Whether the higher trade count still makes money after costs is exactly what the backtest has to show. The design doesn't guarantee it.
+- Session times are fixed in UTC and don't adjust for daylight saving. News times must be entered by hand.
