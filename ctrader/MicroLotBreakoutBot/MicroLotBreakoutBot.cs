@@ -46,6 +46,14 @@ namespace cAlgo.Robots
         Hour4
     }
 
+    public enum MicroSizingMode
+    {
+        // Always trade Fixed Lots.
+        FixedLots,
+        // Trade as many minimum-lot steps as the risk budget allows (step-up compounding).
+        RiskPercent
+    }
+
     public enum MicroStopMode
     {
         // Use the structural stop; skip the trade if it costs more than the risk cap.
@@ -66,6 +74,9 @@ namespace cAlgo.Robots
 
         [Parameter("Fixed Lots", Group = "General", DefaultValue = 0.01, MinValue = 0.01, Step = 0.01)]
         public double FixedLots { get; set; }
+
+        [Parameter("Sizing Mode", Group = "General", DefaultValue = MicroSizingMode.RiskPercent)]
+        public MicroSizingMode SizingMode { get; set; }
 
         // ------------------------------------------------------------------ Trend filter
         [Parameter("Trend Timeframe", Group = "Trend", DefaultValue = MicroTrendTimeFrame.Hour)]
@@ -118,14 +129,17 @@ namespace cAlgo.Robots
         [Parameter("Fade Stop Buffer (ATR x)", Group = "Range Fade", DefaultValue = 0.25, MinValue = 0.0, MaxValue = 2.0, Step = 0.05)]
         public double FadeStopBufferAtr { get; set; }
 
-        [Parameter("Fade Min Reward/Risk", Group = "Range Fade", DefaultValue = 1.0, MinValue = 0.5, MaxValue = 3.0, Step = 0.1)]
+        [Parameter("Fade Min Reward/Risk", Group = "Range Fade", DefaultValue = 1.0, MinValue = 0.3, MaxValue = 3.0, Step = 0.1)]
         public double FadeMinRewardRisk { get; set; }
+
+        [Parameter("Fade Target (fraction to mid band)", Group = "Range Fade", DefaultValue = 1.0, MinValue = 0.3, MaxValue = 1.0, Step = 0.05)]
+        public double FadeTargetFraction { get; set; }
 
         // ------------------------------------------------------------------ Stops & exits
         [Parameter("Stop Mode", Group = "Stops", DefaultValue = MicroStopMode.CappedAtRisk)]
         public MicroStopMode StopMode { get; set; }
 
-        [Parameter("Min Stop (ATR x)", Group = "Stops", DefaultValue = 1.0, MinValue = 0.3, MaxValue = 4.0, Step = 0.1)]
+        [Parameter("Min Stop (ATR x)", Group = "Stops", DefaultValue = 1.5, MinValue = 0.3, MaxValue = 4.0, Step = 0.1)]
         public double MinStopAtr { get; set; }
 
         [Parameter("Breakeven At (R, 0=off)", Group = "Stops", DefaultValue = 1.0, MinValue = 0.0, MaxValue = 3.0, Step = 0.25)]
@@ -177,16 +191,16 @@ namespace cAlgo.Robots
         public int StaleQuoteSeconds { get; set; }
 
         // ------------------------------------------------------------------ Sessions (UTC)
-        [Parameter("Session 1 Start (UTC hhmm)", Group = "Sessions", DefaultValue = 700, MinValue = 0, MaxValue = 2359)]
+        [Parameter("Session 1 Start (UTC hhmm)", Group = "Sessions", DefaultValue = 800, MinValue = 0, MaxValue = 2359)]
         public int Session1Start { get; set; }
 
         [Parameter("Session 1 End (UTC hhmm)", Group = "Sessions", DefaultValue = 1100, MinValue = 0, MaxValue = 2359)]
         public int Session1End { get; set; }
 
-        [Parameter("Session 2 Start (UTC hhmm)", Group = "Sessions", DefaultValue = 1230, MinValue = 0, MaxValue = 2359)]
+        [Parameter("Session 2 Start (UTC hhmm)", Group = "Sessions", DefaultValue = 1400, MinValue = 0, MaxValue = 2359)]
         public int Session2Start { get; set; }
 
-        [Parameter("Session 2 End (UTC hhmm)", Group = "Sessions", DefaultValue = 1700, MinValue = 0, MaxValue = 2359)]
+        [Parameter("Session 2 End (UTC hhmm)", Group = "Sessions", DefaultValue = 1630, MinValue = 0, MaxValue = 2359)]
         public int Session2End { get; set; }
 
         // ------------------------------------------------------------------ News
@@ -399,15 +413,16 @@ namespace cAlgo.Robots
             sl = Math.Round(sl, Symbol.Digits);
             tp = Math.Round(tp, Symbol.Digits);
 
-            TradeResult r = PlaceStopLimitOrder(side, SymbolName, _volume, entry, MaxSlippagePips, BotLabel + BreakoutTag,
+            double volume = TradeVolume(stopDist);
+            TradeResult r = PlaceStopLimitOrder(side, SymbolName, volume, entry, MaxSlippagePips, BotLabel + BreakoutTag,
                 sl, tp, ProtectionType.Absolute, expiry);
 
             if (r.IsSuccessful)
             {
                 _ordersPlaced++;
-                Print("BO ORDER {0} stop-limit @ {1} | SL {2} | TP {3} | risk ${4:F2} ({5:F1}% eq) | box {6:F2} = {7:F2} ATR | expires {8:HH:mm}",
-                    side, entry, sl, tp, CashForPriceMove(stopDist), CashForPriceMove(stopDist) / Account.Equity * 100.0,
-                    height, height / atr, expiry);
+                Print("BO ORDER {0} {1} lots stop-limit @ {2} | SL {3} | TP {4} | risk ${5:F2} ({6:F1}% eq) | box {7:F2} = {8:F2} ATR | expires {9:HH:mm}",
+                    side, Symbol.VolumeInUnitsToQuantity(volume), entry, sl, tp, CashForPriceMove(stopDist, volume),
+                    CashForPriceMove(stopDist, volume) / Account.Equity * 100.0, height, height / atr, expiry);
             }
             else
             {
@@ -467,7 +482,7 @@ namespace cAlgo.Robots
             if (!ResolveStopDistance(structuralStopDist, atr, "RF", out stopDist))
                 return;
 
-            double targetDist = side == TradeType.Buy ? mid - entry : entry - mid;
+            double targetDist = FadeTargetFraction * (side == TradeType.Buy ? mid - entry : entry - mid);
             if (targetDist < FadeMinRewardRisk * stopDist)
             {
                 Reject("RF: reward/risk to middle band too low");
@@ -478,16 +493,17 @@ namespace cAlgo.Robots
 
             double slPips = Math.Round(stopDist / Symbol.PipSize, 1);
             double tpPips = Math.Round(targetDist / Symbol.PipSize, 1);
+            double volume = TradeVolume(stopDist);
 
-            TradeResult r = ExecuteMarketRangeOrder(side, SymbolName, _volume, MaxSlippagePips, entry,
+            TradeResult r = ExecuteMarketRangeOrder(side, SymbolName, volume, MaxSlippagePips, entry,
                 BotLabel + FadeTag, slPips, tpPips);
 
             if (r.IsSuccessful && r.Position != null)
             {
                 _ordersPlaced++;
-                Print("RF FILL {0} @ {1} | SL {2} | TP {3} | risk ${4:F2} ({5:F1}% eq) | target {6:F2}R",
-                    side, r.Position.EntryPrice, r.Position.StopLoss, r.Position.TakeProfit,
-                    CashForPriceMove(stopDist), CashForPriceMove(stopDist) / Account.Equity * 100.0, targetDist / stopDist);
+                Print("RF FILL {0} {1} lots @ {2} | SL {3} | TP {4} | risk ${5:F2} ({6:F1}% eq) | target {7:F2}R",
+                    side, Symbol.VolumeInUnitsToQuantity(volume), r.Position.EntryPrice, r.Position.StopLoss, r.Position.TakeProfit,
+                    CashForPriceMove(stopDist, volume), CashForPriceMove(stopDist, volume) / Account.Equity * 100.0, targetDist / stopDist);
                 if (!r.Position.StopLoss.HasValue)
                 {
                     Print("Filled without a stop - closing immediately.");
@@ -687,6 +703,10 @@ namespace cAlgo.Robots
                 if (favourable < BreakevenR * initialRisk)
                     continue;
 
+                if (pos.TakeProfit.HasValue &&
+                    (isBuy ? Symbol.Bid >= pos.TakeProfit.Value : Symbol.Ask <= pos.TakeProfit.Value))
+                    continue; // TP is about to fill; modifying now is rejected by the server
+
                 _breakevenDone.Add(pos.Id);
                 double be = Math.Round(pos.EntryPrice, Symbol.Digits);
                 bool improves = isBuy ? be > pos.StopLoss.Value : be < pos.StopLoss.Value;
@@ -811,7 +831,30 @@ namespace cAlgo.Robots
         // ================================================================== Helpers
         private double CashForPriceMove(double priceDistance)
         {
-            return priceDistance / Symbol.PipSize * Symbol.PipValue * _volume;
+            return CashForPriceMove(priceDistance, _volume);
+        }
+
+        private double CashForPriceMove(double priceDistance, double volume)
+        {
+            return priceDistance / Symbol.PipSize * Symbol.PipValue * volume;
+        }
+
+        // Compounding at a fixed minimum lot is a step function: size only grows when the
+        // risk budget covers a WHOLE extra volume step. Rounded down, never up.
+        private double TradeVolume(double stopDist)
+        {
+            if (SizingMode == MicroSizingMode.FixedLots)
+                return _volume;
+
+            double riskPerUnit = CashForPriceMove(stopDist, 1.0);
+            if (riskPerUnit <= 0)
+                return _volume;
+
+            double units = RiskCapCash() / riskPerUnit;
+            units = Math.Min(units, Symbol.VolumeInUnitsMax);
+            if (units < _volume)
+                return _volume; // ResolveStopDistance already guaranteed _volume fits the cap
+            return Math.Max(_volume, Symbol.NormalizeVolumeInUnits(units, RoundingMode.Down));
         }
 
         private double PriceForCash(double cash)
