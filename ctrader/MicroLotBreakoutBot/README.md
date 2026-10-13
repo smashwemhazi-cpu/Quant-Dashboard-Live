@@ -74,6 +74,20 @@ Run `python3 ctrader/tools/analyze_events.py events.json 2026-06-01` on every ne
 
 The buy/sell split reflects which way gold moved that year rather than an edge, so it isn't used as a filter. **The new `Preset` parameter (default `RangeFadeV1`) applies the configuration that held up**, and because it's a new parameter it overrides stale saved instances. It is still in-sample: it has to be confirmed on a period never used before (see below).
 
+## Backtest review #4: `RangeFadeV1` failed. Verdict: retire M5 gold for this account
+The preset applied correctly (log: `PRESET RangeFadeV1 applied`). Result: 95 trades, **PF 0.91**, t-stat −0.40. The filtered slice from runs 1 and 3 suggested PF 1.25–1.39; it didn't hold up when traded.
+
+**Why:** with a 2-trades-per-day cap and a daily loss streak stop, every trade changes which later trades happen. Removing 07:00 and 12:00–13:59 freed those slots for different 08:00 trades (38 trades, PF 0.65). The "edge" came from slicing one sequence of trades, not from the market.
+
+| Run | Trades | PF | Slippage past stops | Net |
+|---|---|---|---|---|
+| 1 | 117 | 0.92 | ≈ $62 | −$40 |
+| 2 | 116 | 0.91 | ≈ $62 | −$42 |
+| 3 | 62 | 0.87 | ≈ $36 | −$29 |
+| 4 | 95 | 0.91 | ≈ $56 | −$33 |
+
+Four configurations, ≈ 390 trades, the same answer: **no edge after costs.** Stop slippage alone (≈ 25% of R on $4–5 stops) is larger than the net loss in every run. At a fixed 1 oz on a $180 account, stops can't be wide enough to make execution costs small relative to R. That constraint, not the parameters, is the problem. Further tuning on these nine months would be data mining.
+
 ## Honest limits
 - 3% risk per trade on $200 is aggressive: 10 losses in a row cost about 26%.
 - Stops tightened by `CappedAtRisk` get hit more often. Whether the higher trade count still makes money after costs is exactly what the backtest has to show. The design doesn't guarantee it.
