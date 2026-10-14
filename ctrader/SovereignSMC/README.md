@@ -42,3 +42,14 @@ SMC fixes the distance between entry and stop, not the risk rule. The bot waits 
 - **Adverse selection.** Limit orders fill most often when price comes back through the level, so the losing trades always fill. Some winners run away without ever retracing and never fill. Compare expired orders against filled ones.
 - **Definitions.** SMC terms are loosely defined. Every rule here is fixed in code, so don't tune them one by one on the same data.
 - **Test protocol.** Backtest 2025 and 2026 at the real balance with $8/lot commission, then test 2024 untouched. Pass if PF ≥ 1.3 with at least 60 trades and the run is profitable in 2 of the 3 years. Run Monte Carlo with ruin set to the equity floor. Then 4–8 weeks on demo.
+
+## Quick-trade (M1) variant: `quick-m1.cbotset`
+Run it on an **M1** chart. Structure on M1 is smaller, so most stops from the gap to the sweep wick should be under $4. Those get widened to the $4 floor, giving a risk of about $4.08, which fits even a $150 account at 3%. Other changes:
+- 3-hour liquidity lookback
+- 15-bar CHoCH window
+- displacement of 0.7 × ATR
+- 20-minute order expiry
+- killzones 07:00–11:00 and 13:30–16:30 UTC
+- verbose setup log
+
+Targets stay at 1.5–3R, so each winner still needs a move of $6 or more. More trades also means the costs show up faster, so judge it on profit factor after commission, not on trade count.
