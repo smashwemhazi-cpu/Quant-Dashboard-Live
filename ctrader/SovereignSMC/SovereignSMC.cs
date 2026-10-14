@@ -253,6 +253,7 @@ namespace cAlgo.Robots
                 return;
 
             int i = Bars.Count - 2;
+            CancelIfFvgClosedThrough(i);
             if (i < LiquidityLookback + PivotStrength * 2 + 5)
                 return;
             double atr = _atr.Result[i];
@@ -282,7 +283,8 @@ namespace cAlgo.Robots
                 ours.Any(t => t.NetProfit < 0) ? ours.Where(t => t.NetProfit < 0).Average(t => t.NetProfit) : 0);
             string[] order = { "sweep", "choch", "invalidated", "choch timeout", "no fvg", "fvg", "no room (RR)", "risk too high",
                                "blocked: h1 bias", "blocked: session", "blocked: daily limit", "blocked: news", "blocked: busy", "blocked: spread",
-                               "blocked: friday", "placed", "place failed", "filled", "expired", "cancelled: played out", "cancelled: other" };
+                               "blocked: friday", "placed", "place failed", "filled", "expired", "missed: target hit before fill", "cancelled: stop broken before fill", "cancelled: fvg closed through",
+                               "filled without stop (gapped)", "cancelled: other" };
             Print("RUN SUMMARY funnel: " + string.Join(" | ", order.Where(k => _funnel.ContainsKey(k)).Select(k => k + " " + _funnel[k])));
             if (_riskSkips.Count > 0)
             {
@@ -532,7 +534,27 @@ namespace cAlgo.Robots
                     continue;
                 var r = CancelPendingOrder(o);
                 if (r.IsSuccessful)
-                    Count("cancelled: played out");
+                    Count(reachedTarget ? "missed: target hit before fill" : "cancelled: stop broken before fill");
+                else
+                    Print("CANCEL FAILED order {0}: {1}", o.Id, r.Error);
+            }
+        }
+
+        // SMC rule: a candle CLOSING through the far edge of the gap means the imbalance failed.
+        // Filling after that is buying into momentum against the setup.
+        private void CancelIfFvgClosedThrough(int i)
+        {
+            if (_livePlan == null || i < 0)
+                return;
+            double c = Bars.ClosePrices[i];
+            bool failed = _livePlan.IsBuy ? c < _livePlan.FvgBottom : c > _livePlan.FvgTop;
+            if (!failed)
+                return;
+            foreach (var o in OurOrders().ToList())
+            {
+                var r = CancelPendingOrder(o);
+                if (r.IsSuccessful)
+                    Count("cancelled: fvg closed through");
                 else
                     Print("CANCEL FAILED order {0}: {1}", o.Id, r.Error);
             }
@@ -605,7 +627,8 @@ namespace cAlgo.Robots
             Print("FILLED {0} @ {1} SL {2} TP {3}", p.TradeType, p.EntryPrice, p.StopLoss, p.TakeProfit);
             if (!p.StopLoss.HasValue)
             {
-                Print("Filled without a stop: closing immediately.");
+                Count("filled without stop (gapped)");
+                Print("Filled without a stop (price gapped through the stop level): closing immediately.");
                 var r = ClosePosition(p);
                 if (!r.IsSuccessful) Print("CLOSE FAILED pos {0}: {1}", p.Id, r.Error);
             }

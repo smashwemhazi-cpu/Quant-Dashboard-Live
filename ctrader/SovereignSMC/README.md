@@ -53,3 +53,14 @@ Run it on an **M1** chart. Structure on M1 is smaller, so most stops from the ga
 - verbose setup log
 
 Targets stay at 1.5–3R, so each winner still needs a move of $6 or more. More trades also means the costs show up faster, so judge it on profit factor after commission, not on trade count.
+
+## Run 1: M1, 6 Jan – 14 Oct 2026, $150, edited parameters. 10 trades, −$14.92, PF 0.46
+- **Funnel:** 18,446 sweeps, 3,701 CHoCHs, 2,075 FVGs, 1,065 skipped for risk (median $5.41, so about $180 of equity needed), 35 orders placed, 10 filled, 20 expired, 5 cancelled.
+- **Adverse selection showed up:** some orders missed winners that ran without filling (the old counter mixed these with stop-broken cancels). In the filled trades, 4 of 10 sells filled 1.2–5.9 above the limit price, after price pushed through the gap. One filled beyond its own stop and was closed straight away.
+- **M1 stop slippage:** median $1.06 across 8 stops, about 26% of the $4 risk. That's above the $0.80 assumed for M5. The quick M1 settings now use $1.05, which makes the floor about $5.25.
+- **Breakeven at 1R** (a panel setting; the default is off) turned two trades into scratches.
+- **Code changes:**
+  - A pending order is now cancelled if a bar closes through the far edge of its gap.
+  - Missed winners and stop-broken cancels are now counted separately.
+  - Fills that gapped past the stop are now counted.
+- **Next test:** load `recommended.cbotset` on **M5** with **$210** starting capital and label `SovSMC`. A sample of 10 trades can't show whether there's an edge.

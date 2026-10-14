@@ -34,7 +34,7 @@
     "H1SlopeBars": "10",
     "EntryDepth": "0.5",
     "StopBufferAtr": "0.2",
-    "ExpectedStopSlippage": "0.8",
+    "ExpectedStopSlippage": "1.05",
     "MaxSlippageShare": "0.2",
     "TargetMode": "0",
     "MinRR": "1.5",
