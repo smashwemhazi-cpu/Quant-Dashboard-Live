@@ -86,3 +86,9 @@ A bar that closes through that edge already cancels the pending order, so the st
 - **Breakeven at 1R** (a panel setting) fired on 4 of the 6 trades, and all 4 closed between −0.07R and −0.37R.
 - **Median stop slippage was $1.33**, about 33% of the $4 risk. SMC stops sit just past swept liquidity, which is where price moves fastest, so they fill worse than the earlier bots' stops ($0.65–0.95).
 - **Bug fixed:** when price jumped past the limit price, the order filled better than requested. That left the stop well inside the $4 minimum distance (in one trade only 1.05 away). The stop is now moved back out to the $4 minimum on fill.
+
+## Run 5, the clean test: build SMC-2026-10-14e, breakeven OFF. 6 trades, 0 wins, −$31.36
+- With breakeven switched off, the 4 trades that had reached +1R all reversed and hit their **full stop**. None reached its target, whether 1.5R or 3R.
+- The fix that widens the stop back to $4 after a gap fill ran 4 times. Median stop slippage dropped to $0.80.
+- **Pooled across all SMC runs (about 20 distinct fills):** about 40% reached +1R, and losses averaged about −1.35R. Even a 1R take-profit needs a win rate above 57% to break even, so no exit setting rescues these entries.
+- **Verdict:** this SMC entry has no edge on XAUUSD M5/M1 after costs at 0.01 lot. Development is frozen. The bot to deploy is MicroLotBreakoutBot (profitable in 2024, 2025 and 2026, including on unseen data).
