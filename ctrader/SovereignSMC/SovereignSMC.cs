@@ -314,7 +314,7 @@ namespace cAlgo.Robots
             string[] order = { "sweep", "choch", "invalidated", "choch timeout", "no fvg", "fvg", "no room (RR)", "risk too high",
                                "stale: move already ran", "blocked: h1 bias", "blocked: session", "blocked: daily limit", "blocked: news", "blocked: busy", "blocked: spread",
                                "blocked: friday", "placed", "placed: sweep stop", "placed: fvg stop", "place failed", "filled", "expired", "missed: target hit before fill", "cancelled: stop broken before fill", "cancelled: fvg closed through",
-                               "filled without stop (gapped)", "cancelled: other" };
+                               "filled without stop (gapped)", "stop widened to floor after gap fill", "cancelled: other" };
             Print("RUN SUMMARY funnel: " + string.Join(" | ", order.Where(k => _funnel.ContainsKey(k)).Select(k => k + " " + _funnel[k])));
             int placed;
             _funnel.TryGetValue("placed", out placed);
@@ -689,7 +689,31 @@ namespace cAlgo.Robots
             if (p == null || p.SymbolName != SymbolName || p.Label != BotLabel)
                 return;
             Count("filled");
-            if (p.StopLoss.HasValue)
+            bool widened = false;
+            // A limit can fill at a better price than requested when price gaps through it
+            // (log 05/10/2026: sell limit 4159.87 filled at 4162.82, leaving the stop only 1.05
+            // away). That silently breaks the slippage floor, so widen the stop back to the floor;
+            // the cash risk is then the floor amount, which the risk cap already approved.
+            if (p.StopLoss.HasValue && Math.Abs(p.EntryPrice - p.StopLoss.Value) < CostFloor())
+            {
+                bool isBuy = p.TradeType == TradeType.Buy;
+                double sl = Round(isBuy ? p.EntryPrice - CostFloor() : p.EntryPrice + CostFloor());
+                bool valid = isBuy ? sl < Symbol.Bid : sl > Symbol.Ask;
+                if (valid)
+                {
+                    var m = p.ModifyStopLossPrice(sl);
+                    if (m.IsSuccessful)
+                    {
+                        widened = true;
+                        Count("stop widened to floor after gap fill");
+                    }
+                    else
+                        Print("STOP WIDEN FAILED pos {0}: {1} (keeping tighter stop)", p.Id, m.Error);
+                }
+            }
+            if (widened)
+                _initialRisk[p.Id] = CostFloor();
+            else if (p.StopLoss.HasValue)
                 _initialRisk[p.Id] = Math.Abs(p.EntryPrice - p.StopLoss.Value);
             Print("FILLED {0} @ {1} SL {2} TP {3}", p.TradeType, p.EntryPrice, p.StopLoss, p.TakeProfit);
             if (!p.StopLoss.HasValue)

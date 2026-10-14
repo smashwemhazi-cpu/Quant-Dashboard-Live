@@ -80,3 +80,9 @@ A bar that closes through that edge already cancels the pending order, so the st
 - Settings in the run differed from the recommended file: ATR 9, H1 EMA 50, stop buffer 0.5, label SovV83.
 - **New:** the previous day's high and low are now used as liquidity levels. `Liquidity Pools = MajorOnly` restricts setups to the Asian range and the previous day's high/low, so it gives fewer setups. Use `major-pools.cbotset` to A/B test it.
 - **Sample size:** the SMC runs so far total 15 filled trades with 2 wins. That isn't enough to judge the strategy. Test 1 Jan 2025 – 14 Oct 2026 to get more trades.
+
+## Run 4: M5, Jan 2025 – Oct 2026, $200. 6 trades, 0 wins, −$13.14
+- **Funnel:** 8,563 sweeps, 1,607 CHoCHs, 862 gaps, and 11 orders placed in 21 months. Of the gaps, 305 offered too little reward-to-risk, 263 were blocked by the H1 bias filter, 149 fell outside the sessions, 114 were too risky, and 18 had already run.
+- **Breakeven at 1R** (a panel setting) fired on 4 of the 6 trades, and all 4 closed between −0.07R and −0.37R.
+- **Median stop slippage was $1.33**, about 33% of the $4 risk. SMC stops sit just past swept liquidity, which is where price moves fastest, so they fill worse than the earlier bots' stops ($0.65–0.95).
+- **Bug fixed:** when price jumped past the limit price, the order filled better than requested. That left the stop well inside the $4 minimum distance (in one trade only 1.05 away). The stop is now moved back out to the $4 minimum on fill.
