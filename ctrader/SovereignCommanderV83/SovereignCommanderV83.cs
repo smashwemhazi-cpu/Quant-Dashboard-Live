@@ -113,10 +113,10 @@ namespace cAlgo.Robots
         [Parameter("Max Slippage Share of Risk", Group = "4. Stops", DefaultValue = 0.20, MinValue = 0.05, MaxValue = 1, Step = 0.05)]
         public double MaxSlippageShare { get; set; }
 
-        [Parameter("Take Profit (R, 0 = trail only)", Group = "4. Stops", DefaultValue = 0, MinValue = 0, Step = 0.25)]
+        [Parameter("Take Profit (R, 0 = trail only)", Group = "4. Stops", DefaultValue = 1.5, MinValue = 0, Step = 0.25)]
         public double TakeProfitR { get; set; }
 
-        [Parameter("Breakeven at (R, 0 = off)", Group = "4. Stops", DefaultValue = 1.0, MinValue = 0, Step = 0.25)]
+        [Parameter("Breakeven at (R, 0 = off)", Group = "4. Stops", DefaultValue = 0, MinValue = 0, Step = 0.25)]
         public double BreakevenR { get; set; }
 
         [Parameter("Trail Start (R)", Group = "4. Stops", DefaultValue = 1.5, MinValue = 0, Step = 0.25)]
@@ -156,6 +156,8 @@ namespace cAlgo.Robots
         private readonly Dictionary<string, int> _skips = new Dictionary<string, int>();
         private Signal _pending;
         private bool _floorBreached;
+        private readonly List<double> _riskSkips = new List<double>();
+        private bool _prevBarSignal;
         private int _signals, _fills, _rejects, _trailMoves, _beMoves, _stopRepairs;
 
         private class Signal
@@ -219,6 +221,14 @@ namespace cAlgo.Robots
             TrailOpenPositions();
 
             Signal s = Evaluate();
+            // Count each setup once (first bar of a run of signal bars) and only inside a session,
+            // so the summary reflects real opportunities, not the same setup re-firing every bar.
+            bool fresh = s != null && !_prevBarSignal;
+            _prevBarSignal = s != null;
+            if (s != null && !InSession(Server.Time.Hour * 100 + Server.Time.Minute))
+                s = null;
+            else if (s != null && !fresh)
+                s = null;
             if (s != null)
             {
                 _signals++;
@@ -243,6 +253,13 @@ namespace cAlgo.Robots
                 ours.Count, wins, ours.Count > 0 ? (double)wins / ours.Count : 0, net, _signals, _fills, _rejects, _beMoves, _trailMoves, _stopRepairs);
             foreach (var kv in _skips.OrderByDescending(k => k.Value))
                 Print("RUN SUMMARY skipped: {0} x{1}", kv.Key, kv.Value);
+            if (_riskSkips.Count > 0)
+            {
+                var r = _riskSkips.OrderBy(x => x).ToList();
+                Func<double, double> q = f => r[Math.Min(r.Count - 1, (int)(f * r.Count))];
+                Print("RUN SUMMARY risk-skipped setups: n={0} risk$ min {1:F2} / median {2:F2} / p75 {3:F2} / p90 {4:F2}; equity needed at {5}% for median: ${6:F0}, for p75: ${7:F0}",
+                    r.Count, r[0], q(0.5), q(0.75), q(0.9), MaxRiskPercent, q(0.5) * 100 / MaxRiskPercent, q(0.75) * 100 / MaxRiskPercent);
+            }
         }
 
         // ================= Signal =================
@@ -422,7 +439,7 @@ namespace cAlgo.Robots
 
             if (units < Symbol.VolumeInUnitsMin) { reason = "volume below broker minimum"; return 0; }
             double risk = CashFor(dist, units) + CommissionPerLot * Symbol.VolumeInUnitsToQuantity(units);
-            if (risk > cap) { reason = "risk above max % (skip, not clamp)"; return 0; }
+            if (risk > cap) { _riskSkips.Add(risk); reason = "risk above max % (skip, not clamp)"; return 0; }
             return units;
         }
 
@@ -449,7 +466,7 @@ namespace cAlgo.Robots
                     double costDist = CommissionPerLot * Symbol.VolumeInUnitsToQuantity(p.VolumeInUnits)
                                       / Math.Max(1e-9, CashFor(1, p.VolumeInUnits));
                     double be = Math.Round(isBuy ? p.EntryPrice + costDist : p.EntryPrice - costDist, Symbol.Digits);
-                    bool improves = isBuy ? be > p.StopLoss.Value : be < p.StopLoss.Value;
+                    bool improves = isBuy ? be > p.StopLoss.Value + Symbol.PipSize : be < p.StopLoss.Value - Symbol.PipSize;
                     bool valid = isBuy ? be < Symbol.Bid - Symbol.Spread : be > Symbol.Ask + Symbol.Spread;
                     bool beyondTp = p.TakeProfit.HasValue && (isBuy ? be >= p.TakeProfit.Value : be <= p.TakeProfit.Value);
                     if (improves && valid && !beyondTp && ModifySl(p, be))

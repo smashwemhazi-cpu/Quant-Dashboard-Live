@@ -18,3 +18,13 @@ It compiles cleanly against `cTrader.Automate` 1.0.21 with no warnings. It has *
 | No diagnostics | `CONFIG` printed at start, `FILLED` / `CLOSED` (with R) per trade, `RUN SUMMARY` with skip reasons at stop | |
 
 Test it the same way as before: 2024 untouched as the unseen year, commission entered, tick data, then a Monte Carlo run with ruin set to the equity floor.
+
+## Run 1 (6 Jan – 14 Oct 2026, $150, edited parameters): 4 trades, −$10.28
+- **The risk cap blocked almost everything.** 1,922 skips said "risk above max %". At $150, 3% is $4.50. The minimum stop is $4 plus about $0.08 commission. So any swing stop wider than about $4.40 was skipped. Typical M5 swing stops are wider than that.
+- **The exits had no take-profit.** Breakeven at 1R fired on 2 of the 4 trades, and both closed as scratches (−$0.19 and −$0.04). The trail never moved. The two trades that never reached breakeven lost 1.07R and 1.45R; the second had $1.70 of stop slippage.
+- **Fixes in the code:**
+  - TP now defaults to 1.5R and breakeven is off.
+  - The same breakeven modify was sent twice; that's fixed.
+  - The signal count now includes only fresh setups inside a session.
+  - The summary now prints the risk-$ distribution of skipped setups and the equity each would need.
+- Re-test from `baseline.cbotset`: ATR 14, H1 EMA 200 and the new exits, with starting capital set to the real balance (about $210).
