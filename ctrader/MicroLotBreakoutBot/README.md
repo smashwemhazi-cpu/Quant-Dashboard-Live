@@ -146,6 +146,32 @@ This copies the structure of the manual trades you showed: **several limit order
 
 **Re-test both years with identical settings.** Keep the floor only if **2026 stays profitable and 2025 stops losing**, whether through fewer trades or better ones.
 
+## Validation: three years, stop-trigger A/B → configuration frozen
+| Period | Stop trigger | Net | PF | Trades | Max equity DD |
+|---|---|---|---|---|---|
+| **2024 (never used in design)** | DoubleTick | +$231.71 | **1.45** | 213 | 28.6% |
+| 2025 | DoubleTick | +$1,324.50 | **1.94** | 524 | 18.4% |
+| 2025 | SingleTick | +$911.68 | 1.71 | 494 | 24.8% |
+| 2026 (Jan–Oct) | DoubleTick | +$1,688.63 | **1.86** | 576 | 17.5% |
+| Aug–Oct 2026 | DoubleTick | +$88.49 | 1.48 | 69 | 22.3% |
+| Aug–Oct 2026 | SingleTick | −$26.83 | 0.77 | 37 | 21.4% |
+
+- **Profitable in all three years**, including 2024, which was never used for any design decision.
+- **DoubleTick beats SingleTick** on both periods tested, on net profit, profit factor and drawdown. It stays the default.
+- **2025 log review:**
+  - All four quarters, both ladder types, both directions and both sessions are profitable.
+  - The top 10 winners are 26% of net profit.
+  - Typical stop-out slippage is 14% of risk.
+  - Tail risk: five stop fills of 5–6× normal size, most in Q4.
+- **Frozen configuration** = `recommended.cbotset` (LimitLadder, DoubleTick, slippage floor $4, 3% risk, sessions 08:00–11:00 and 14:00–16:30 UTC). **No further tuning** until forward-test results are in.
+- **Small-account constraint:**
+  - At 0.01 lot, the risk cap must stay at or above the $4 slippage floor, so about 2.3% risk at $180 is the minimum that still trades.
+  - Drawdowns of about 30% are therefore possible at $180; at about $400 the same losing streaks would be roughly 13%.
+- **Next steps:**
+  1. Run Monte Carlo on the 2024 run.
+  2. Demo for 4–8 weeks.
+  3. Go live at 0.01 lot, with a pause if drawdown exceeds about 35%.
+
 ## Honest limits
 - 3% risk per trade on $200 is aggressive: 10 losses in a row cost about 26%.
 - Stops tightened by `CappedAtRisk` get hit more often. Whether the higher trade count still makes money after costs is exactly what the backtest has to show. The design doesn't guarantee it.
