@@ -130,6 +130,22 @@ This copies the structure of the manual trades you showed: **several limit order
 - **New config warnings** flag a `Max Spread` over 20 pips (saved instances still carry 80, which is $8 on gold) and ladder stops far tighter than `Min Stop`.
 - **`recommended.cbotset`** holds the reviewed settings. Load it, or create a fresh instance, because saved instances keep their old values.
 
+## Ladder review: 2026 vs 2025
+| | 2026 (Jan–Oct) | 2025 (Jan–Jun, stopped by the equity floor) |
+|---|---|---|
+| Result | **+$600.71**, PF 1.41, 466 trades, max drawdown 20.5% | **−$60.19**, PF 0.95, 338 trades |
+| Median in-session M5 ATR | ≈ $3.20 | ≈ **$1.95** |
+| Average ladder stop | ≈ $3–5 | ≈ **$2.48** |
+| Stop slippage | — | **$220**, averaging $0.94 per stop = **42% of risk** |
+| Net if stops had filled exactly | — | **+$187** |
+| Breakeven scratches | — | −$58.59 across 67 trades |
+
+**What happened:** the ladder entries are good in both years. Slippage costs about $0.65–0.95 per stop whatever the stop size. In 2026, gold's volatility made stops big enough to absorb that. In 2025 the stops were smaller, slippage took about 42% of each trade's risk, and the account drifted down to the $120 equity floor.
+
+**Fix: slippage floor.** `Expected Stop Slippage` (0.8) ÷ `Max Slippage Share of Risk` (20%) means every stop must be at least **4.0 price ($4 at 0.01 lot)**. Market engines widen their stop to that floor if it fits the risk cap; otherwise they skip. Ladder orders closer to the stop than that are dropped. In quiet markets like 2025, the bot now **stands aside** instead of feeding slippage. The `CONFIG` line prints the floor in use.
+
+**Re-test both years with identical settings.** Keep the floor only if **2026 stays profitable and 2025 stops losing**, whether through fewer trades or better ones.
+
 ## Honest limits
 - 3% risk per trade on $200 is aggressive: 10 losses in a row cost about 26%.
 - Stops tightened by `CappedAtRisk` get hit more often. Whether the higher trade count still makes money after costs is exactly what the backtest has to show. The design doesn't guarantee it.

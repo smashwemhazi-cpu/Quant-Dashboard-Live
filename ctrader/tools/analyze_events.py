@@ -4,6 +4,7 @@ import json, sys, datetime as dt, collections, statistics as st
 with open(sys.argv[1]) as f:
     ev = json.load(f)
 filled_from_order = set(e['positionId'] for e in ev if e['event']=='Stop Limit Order Filled')
+ladder_fills = set(e['positionId'] for e in ev if e['event']=='Limit Order Filled')
 pos = {}
 for e in ev:
     pid = e['positionId']
@@ -11,29 +12,30 @@ for e in ev:
     p = pos.setdefault(pid, {'id':pid})
     if e['event']=='Create Position':
         p.update(t0=dt.datetime.fromtimestamp(e['time']/1000, dt.timezone.utc).replace(tzinfo=None), side=e['type'], entry=e['entryPrice'], sl0=e['sl'],
-                 engine='BO' if pid in filled_from_order else 'RF')
+                 engine='BO' if pid in filled_from_order else ('LD' if pid in ladder_fills else 'RF'))
     elif e['event']=='Position Modified (S/L)':
         p['be']=True
     elif e['event'] in ('Stop Loss Hit','Take Profit Hit','Position closed','Position Closed') or e['closePrice'] is not None and e['event']!='Create Position':
         p.update(exit=e['event'], close=e['closePrice'], gross=e['grossProfit'], sl_at_exit=e['sl'], t1=dt.datetime.fromtimestamp(e['time']/1000, dt.timezone.utc).replace(tzinfo=None))
 T=[p for p in pos.values() if 'gross' in p and 'entry' in p]
 for p in T:
+    if p.get('sl0') is None: p['sl0']=p.get('sl_at_exit') if p.get('sl_at_exit') is not None else p['entry']
     risk=abs(p['entry']-p['sl0']); p['risk']=risk
     p['R']=p['gross']/risk if risk else 0
     p['mins']=(p['t1']-p['t0']).total_seconds()/60
-    if p['exit']=='Stop Loss Hit':
+    if p['exit']=='Stop Loss Hit' and p.get('sl_at_exit') is not None:
         slip = (p['sl_at_exit']-p['close']) if p['side']=='Buy' else (p['close']-p['sl_at_exit'])
         p['slip']=slip
-    p['kind']= 'TP' if p['exit']=='Take Profit Hit' else ('BE-scratch' if p.get('be') and p['exit']=='Stop Loss Hit' else ('SL' if p['exit']=='Stop Loss Hit' else p['exit']))
+    p['kind']= 'TP' if p['exit']=='Take Profit Hit' else ('BE-scratch' if p.get('be') and p['exit']=='Stop Loss Hit' else ('SL' if p['exit']=='Stop Loss Hit' and 'slip' in p else p['exit']))
 print("trades parsed:",len(T), "events:", collections.Counter(e['event'] for e in ev))
 def summ(name, xs):
     if not xs: return
     g=[x['gross'] for x in xs]; w=[x for x in g if x>0]; l=[x for x in g if x<=0]
     print(f"{name:22s} n={len(xs):3d} net={sum(g):7.2f} win%={100*len(w)/len(xs):5.1f} avgW={st.mean(w) if w else 0:5.2f} avgL={st.mean(l) if l else 0:6.2f} PF={(sum(w)/-sum(l)) if l and sum(l) else float('nan'):4.2f} avgR={st.mean(x['R'] for x in xs):5.2f} avgRisk$={st.mean(x['risk'] for x in xs):4.2f} medHold={st.median(x['mins'] for x in xs):5.0f}m")
 summ("ALL",T)
-for k in ['BO','RF']: summ("engine "+k,[x for x in T if x['engine']==k])
+for k in ['BO','RF','LD']: summ("engine "+k,[x for x in T if x['engine']==k])
 for k in ['Buy','Sell']: summ("side "+k,[x for x in T if x['side']==k])
-for e in ['BO','RF']:
+for e in ['BO','RF','LD']:
   for k in ['Buy','Sell']: summ(f"{e} {k}",[x for x in T if x['engine']==e and x['side']==k])
 print("exit kinds:",collections.Counter(x['kind'] for x in T))
 for k in ['TP','SL','BE-scratch']: summ("exit "+k,[x for x in T if x['kind']==k])
@@ -51,8 +53,8 @@ for m in sorted(mb): summ("  "+m,mb[m])
 print("hold-time of SL losers (min):", sorted(round(x['mins']) for x in T if x['kind']=='SL')[:40])
 # would-be outcome if no breakeven: count BE trades that later hit TP vs scratched
 print("TP winners avg R:", round(st.mean(x['R'] for x in T if x['kind']=='TP'),2))
-print("\n=== out-of-sample check (split at 2026-06-01) ===")
 cut=dt.datetime.fromisoformat(sys.argv[2]) if len(sys.argv)>2 else dt.datetime(2026,6,1)
+print(f"\n=== out-of-sample check (split at {cut:%Y-%m-%d}) ===")
 good=lambda x: x['t0'].hour in (9,10)
 for name,sel in [("09-10h",good),("other hours",lambda x: not good(x)),("Sell",lambda x:x['side']=='Sell'),("Buy",lambda x:x['side']=='Buy')]:
     summ("IS  "+name,[x for x in T if x['t0']<cut and sel(x)])

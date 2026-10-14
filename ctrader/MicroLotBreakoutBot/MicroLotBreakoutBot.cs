@@ -196,6 +196,12 @@ namespace cAlgo.Robots
         [Parameter("Commission $ per Lot (round turn)", Group = "Costs", DefaultValue = 8, MinValue = 0, Step = 0.5)]
         public double CommissionPerLot { get; set; }
 
+        [Parameter("Expected Stop Slippage (price)", Group = "Costs", DefaultValue = 0.8, MinValue = 0, Step = 0.05)]
+        public double ExpectedStopSlippage { get; set; }
+
+        [Parameter("Max Slippage Share of Risk", Group = "Costs", DefaultValue = 0.20, MinValue = 0.05, MaxValue = 1.0, Step = 0.05)]
+        public double MaxSlippageShare { get; set; }
+
         [Parameter("Cost Hurdle (target / cost x)", Group = "Costs", DefaultValue = 3.0, MinValue = 1.0, MaxValue = 10.0, Step = 0.5)]
         public double CostHurdle { get; set; }
 
@@ -332,6 +338,8 @@ namespace cAlgo.Robots
         {
             Print("CONFIG | label={0} sizing={1} stopMode={2} minStopATR={3} riskPct={4} maxTrades/day={5} commission/lot={6} stopTrigger={7}",
                 BotLabel, SizingMode, StopMode, MinStopAtr, MaxRiskPercent, MaxTradesPerDay, CommissionPerLot, StopTrigger);
+            Print("CONFIG | slippage floor: stops must be >= {0:F2} price (expected slip {1} / max share {2:P0}) = ${3:F2} at {4} lots",
+                CostFloorDistance(), ExpectedStopSlippage, MaxSlippageShare, CashForPriceMove(CostFloorDistance()), Symbol.VolumeInUnitsToQuantity(_volume));
             Print("CONFIG | entry={0} ladder: {1} orders over {2} ATR, stop {3} ATR beyond, min order stop {4} ATR, expiry {5} bars, trend ladder {6}",
                 EntryMode, LadderOrders, LadderDepthAtr, LadderStopAtr, LadderMinStopAtr, LadderExpiryBars, UseTrendLadder);
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
@@ -650,10 +658,10 @@ namespace cAlgo.Robots
                 if (side == TradeType.Buy) lvl -= spread;
                 bool valid = side == TradeType.Buy ? lvl < price : lvl > price;
                 double risk = Math.Abs(lvl - stop);
-                if (valid && risk >= LadderMinStopAtr * atr)
+                if (valid && risk >= Math.Max(LadderMinStopAtr * atr, CostFloorDistance()))
                     levels.Add(Math.Round(lvl, Symbol.Digits));
             }
-            if (levels.Count == 0) { Reject("LD: no valid level (price already through the zone)"); return; }
+            if (levels.Count == 0) { Reject("LD: no valid level (price through the zone, or stops below the slippage floor)"); return; }
 
             // Fit total ladder risk inside the cap by dropping the shallowest (largest-risk) orders.
             double cap = RiskCapCash();
@@ -702,7 +710,7 @@ namespace cAlgo.Robots
         private bool ResolveStopDistance(double structural, double atr, string engine, out double stopDist)
         {
             double capDist = PriceForCash(RiskCapCash());
-            double minDist = MinStopAtr * atr;
+            double minDist = Math.Max(MinStopAtr * atr, CostFloorDistance());
             stopDist = structural;
 
             if (structural <= capDist)
@@ -714,7 +722,7 @@ namespace cAlgo.Robots
                     stopDist = minDist; // widen out of the noise band, still within the cap
                     return true;
                 }
-                Reject(engine + ": risk cap smaller than Min Stop ATR (volatility too high for account)");
+                Reject(engine + ": risk cap smaller than minimum stop (ATR or slippage floor)");
                 return false;
             }
 
@@ -725,7 +733,7 @@ namespace cAlgo.Robots
             }
             if (capDist < minDist)
             {
-                Reject(engine + ": risk cap smaller than Min Stop ATR (volatility too high for account)");
+                Reject(engine + ": risk cap smaller than minimum stop (ATR or slippage floor)");
                 return false;
             }
             stopDist = capDist;
@@ -826,6 +834,14 @@ namespace cAlgo.Robots
             if (streak >= MaxDailyLossStreak) { reason = "loss streak today"; return false; }
 
             return true;
+        }
+
+        // Smallest stop distance at which expected stop slippage stays under the allowed share
+        // of risk. Backtests: ~$0.65-0.95 slippage per stop regardless of stop size, so small
+        // stops (low-volatility periods) lose to slippage even when entries are good.
+        private double CostFloorDistance()
+        {
+            return MaxSlippageShare > 0 ? ExpectedStopSlippage / MaxSlippageShare : 0;
         }
 
         private static string SetupKey(HistoricalTrade t)
