@@ -233,6 +233,11 @@ namespace cAlgo.Robots
                 SessionAStart, SessionAEnd, SessionBStart, SessionBEnd, _news.Count);
             if (units > 0 && PriceFor(cap - Commission(units), units) < CostFloor())
                 Print("WARNING: the risk cap is smaller than the slippage floor: no trade can pass. Raise equity or Max Risk %.");
+            else if (units > 0 && PriceFor(cap - Commission(units), units) < CostFloor() * 1.25)
+                Print("WARNING: affordable stop window is only {0:F2} wide ({1:F2}..{2:F2}). Expect very few or no orders. " +
+                      "Equity for a 50% wider window: ${3:F0}. In backtests set Starting capital to your real balance.",
+                    PriceFor(cap - Commission(units), units) - CostFloor(), CostFloor(), PriceFor(cap - Commission(units), units),
+                    (CashFor(CostFloor() * 1.5, units) + Commission(units)) * 100 / MaxRiskPercent);
             if (CommissionPerLot <= 0)
                 Print("WARNING: commission is 0; backtests will overstate profit.");
         }
@@ -286,6 +291,13 @@ namespace cAlgo.Robots
                                "blocked: friday", "placed", "place failed", "filled", "expired", "missed: target hit before fill", "cancelled: stop broken before fill", "cancelled: fvg closed through",
                                "filled without stop (gapped)", "cancelled: other" };
             Print("RUN SUMMARY funnel: " + string.Join(" | ", order.Where(k => _funnel.ContainsKey(k)).Select(k => k + " " + _funnel[k])));
+            int placed;
+            _funnel.TryGetValue("placed", out placed);
+            var blockers = _funnel.Where(k => k.Key == "risk too high" || k.Key == "no room (RR)" || k.Key == "no fvg" || k.Key.StartsWith("blocked"))
+                                  .OrderByDescending(k => k.Value).ToList();
+            if (placed == 0)
+                Print("VERDICT: no orders placed. Main blocker: {0}.",
+                    blockers.Count > 0 ? blockers[0].Key + " x" + blockers[0].Value : (_funnel.ContainsKey("sweep") ? "no CHoCH/FVG completed" : "no sweeps detected"));
             if (_riskSkips.Count > 0)
             {
                 var r = _riskSkips.OrderBy(x => x).ToList();
