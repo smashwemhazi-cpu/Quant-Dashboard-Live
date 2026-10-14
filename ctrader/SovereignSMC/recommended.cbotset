@@ -40,7 +40,6 @@
     "MinRR": "1.5",
     "MaxRR": "3",
     "OrderExpiryBars": "12",
-    "BreakevenR": "0",
     "StopTrigger": "1",
     "MaxSpreadPips": "6",
     "BotLabel": "SovSMC",
@@ -48,6 +47,7 @@
     "StopMode": "2",
     "LiquidityMode": "0",
     "FvgPick": "0",
-    "MaxChase": "0.5"
+    "MaxChase": "0.5",
+    "BreakevenAtR": "0"
   }
 }

@@ -171,8 +171,8 @@ namespace cAlgo.Robots
         [Parameter("Order Expiry (bars)", Group = "4. Orders", DefaultValue = 12, MinValue = 1)]
         public int OrderExpiryBars { get; set; }
 
-        [Parameter("Breakeven at (R, 0 = off)", Group = "4. Orders", DefaultValue = 0, MinValue = 0, Step = 0.25)]
-        public double BreakevenR { get; set; }
+        [Parameter("Breakeven v2 at R (0 = off)", Group = "4. Orders", DefaultValue = 0, MinValue = 0, Step = 0.25)]
+        public double BreakevenAtR { get; set; }
 
         [Parameter("Stop Trigger", Group = "4. Orders", DefaultValue = SmcStopTrigger.DoubleTick)]
         public SmcStopTrigger StopTrigger { get; set; }
@@ -211,6 +211,9 @@ namespace cAlgo.Robots
             public string StopKind;
         }
 
+        // Bump on every change so the log proves which code produced a run.
+        private const string BuildTag = "SMC-2026-10-14e";
+
         private AverageTrueRange _atr;
         private Bars _h1, _d1;
         private ExponentialMovingAverage _h1Ema;
@@ -245,6 +248,7 @@ namespace cAlgo.Robots
 
             double units = Units();
             double cap = Account.Equity * MaxRiskPercent / 100.0;
+            Print("CONFIG build " + BuildTag + " (if this line is missing or shows an older tag, cTrader is running an old build: press Build)");
             Print("CONFIG symbol={0} tf={1} ({2} min) pipSize={3} pipValue/unit={4} units={5} equity={6:F2}",
                 SymbolName, TimeFrame, _tfMinutes, Symbol.PipSize, Symbol.PipValue, units, Account.Equity);
             Print("CONFIG risk cap ${0:F2} ({1}%) = {2:F2} price at {3} lots; slippage floor {4:F2} price; affordable stop window {4:F2}..{2:F2}",
@@ -252,7 +256,7 @@ namespace cAlgo.Robots
             Print("CONFIG structure: pools " + LiquidityMode + " (+asian, prev-day H/L), fvg pick " + FvgPick + ", max chase " + MaxChase + ", pivots {0}, liquidity {1} bars, asian={2} (to {3:D4}), CHoCH {4} bars, displacement {5}xATR, FVG>={6}xATR, H1 bias={7} EMA{8}",
                 PivotStrength, LiquidityLookback, UseAsianRange, AsianEnd, ChochWindow, DisplacementAtr, MinFvgAtr, RequireH1Bias, H1EmaPeriod);
             Print("CONFIG orders: depth {0}, stop mode " + StopMode + ", stop buffer {1}xATR, target {2} RR {3}..{4}, expiry {5} bars, BE {6}R, trigger {7}; killzones {8:D4}-{9:D4}, {10:D4}-{11:D4}; news {12}",
-                EntryDepth, StopBufferAtr, TargetMode, MinRR, MaxRR, OrderExpiryBars, BreakevenR, StopTrigger,
+                EntryDepth, StopBufferAtr, TargetMode, MinRR, MaxRR, OrderExpiryBars, BreakevenAtR, StopTrigger,
                 SessionAStart, SessionAEnd, SessionBStart, SessionBEnd, _news.Count);
             if (units > 0 && PriceFor(cap - Commission(units), units) < CostFloor())
                 Print("WARNING: the risk cap is smaller than the slippage floor: no trade can pass. Raise equity or Max Risk %.");
@@ -263,8 +267,8 @@ namespace cAlgo.Robots
                     (CashFor(CostFloor() * 1.5, units) + Commission(units)) * 100 / MaxRiskPercent);
             if (CommissionPerLot <= 0)
                 Print("WARNING: commission is 0; backtests will overstate profit.");
-            if (BreakevenR > 0)
-                Print("WARNING: breakeven at {0}R is on. In every run so far it turned +1R trades into losses after stop slippage (default 0).", BreakevenR);
+            if (BreakevenAtR > 0)
+                Print("WARNING: breakeven at {0}R is on. In every run so far it turned +1R trades into losses after stop slippage (default 0).", BreakevenAtR);
         }
 
         protected override void OnTick()
@@ -629,7 +633,7 @@ namespace cAlgo.Robots
 
         private void ManageBreakeven()
         {
-            if (BreakevenR <= 0)
+            if (BreakevenAtR <= 0)
                 return;
             foreach (var p in OurPositions().ToList())
             {
@@ -638,7 +642,7 @@ namespace cAlgo.Robots
                     continue;
                 bool isBuy = p.TradeType == TradeType.Buy;
                 double progress = isBuy ? Symbol.Bid - p.EntryPrice : p.EntryPrice - Symbol.Ask;
-                if (progress < BreakevenR * risk)
+                if (progress < BreakevenAtR * risk)
                     continue;
                 double cost = PriceFor(Commission(p.VolumeInUnits), p.VolumeInUnits);
                 double be = Round(isBuy ? p.EntryPrice + cost : p.EntryPrice - cost);
