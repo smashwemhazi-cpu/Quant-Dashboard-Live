@@ -71,3 +71,12 @@ A $200 account can risk about $5.92 per trade. On M5, the distance from the midd
 - If that's too expensive, put the stop just beyond the far edge of the gap instead, never closer than the $4 minimum stop.
 
 A bar that closes through that edge already cancels the pending order, so the stop sits at the level where the setup is proven wrong. Each `ORDER` line in the log and the run summary show which kind of stop was used. Compare the results of the two stop types before trusting the gap stop.
+
+## Run 3: M5 at $200, Stop Mode Auto. 5 trades, 0 wins, −$19.23
+- **Bug found:** 9 of the 15 orders were cancelled about 1 minute after being placed as "target hit before fill". Price was already at the target when each order went in. They weren't missed winners; they were stale setups. The cause was the bot choosing the largest gap in the move, which was often far behind price.
+  - **Fix:** use the latest gap, and skip a setup once price has already covered more than `Max Chase` (50%) of the distance to the target.
+- **Stop slippage:** median $1.31 on 5 stops, about 32% of the $4 risk.
+- **Breakeven at 1R** (a panel setting) again turned two +1R trades into −0.39R losses.
+- Settings in the run differed from the recommended file: ATR 9, H1 EMA 50, stop buffer 0.5, label SovV83.
+- **New:** the previous day's high and low are now used as liquidity levels. `Liquidity Pools = MajorOnly` restricts setups to the Asian range and the previous day's high/low, so it gives fewer setups. Use `major-pools.cbotset` to A/B test it.
+- **Sample size:** the SMC runs so far total 15 filled trades with 2 wins. That isn't enough to judge the strategy. Test 1 Jan 2025 – 14 Oct 2026 to get more trades.

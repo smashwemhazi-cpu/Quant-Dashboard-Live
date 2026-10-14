@@ -41,6 +41,8 @@ namespace cAlgo.Robots
     public enum SmcTargetMode { Liquidity, FixedR }
     public enum SmcStopTrigger { SingleTick, DoubleTick }
     public enum SmcStopMode { SweepOnly, FvgOnly, Auto }
+    public enum SmcFvgPick { Latest, Largest }
+    public enum SmcLiquidity { AllPivots, MajorOnly }
 
     [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
     public class SovereignSMC : Robot
@@ -107,6 +109,18 @@ namespace cAlgo.Robots
 
         [Parameter("Use Asian Range as Liquidity", Group = "3. Structure", DefaultValue = true)]
         public bool UseAsianRange { get; set; }
+
+        // AllPivots: any confirmed M-timeframe swing plus Asian range and previous-day high/low.
+        // MajorOnly: only the Asian range and previous-day high/low (the pools SMC treats as
+        // significant liquidity). Fewer setups, each with more resting stops behind it.
+        [Parameter("Liquidity Pools", Group = "3. Structure", DefaultValue = SmcLiquidity.AllPivots)]
+        public SmcLiquidity LiquidityMode { get; set; }
+
+        [Parameter("FVG Pick", Group = "3. Structure", DefaultValue = SmcFvgPick.Latest)]
+        public SmcFvgPick FvgPick { get; set; }
+
+        [Parameter("Max Chase (fraction of target already run)", Group = "4. Orders", DefaultValue = 0.5, MinValue = 0.1, MaxValue = 1, Step = 0.1)]
+        public double MaxChase { get; set; }
 
         [Parameter("Asian Range End (HHMM)", Group = "3. Structure", DefaultValue = 700, MinValue = 100, MaxValue = 1200)]
         public int AsianEnd { get; set; }
@@ -198,7 +212,7 @@ namespace cAlgo.Robots
         }
 
         private AverageTrueRange _atr;
-        private Bars _h1;
+        private Bars _h1, _d1;
         private ExponentialMovingAverage _h1Ema;
         private readonly List<DateTime> _news = new List<DateTime>();
         private readonly Dictionary<string, int> _funnel = new Dictionary<string, int>();
@@ -216,6 +230,7 @@ namespace cAlgo.Robots
         {
             _atr = Indicators.AverageTrueRange(Bars, AtrPeriod, MovingAverageType.Exponential);
             _h1 = MarketData.GetBars(TimeFrame.Hour);
+            _d1 = MarketData.GetBars(TimeFrame.Daily);
             _h1Ema = Indicators.ExponentialMovingAverage(_h1.ClosePrices, H1EmaPeriod);
             _tfMinutes = EstimateTfMinutes();
             ParseNews();
@@ -234,7 +249,7 @@ namespace cAlgo.Robots
                 SymbolName, TimeFrame, _tfMinutes, Symbol.PipSize, Symbol.PipValue, units, Account.Equity);
             Print("CONFIG risk cap ${0:F2} ({1}%) = {2:F2} price at {3} lots; slippage floor {4:F2} price; affordable stop window {4:F2}..{2:F2}",
                 cap, MaxRiskPercent, units > 0 ? PriceFor(cap - Commission(units), units) : 0, FixedLots, CostFloor());
-            Print("CONFIG structure: pivots {0}, liquidity {1} bars, asian={2} (to {3:D4}), CHoCH {4} bars, displacement {5}xATR, FVG>={6}xATR, H1 bias={7} EMA{8}",
+            Print("CONFIG structure: pools " + LiquidityMode + " (+asian, prev-day H/L), fvg pick " + FvgPick + ", max chase " + MaxChase + ", pivots {0}, liquidity {1} bars, asian={2} (to {3:D4}), CHoCH {4} bars, displacement {5}xATR, FVG>={6}xATR, H1 bias={7} EMA{8}",
                 PivotStrength, LiquidityLookback, UseAsianRange, AsianEnd, ChochWindow, DisplacementAtr, MinFvgAtr, RequireH1Bias, H1EmaPeriod);
             Print("CONFIG orders: depth {0}, stop mode " + StopMode + ", stop buffer {1}xATR, target {2} RR {3}..{4}, expiry {5} bars, BE {6}R, trigger {7}; killzones {8:D4}-{9:D4}, {10:D4}-{11:D4}; news {12}",
                 EntryDepth, StopBufferAtr, TargetMode, MinRR, MaxRR, OrderExpiryBars, BreakevenR, StopTrigger,
@@ -248,6 +263,8 @@ namespace cAlgo.Robots
                     (CashFor(CostFloor() * 1.5, units) + Commission(units)) * 100 / MaxRiskPercent);
             if (CommissionPerLot <= 0)
                 Print("WARNING: commission is 0; backtests will overstate profit.");
+            if (BreakevenR > 0)
+                Print("WARNING: breakeven at {0}R is on. In every run so far it turned +1R trades into losses after stop slippage (default 0).", BreakevenR);
         }
 
         protected override void OnTick()
@@ -295,7 +312,7 @@ namespace cAlgo.Robots
                 ours.Any(t => t.NetProfit > 0) ? ours.Where(t => t.NetProfit > 0).Average(t => t.NetProfit) : 0,
                 ours.Any(t => t.NetProfit < 0) ? ours.Where(t => t.NetProfit < 0).Average(t => t.NetProfit) : 0);
             string[] order = { "sweep", "choch", "invalidated", "choch timeout", "no fvg", "fvg", "no room (RR)", "risk too high",
-                               "blocked: h1 bias", "blocked: session", "blocked: daily limit", "blocked: news", "blocked: busy", "blocked: spread",
+                               "stale: move already ran", "blocked: h1 bias", "blocked: session", "blocked: daily limit", "blocked: news", "blocked: busy", "blocked: spread",
                                "blocked: friday", "placed", "placed: sweep stop", "placed: fvg stop", "place failed", "filled", "expired", "missed: target hit before fill", "cancelled: stop broken before fill", "cancelled: fvg closed through",
                                "filled without stop (gapped)", "cancelled: other" };
             Print("RUN SUMMARY funnel: " + string.Join(" | ", order.Where(k => _funnel.ContainsKey(k)).Select(k => k + " " + _funnel[k])));
@@ -364,9 +381,12 @@ namespace cAlgo.Robots
             // Candidate pools: confirmed pivots before this bar, inside the lookback.
             var pools = new List<KeyValuePair<double, string>>();
             int newestPivot = i - 1 - PivotStrength;
-            for (int j = newestPivot; j >= i - LiquidityLookback && j >= PivotStrength; j--)
-                if (IsPivot(j, isBuy))
-                    pools.Add(new KeyValuePair<double, string>(Ext(j, isBuy), "pivot"));
+            if (LiquidityMode == SmcLiquidity.AllPivots)
+                for (int j = newestPivot; j >= i - LiquidityLookback && j >= PivotStrength; j--)
+                    if (IsPivot(j, isBuy))
+                        pools.Add(new KeyValuePair<double, string>(Ext(j, isBuy), "pivot"));
+            if (_d1 != null && _d1.Count >= 2)
+                pools.Add(new KeyValuePair<double, string>(isBuy ? _d1.LowPrices.Last(1) : _d1.HighPrices.Last(1), isBuy ? "pdl" : "pdh"));
             if (UseAsianRange)
             {
                 double asian;
@@ -418,16 +438,19 @@ namespace cAlgo.Robots
 
         private void TryPlace(Setup s, int i, double atr)
         {
-            // Largest FVG in the leg from the sweep to the CHoCH bar.
+            // FVG in the leg from the sweep to the CHoCH bar: the latest qualifying gap (closest to
+            // price, created by the displacement) or the largest one.
+            double minGap = Math.Max(MinFvgAtr * atr, Symbol.PipSize);
             double bestSize = 0, top = 0, bottom = 0;
             for (int k = Math.Max(s.SweepIndex, 2); k <= i; k++)
             {
                 double lo = s.IsBuy ? Bars.HighPrices[k - 2] : Bars.HighPrices[k];
                 double hi = s.IsBuy ? Bars.LowPrices[k] : Bars.LowPrices[k - 2];
                 double size = hi - lo;
-                if (size > bestSize) { bestSize = size; top = hi; bottom = lo; }
+                bool take = FvgPick == SmcFvgPick.Latest ? size >= minGap : size > bestSize;
+                if (take) { bestSize = size; top = hi; bottom = lo; }
             }
-            if (bestSize < Math.Max(MinFvgAtr * atr, Symbol.PipSize))
+            if (bestSize < minGap)
             {
                 Count("no fvg");
                 return;
@@ -510,6 +533,16 @@ namespace cAlgo.Robots
             if (s.IsBuy ? plan.Entry >= Symbol.Ask : plan.Entry <= Symbol.Bid)
             {
                 Count("no room (RR)");
+                return;
+            }
+
+            // Run-1 M5 log: 9 of 15 orders were cancelled within a minute because price was
+            // already at the target when they were placed. If the move has already run more than
+            // MaxChase of the way to the target, the retrace entry is stale.
+            double ran = s.IsBuy ? Symbol.Bid - plan.Entry : plan.Entry - Symbol.Ask;
+            if (ran >= MaxChase * Math.Abs(plan.Tp - plan.Entry))
+            {
+                Count("stale: move already ran");
                 return;
             }
 
@@ -738,7 +771,9 @@ namespace cAlgo.Robots
 
         private bool IsStale(KeyValuePair<double, string> pool, bool isBuy, int i)
         {
-            DateTime formed = PoolTime(pool, isBuy, i);
+            DateTime formed = pool.Value == "pdl" || pool.Value == "pdh"
+                ? _d1.OpenTimes.LastValue
+                : PoolTime(pool, isBuy, i);
             for (int k = i - 1; k >= 0 && Bars.OpenTimes[k] > formed; k--)
                 if (Beyond(Ext(k, isBuy), pool.Key, isBuy))
                     return true;

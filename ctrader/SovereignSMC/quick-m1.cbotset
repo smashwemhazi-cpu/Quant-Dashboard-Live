@@ -45,6 +45,9 @@
     "MaxSpreadPips": "6",
     "BotLabel": "SovSMC1",
     "Verbose": "True",
-    "StopMode": "2"
+    "StopMode": "2",
+    "LiquidityMode": "0",
+    "FvgPick": "0",
+    "MaxChase": "0.5"
   }
 }
