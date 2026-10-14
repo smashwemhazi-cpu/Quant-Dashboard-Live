@@ -44,6 +44,7 @@
     "StopTrigger": "1",
     "MaxSpreadPips": "6",
     "BotLabel": "SovSMC1",
-    "Verbose": "True"
+    "Verbose": "True",
+    "StopMode": "2"
   }
 }

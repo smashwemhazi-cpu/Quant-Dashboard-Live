@@ -64,3 +64,10 @@ Targets stay at 1.5–3R, so each winner still needs a move of $6 or more. More 
   - Missed winners and stop-broken cancels are now counted separately.
   - Fills that gapped past the stop are now counted.
 - **Next test:** load `recommended.cbotset` on **M5** with **$210** starting capital and label `SovSMC`. A sample of 10 trades can't show whether there's an edge.
+
+## Run 2: M5 at $200, zero trades
+A $200 account can risk about $5.92 per trade. On M5, the distance from the middle of the gap to the sweep wick is usually more than that, so the setups were skipped as too risky. **New `Stop Mode` setting (default `Auto`):**
+- Try the sweep-wick stop first.
+- If that's too expensive, put the stop just beyond the far edge of the gap instead, never closer than the $4 minimum stop.
+
+A bar that closes through that edge already cancels the pending order, so the stop sits at the level where the setup is proven wrong. Each `ORDER` line in the log and the run summary show which kind of stop was used. Compare the results of the two stop types before trusting the gap stop.

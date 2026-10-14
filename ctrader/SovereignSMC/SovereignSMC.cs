@@ -40,6 +40,7 @@ namespace cAlgo.Robots
     public enum SmcDirection { Both, LongOnly, ShortOnly }
     public enum SmcTargetMode { Liquidity, FixedR }
     public enum SmcStopTrigger { SingleTick, DoubleTick }
+    public enum SmcStopMode { SweepOnly, FvgOnly, Auto }
 
     [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
     public class SovereignSMC : Robot
@@ -162,6 +163,12 @@ namespace cAlgo.Robots
         [Parameter("Stop Trigger", Group = "4. Orders", DefaultValue = SmcStopTrigger.DoubleTick)]
         public SmcStopTrigger StopTrigger { get; set; }
 
+        // Sweep: stop behind the sweep wick (widest, most robust). Fvg: stop behind the far edge of
+        // the gap (the same level whose close-through cancels the order). Auto tries the sweep stop
+        // first and falls back to the gap stop only when the sweep stop is unaffordable.
+        [Parameter("Stop Mode", Group = "4. Orders", DefaultValue = SmcStopMode.Auto)]
+        public SmcStopMode StopMode { get; set; }
+
         [Parameter("Max Spread (pips)", Group = "4. Orders", DefaultValue = 6, MinValue = 0.1)]
         public double MaxSpreadPips { get; set; }
 
@@ -187,6 +194,7 @@ namespace cAlgo.Robots
             public bool IsBuy;
             public double Entry, Stop, Tp, Risk;
             public double FvgTop, FvgBottom;
+            public string StopKind;
         }
 
         private AverageTrueRange _atr;
@@ -228,7 +236,7 @@ namespace cAlgo.Robots
                 cap, MaxRiskPercent, units > 0 ? PriceFor(cap - Commission(units), units) : 0, FixedLots, CostFloor());
             Print("CONFIG structure: pivots {0}, liquidity {1} bars, asian={2} (to {3:D4}), CHoCH {4} bars, displacement {5}xATR, FVG>={6}xATR, H1 bias={7} EMA{8}",
                 PivotStrength, LiquidityLookback, UseAsianRange, AsianEnd, ChochWindow, DisplacementAtr, MinFvgAtr, RequireH1Bias, H1EmaPeriod);
-            Print("CONFIG orders: depth {0}, stop buffer {1}xATR, target {2} RR {3}..{4}, expiry {5} bars, BE {6}R, trigger {7}; killzones {8:D4}-{9:D4}, {10:D4}-{11:D4}; news {12}",
+            Print("CONFIG orders: depth {0}, stop mode " + StopMode + ", stop buffer {1}xATR, target {2} RR {3}..{4}, expiry {5} bars, BE {6}R, trigger {7}; killzones {8:D4}-{9:D4}, {10:D4}-{11:D4}; news {12}",
                 EntryDepth, StopBufferAtr, TargetMode, MinRR, MaxRR, OrderExpiryBars, BreakevenR, StopTrigger,
                 SessionAStart, SessionAEnd, SessionBStart, SessionBEnd, _news.Count);
             if (units > 0 && PriceFor(cap - Commission(units), units) < CostFloor())
@@ -288,7 +296,7 @@ namespace cAlgo.Robots
                 ours.Any(t => t.NetProfit < 0) ? ours.Where(t => t.NetProfit < 0).Average(t => t.NetProfit) : 0);
             string[] order = { "sweep", "choch", "invalidated", "choch timeout", "no fvg", "fvg", "no room (RR)", "risk too high",
                                "blocked: h1 bias", "blocked: session", "blocked: daily limit", "blocked: news", "blocked: busy", "blocked: spread",
-                               "blocked: friday", "placed", "place failed", "filled", "expired", "missed: target hit before fill", "cancelled: stop broken before fill", "cancelled: fvg closed through",
+                               "blocked: friday", "placed", "placed: sweep stop", "placed: fvg stop", "place failed", "filled", "expired", "missed: target hit before fill", "cancelled: stop broken before fill", "cancelled: fvg closed through",
                                "filled without stop (gapped)", "cancelled: other" };
             Print("RUN SUMMARY funnel: " + string.Join(" | ", order.Where(k => _funnel.ContainsKey(k)).Select(k => k + " " + _funnel[k])));
             int placed;
@@ -427,18 +435,31 @@ namespace cAlgo.Robots
             Count("fvg");
 
             double floor = CostFloor();
-            double stop = s.IsBuy ? s.SweepExtreme - StopBufferAtr * atr - Symbol.Spread
-                                  : s.SweepExtreme + StopBufferAtr * atr + Symbol.Spread;
+            double sweepStop = s.IsBuy ? s.SweepExtreme - StopBufferAtr * atr - Symbol.Spread
+                                       : s.SweepExtreme + StopBufferAtr * atr + Symbol.Spread;
+            double fvgStop = s.IsBuy ? bottom - StopBufferAtr * atr - Symbol.Spread
+                                     : top + StopBufferAtr * atr + Symbol.Spread;
+            var attempts = new List<Tuple<double, double, string>>();
+            if (StopMode != SmcStopMode.FvgOnly)
+            {
+                attempts.Add(Tuple.Create(EntryDepth, sweepStop, "sweep"));
+                if (EntryDepth < 1.0) attempts.Add(Tuple.Create(1.0, sweepStop, "sweep"));
+            }
+            if (StopMode != SmcStopMode.SweepOnly)
+                attempts.Add(Tuple.Create(EntryDepth, fvgStop, "fvg"));
             double units = Units();
             double cap = Account.Equity * MaxRiskPercent / 100.0;
             OrderPlan plan = null;
             double lastRisk = 0;
 
-            // Preferred depth first, then the far edge of the gap if that is cheaper.
-            foreach (double depth in new[] { EntryDepth, 1.0 }.Distinct())
+            // Preferred depth and stop first, then cheaper variants (see Stop Mode).
+            foreach (var a in attempts)
             {
+                double depth = a.Item1;
                 double entry = s.IsBuy ? top - depth * (top - bottom) : bottom + depth * (top - bottom);
-                double sl = stop;
+                double sl = a.Item2;
+                if (s.IsBuy ? sl >= entry : sl <= entry)
+                    continue;
                 if (Math.Abs(entry - sl) < floor)
                     sl = s.IsBuy ? entry - floor : entry + floor; // widen only
                 double dist = Math.Abs(entry - sl);
@@ -460,7 +481,7 @@ namespace cAlgo.Robots
                 {
                     IsBuy = s.IsBuy, Entry = Round(entry), Stop = Round(sl),
                     Tp = Round(s.IsBuy ? entry + tpDist : entry - tpDist), Risk = dist,
-                    FvgTop = top, FvgBottom = bottom
+                    FvgTop = top, FvgBottom = bottom, StopKind = a.Item3
                 };
                 break;
             }
@@ -505,10 +526,11 @@ namespace cAlgo.Robots
             }
             _livePlan = plan;
             Count("placed");
-            Print("ORDER {0} limit {1} SL {2} TP {3} | risk ${4:F2} ({5:F2}% eq) RR {6:F2} | pool {7} {8:F2} sweep {9:F2} FVG {10:F2}-{11:F2} atr {12:F2}",
+            Count("placed: " + plan.StopKind + " stop");
+            Print("ORDER {13}-stop {0} limit {1} SL {2} TP {3} | risk ${4:F2} ({5:F2}% eq) RR {6:F2} | pool {7} {8:F2} sweep {9:F2} FVG {10:F2}-{11:F2} atr {12:F2}",
                 side, plan.Entry, plan.Stop, plan.Tp, CashFor(plan.Risk, units) + Commission(units),
                 (CashFor(plan.Risk, units) + Commission(units)) / Account.Equity * 100, Math.Abs(plan.Tp - plan.Entry) / plan.Risk,
-                s.PoolKind, s.Pool, s.SweepExtreme, bottom, top, atr);
+                s.PoolKind, s.Pool, s.SweepExtreme, bottom, top, atr, plan.StopKind);
         }
 
         private bool CanOpen(out string why)
