@@ -224,6 +224,13 @@ namespace cAlgo.Robots
         [Parameter("Equity Floor $ (stops bot)", Group = "Risk", DefaultValue = 120, MinValue = 0, Step = 5)]
         public double EquityFloor { get; set; }
 
+        // 2025-26 run: equity fell to $129.92 in April 2025; 3% of that ($3.90) is below the $4
+        // slippage floor, so every setup was rejected for 18 months while the backtest kept
+        // running. When the account can no longer afford the smallest allowed stop, stop the bot
+        // and say so, instead of idling silently above the equity floor.
+        [Parameter("Stop When Untradable", Group = "Risk", DefaultValue = true)]
+        public bool StopWhenUntradable { get; set; }
+
         // ------------------------------------------------------------------ Execution
         [Parameter("Max Slippage (pips)", Group = "Execution", DefaultValue = 5, MinValue = 0, Step = 1)]
         public double MaxSlippagePips { get; set; }
@@ -325,6 +332,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
+            Print("BUILD MLB-2026-10-14b");
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
@@ -387,6 +395,8 @@ namespace cAlgo.Robots
                     return;
 
                 HandleClock();
+                if (CheckUntradable())
+                    return;
 
                 // An unfilled ladder is re-priced every bar from fresh bands; a partly filled
                 // ladder keeps its remaining orders (that is the scale-in).
@@ -857,6 +867,22 @@ namespace cAlgo.Robots
             if (MaxRiskCash > 0)
                 cap = Math.Min(cap, MaxRiskCash);
             return cap;
+        }
+
+        private bool CheckUntradable()
+        {
+            if (!StopWhenUntradable || _floorBreached || OurPositions().Any() || OurOrders().Any())
+                return false;
+            double minRisk = CashForPriceMove(CostFloorDistance()) + CommissionPerLot * Symbol.VolumeInUnitsToQuantity(_volume);
+            if (RiskCapCash() >= minRisk)
+                return false;
+
+            _floorBreached = true;
+            Print("UNTRADABLE: risk cap ${0:F2} ({1}% of equity {2:F2}) is below the smallest allowed stop ${3:F2}. " +
+                  "No setup can pass, so the bot stops here. Equity needed to trade again: ${4:F0}.",
+                RiskCapCash(), MaxRiskPercent, Account.Equity, minRisk, minRisk * 100.0 / MaxRiskPercent);
+            Stop();
+            return true;
         }
 
         private void CheckEquityFloor()

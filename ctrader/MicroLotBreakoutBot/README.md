@@ -176,3 +176,21 @@ This copies the structure of the manual trades you showed: **several limit order
 - 3% risk per trade on $200 is aggressive: 10 losses in a row cost about 26%.
 - Stops tightened by `CappedAtRisk` get hit more often. Whether the higher trade count still makes money after costs is exactly what the backtest has to show. The design doesn't guarantee it.
 - Session times are fixed in UTC and don't adjust for daylight saving. News times must be entered by hand.
+
+## Run of 6 Jan 2025 – 14 Oct 2026 (user settings), net −$70.08, PF 0.75
+**Differences from the frozen config:**
+- ATR **9** instead of 14
+- OrderExpiry **12** instead of 6
+- MaxTrades **4** instead of 3
+- label `SovV83`
+- data **m1 bars with a fixed 1.5-pip spread**, not tick data
+
+**What happened:**
+- **All 84 trades fell between Jan and Apr 2025.** By mid-April equity was $129.92, and 3% of that is $3.90, below the $4.08 minimum risk (the $4 slippage floor plus commission). Every setup after that was rejected ("one order alone exceeds the risk cap" ×17,844). The bot then sat idle for 18 months without stopping.
+- Before slippage the trades netted only +$6.98, so the entries were roughly breakeven. Stop slippage was $77 in total, about 18% of risk per stop.
+- In the same months the frozen config, run on tick data, was profitable (2025: 524 trades, PF 1.94). Five settings differ between the two runs, so this run can't say which one caused the difference.
+
+**Code fix:**
+- New `Stop When Untradable` setting (default on). When the risk cap falls below the minimum stop cost, the bot logs `UNTRADABLE` with the equity needed to trade again, then stops.
+- At 3% risk the minimum equity is **about $136**. On a $200 account, the real drawdown headroom is therefore about $64 (about 15 full losses), not $80.
+- New build stamp `MLB-2026-10-14b`.
