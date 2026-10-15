@@ -339,7 +339,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-ASIA-2026-10-16a (Asian session 01:00-06:00 UTC)");
+            Print("BUILD MLB-ASIA-2026-10-16b (Asian session 01:00-06:00 UTC)");
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
@@ -983,6 +983,26 @@ namespace cAlgo.Robots
             {
                 Print("Filled without a stop - closing immediately.");
                 ClosePosition(p);
+                return;
+            }
+
+            // A limit filled through its price (gap) can leave the stop far inside the slippage
+            // floor: Asian 2-week test, buy limit 4150.30 filled 4147.16 with SL 4146.14 (1.02 away),
+            // stopped at 4144.20. Widen back to the floor; that risk is <= the planned level risk.
+            double floor = CostFloorDistance();
+            if (Math.Abs(p.EntryPrice - p.StopLoss.Value) < floor)
+            {
+                bool isBuy = p.TradeType == TradeType.Buy;
+                double sl = Math.Round(isBuy ? p.EntryPrice - floor : p.EntryPrice + floor, Symbol.Digits);
+                bool valid = isBuy ? sl < Symbol.Bid : sl > Symbol.Ask;
+                if (valid)
+                {
+                    TradeResult r = p.ModifyStopLossPrice(sl);
+                    if (r.IsSuccessful)
+                        Print("GAP FILL: stop widened to the {0:F2} floor -> {1}", floor, sl);
+                    else
+                        Print("GAP FILL: widen failed ({0}), stop stays at {1}", r.Error, p.StopLoss);
+                }
             }
         }
 

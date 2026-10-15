@@ -217,3 +217,7 @@ Same frozen strategy, but it trades only **01:00–06:00 UTC**. That covers the 
 - **The percentage returns are inflated by compounding.** RiskPercent sizing moves up from 0.01 lot as equity grows. Judge the bot on profit factor and on results per trade.
 - **Execution risk is higher than in the main sessions:** average stop slippage was $1.92 (vs about $1.24), the worst was $17.57, and 35 trades lost more than 3× their planned risk. The backtest uses a fixed spread, and real Asian spreads are wider, so these costs need checking on demo.
 - **Fix:** the false "sessions include 07:00 / 12:00" warning now fires only when a session really overlaps those hours.
+
+## Asian bot, 2-week test (1–14 Oct 2026): 21 trades, +$9.11, PF 1.16
+- **12 of the 21 fills gapped past the limit price**, which left the stop closer than the $4 floor (as close as $0.51). Of those 12, 10 were stopped out (−$35.63 in total) and 2 hit their take-profit.
+- **Fix (both MicroLot bots, build 16b):** when a fill leaves the stop inside the floor, the stop is widened back to the floor. The resulting risk is never more than the planned risk for that level. This is the same fix that SovereignSMC already has.
