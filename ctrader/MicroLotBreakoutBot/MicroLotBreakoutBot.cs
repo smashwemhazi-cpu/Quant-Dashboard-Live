@@ -753,7 +753,7 @@ namespace cAlgo.Robots
         private bool PassesCostAndSpread(double stopDist, double targetDist, string engine)
         {
             double spread = Symbol.Spread;
-            if (spread / Symbol.PipSize > MaxSpreadPips)
+            if (spread / Symbol.PipSize > MaxSpreadPips + 1e-6) // tolerance: 6.0 pips computes as 6.0000000000036
             {
                 Reject(engine + ": spread above absolute cap");
                 return false;

@@ -134,7 +134,7 @@ namespace cAlgo
         public double TrailTriggerR { get; set; }
 
         private const string Label = "SovApexV87";
-        private const string BuildTag = "V87-2026-10-15b";
+        private const string BuildTag = "V87-2026-10-15c";
 
         private class Setup
         {
@@ -373,7 +373,7 @@ namespace cAlgo
             if (!inSession) { why = "session"; return false; }
             if (EnableFridayShield && now.DayOfWeek == DayOfWeek.Friday && h >= FridayNoNewTradesHour) { why = "friday"; return false; }
             if (OurPositions().Any() || OurOrders().Any()) { why = "busy"; return false; }
-            if (!IsQuoteValid() || Symbol.Spread / Symbol.PipSize > MaxSpreadPips) { why = "spread"; return false; }
+            if (!IsQuoteValid() || Symbol.Spread / Symbol.PipSize > MaxSpreadPips + 1e-6) { why = "spread"; return false; }
 
             if (_h1Bars.Count < H1EmaPeriod + 2) { why = "h1 history"; return false; }
             double h1Close = _h1Bars.ClosePrices.Last(1), h1Ema = _h1Ema.Result.Last(1);

@@ -580,7 +580,7 @@ namespace cAlgo.Robots
             if (now.DayOfWeek == DayOfWeek.Friday && hhmm >= FridayNoNew) { why = "friday"; return false; }
             if (_news.Any(n => Math.Abs((now - n).TotalMinutes) <= NewsWindowMinutes)) { why = "news"; return false; }
             if (OurPositions().Any() || OurOrders().Any()) { why = "busy"; return false; }
-            if (!IsQuoteValid() || Symbol.Spread / Symbol.PipSize > MaxSpreadPips) { why = "spread"; return false; }
+            if (!IsQuoteValid() || Symbol.Spread / Symbol.PipSize > MaxSpreadPips + 1e-6) { why = "spread"; return false; }
 
             var today = History.Where(t => t.SymbolName == SymbolName && t.Label == BotLabel && t.ClosingTime.Date == now.Date).ToList();
             if (today.Count(t => t.NetProfit < 0) >= MaxDailyLosses || -today.Sum(t => t.NetProfit) >= Account.Balance * MaxDailyLossPercent / 100.0)

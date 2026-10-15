@@ -314,7 +314,7 @@ namespace cAlgo.Robots
                 return;
             }
 
-            if (!IsQuoteValid() || Symbol.Spread / Symbol.PipSize > MaxSpreadPips)
+            if (!IsQuoteValid() || Symbol.Spread / Symbol.PipSize > MaxSpreadPips + 1e-6)
             {
                 // Spread or quote problem is transient: keep the signal for the rest of this bar.
                 if (s.Attempts == 0) Skip("spread/quote (waiting)");

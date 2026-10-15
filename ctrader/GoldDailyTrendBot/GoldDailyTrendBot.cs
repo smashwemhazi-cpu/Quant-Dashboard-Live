@@ -909,7 +909,7 @@ namespace cAlgo.Robots
         private bool IsSpreadAcceptable()
         {
             double spreadPips = Symbol.Spread / Symbol.PipSize;
-            if (spreadPips > MaxSpreadPips)
+            if (spreadPips > MaxSpreadPips + 1e-6)
                 return false;
 
             if (_spreadSamples.Count < MinSpreadSamples)
