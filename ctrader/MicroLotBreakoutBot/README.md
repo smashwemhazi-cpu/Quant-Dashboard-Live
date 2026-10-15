@@ -221,3 +221,12 @@ Same frozen strategy, but it trades only **01:00–06:00 UTC**. That covers the 
 ## Asian bot, 2-week test (1–14 Oct 2026): 21 trades, +$9.11, PF 1.16
 - **12 of the 21 fills gapped past the limit price**, which left the stop closer than the $4 floor (as close as $0.51). Of those 12, 10 were stopped out (−$35.63 in total) and 2 hit their take-profit.
 - **Fix (both MicroLot bots, build 16b):** when a fill leaves the stop inside the floor, the stop is widened back to the floor. The resulting risk is never more than the planned risk for that level. This is the same fix that SovereignSMC already has.
+- **2-week re-test on 16b:** +$4.04 with 11 stops widened. Gapped fills still went 2 wins / 10 losses, and widening made some of those losses bigger. Widening did not help.
+
+## Asian bot, 2025-26 run with "Open prices only" data: invalid test
+- 24 trades, PF 0.31, −$75.56. Starting from $200, the bot fell below the $136 untradable level and stopped on 11 Apr 2025.
+- 16 of the 24 trades were gap fills (net −$80.95); the other 8 made +$5.39. In open-prices mode, limits and stops fill at the next bar's open, so most of those gaps are an artifact of the data. Rerun on "m1 bars from server" or tick data.
+
+## Build 16c
+- **Gap Fill Handling** (Risk group): `KeepStop` (default, the 16a behaviour), `WidenToFloor` (16b), `CloseImmediately`. Every fill whose stop is closer than the floor is logged, and the RUN SUMMARY reports how many gap fills there were, how many won and their net. Run all three options on full 2025 and 2026, on m1 data, and compare that line.
+- **Data check:** after 50 bars of a backtest, the bot prints `DATA CHECK ... OK` or `DATA WARNING`. The warning means fewer than 1.5 prices per bar, which is what "Open prices only" data looks like.

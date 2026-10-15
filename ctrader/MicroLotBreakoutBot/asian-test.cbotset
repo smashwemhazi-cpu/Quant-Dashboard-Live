@@ -60,6 +60,7 @@
     "UseTrendLadder": "True",
     "StopTrigger": "1",
     "ExclusiveSymbol": "True",
+    "GapFillHandling": "0",
     "StopWhenUntradable": "True"
   }
 }

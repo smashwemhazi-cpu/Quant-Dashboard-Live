@@ -78,6 +78,16 @@ namespace cAlgo.Robots
         CappedAtRisk
     }
 
+    public enum MicroGapFill
+    {
+        // Keep the planned stop even if the fill landed past it (build 16a behaviour).
+        KeepStop,
+        // Move the stop out to the slippage floor (build 16b behaviour).
+        WidenToFloor,
+        // Close the position at market straight away.
+        CloseImmediately
+    }
+
     [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
     public class MicroLotAsianBot : Robot
     {
@@ -238,6 +248,12 @@ namespace cAlgo.Robots
         [Parameter("Exclusive Symbol (one bot per symbol)", Group = "Risk", DefaultValue = true)]
         public bool ExclusiveSymbol { get; set; }
 
+        // A limit filled through its price leaves the stop closer than the slippage floor.
+        // In every test so far these trades lost (2-week Asian: 2 wins / 10 losses in both 16a
+        // and 16b; 2025-26 open-prices run: 1 win / 15 losses). KeepStop = 16a, WidenToFloor = 16b.
+        [Parameter("Gap Fill Handling", Group = "Risk", DefaultValue = MicroGapFill.KeepStop)]
+        public MicroGapFill GapFillHandling { get; set; }
+
         // ------------------------------------------------------------------ Execution
         [Parameter("Max Slippage (pips)", Group = "Execution", DefaultValue = 5, MinValue = 0, Step = 1)]
         public double MaxSlippagePips { get; set; }
@@ -301,6 +317,13 @@ namespace cAlgo.Robots
         private int _stopFills;
         private double _stopSlippageCash;
         private double _maxStopSlippageCash;
+        private readonly HashSet<long> _gapFilled = new HashSet<long>();
+        private int _gapFills;
+        private int _gapWins;
+        private double _gapNet;
+        private long _ticksSeen;
+        private int _barsSeen;
+        private bool _dataChecked;
 
         private enum Regime
         {
@@ -339,12 +362,14 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-ASIA-2026-10-16b (Asian session 01:00-06:00 UTC)");
+            Print("BUILD MLB-ASIA-2026-10-16c (Asian session 01:00-06:00 UTC)");
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
             PrintConfig();
             PrintFeasibilityReport();
+            if (RunningMode != RunningMode.RealTime)
+                Print("DATA CHECK | backtest: data mode is checked after 50 bars (needs more than 1 price per bar).");
         }
 
         // Saved instances keep old parameter values when the code changes, so every run
@@ -353,6 +378,7 @@ namespace cAlgo.Robots
         {
             Print("CONFIG | label={0} sizing={1} stopMode={2} minStopATR={3} riskPct={4} maxTrades/day={5} commission/lot={6} stopTrigger={7}",
                 BotLabel, SizingMode, StopMode, MinStopAtr, MaxRiskPercent, MaxTradesPerDay, CommissionPerLot, StopTrigger);
+            Print("CONFIG | gap fill handling={0}", GapFillHandling);
             Print("CONFIG | slippage floor: stops must be >= {0:F2} price (expected slip {1} / max share {2:P0}) = ${3:F2} at {4} lots",
                 CostFloorDistance(), ExpectedStopSlippage, MaxSlippageShare, CashForPriceMove(CostFloorDistance()), Symbol.VolumeInUnitsToQuantity(_volume));
             Print("CONFIG | entry={0} ladder: {1} orders over {2} ATR, stop {3} ATR beyond, min order stop {4} ATR, expiry {5} bars, trend ladder {6}",
@@ -387,6 +413,7 @@ namespace cAlgo.Robots
                 if (!IsQuoteValid())
                     return;
                 _lastTickTime = Server.Time;
+                _ticksSeen++;
 
                 CheckEquityFloor();
                 ManageBreakeven();
@@ -402,6 +429,7 @@ namespace cAlgo.Robots
             try
             {
                 int i = Bars.Count - 2; // last closed bar
+                CheckDataMode();
                 if (i < Math.Max(Math.Max(BoxBars, AtrPeriod), BbPeriod) + 2 || _floorBreached)
                     return;
 
@@ -970,6 +998,23 @@ namespace cAlgo.Robots
             }
         }
 
+        // "Open prices only" backtests deliver one price per bar, so limits and stops fill at the
+        // next bar's open: the 2025-26 Asian run lost $80.95 on 16 such fills and stopped in April.
+        // There is no API property for the data mode, so count prices per bar instead.
+        private void CheckDataMode()
+        {
+            if (_dataChecked || RunningMode == RunningMode.RealTime)
+                return;
+            if (++_barsSeen < 50)
+                return;
+            _dataChecked = true;
+            double perBar = (double)_ticksSeen / _barsSeen;
+            if (perBar < 1.5)
+                Print("DATA WARNING | {0:F1} prices per bar: this looks like 'Open prices only' data. Limit and stop fills are simulated at bar opens, so results are NOT valid for this bot. Use 'm1 bars from server' or tick data.", perBar);
+            else
+                Print("DATA CHECK | {0:F1} prices per bar - OK.", perBar);
+        }
+
         private void OnOrderFilled(PendingOrderFilledEventArgs args)
         {
             Position p = args.Position;
@@ -988,21 +1033,42 @@ namespace cAlgo.Robots
 
             // A limit filled through its price (gap) can leave the stop far inside the slippage
             // floor: Asian 2-week test, buy limit 4150.30 filled 4147.16 with SL 4146.14 (1.02 away),
-            // stopped at 4144.20. Widen back to the floor; that risk is <= the planned level risk.
+            // stopped at 4144.20.
             double floor = CostFloorDistance();
-            if (Math.Abs(p.EntryPrice - p.StopLoss.Value) < floor)
+            double dist = Math.Abs(p.EntryPrice - p.StopLoss.Value);
+            if (dist >= floor)
+                return;
+
+            _gapFills++;
+            _gapFilled.Add(p.Id);
+            bool isBuy = p.TradeType == TradeType.Buy;
+            switch (GapFillHandling)
             {
-                bool isBuy = p.TradeType == TradeType.Buy;
-                double sl = Math.Round(isBuy ? p.EntryPrice - floor : p.EntryPrice + floor, Symbol.Digits);
-                bool valid = isBuy ? sl < Symbol.Bid : sl > Symbol.Ask;
-                if (valid)
-                {
+                case MicroGapFill.KeepStop:
+                    Print("GAP FILL: stop {0:F2} away (< {1:F2} floor), kept at {2}", dist, floor, p.StopLoss);
+                    break;
+
+                case MicroGapFill.WidenToFloor:
+                    double sl = Math.Round(isBuy ? p.EntryPrice - floor : p.EntryPrice + floor, Symbol.Digits);
+                    bool valid = isBuy ? sl < Symbol.Bid : sl > Symbol.Ask;
+                    if (!valid)
+                    {
+                        Print("GAP FILL: widened stop {0} would be through the market, stop stays at {1}", sl, p.StopLoss);
+                        break;
+                    }
                     TradeResult r = p.ModifyStopLossPrice(sl);
                     if (r.IsSuccessful)
                         Print("GAP FILL: stop widened to the {0:F2} floor -> {1}", floor, sl);
                     else
                         Print("GAP FILL: widen failed ({0}), stop stays at {1}", r.Error, p.StopLoss);
-                }
+                    break;
+
+                case MicroGapFill.CloseImmediately:
+                    Print("GAP FILL: stop {0:F2} away (< {1:F2} floor) - closing at market", dist, floor);
+                    TradeResult c = ClosePosition(p);
+                    if (!c.IsSuccessful)
+                        Print("GAP FILL: close failed ({0}), stop stays at {1}", c.Error, p.StopLoss);
+                    break;
             }
         }
 
@@ -1012,6 +1078,12 @@ namespace cAlgo.Robots
             if (!IsOurs(p))
                 return;
             _breakevenDone.Remove(p.Id);
+            if (_gapFilled.Remove(p.Id))
+            {
+                _gapNet += p.NetProfit;
+                if (p.NetProfit > 0)
+                    _gapWins++;
+            }
             Print("CLOSED {0} {1} | reason={2} | net={3:F2} | equity={4:F2}", p.Label, p.TradeType, args.Reason, p.NetProfit, Account.Equity);
             RecordStopSlippage(p, args.Reason);
 
@@ -1081,6 +1153,8 @@ namespace cAlgo.Robots
             double net = OurHistory().Sum(t => t.NetProfit);
             Print("RUN SUMMARY | stop-loss fills: {0} | slippage total ${1:F2} (avg ${2:F2}, max ${3:F2}) | net ${4:F2} | net if stops filled exactly ${5:F2}",
                 _stopFills, _stopSlippageCash, _stopFills > 0 ? _stopSlippageCash / _stopFills : 0, _maxStopSlippageCash, net, net + _stopSlippageCash);
+            Print("RUN SUMMARY | gap fills ({0}): {1} trades, {2} wins, net ${3:F2}",
+                GapFillHandling, _gapFills, _gapWins, _gapNet);
             foreach (var kv in _rejections.OrderByDescending(k => k.Value))
                 Print("RUN SUMMARY | rejected {0,6} x  {1}", kv.Value, kv.Key);
         }
