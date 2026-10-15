@@ -365,7 +365,11 @@ namespace cAlgo.Robots
                 Print("CONFIG WARNING: Ladder Min Order Stop {0} ATR is far below Min Stop {1} ATR - ladder stops will sit inside the slippage noise.", LadderMinStopAtr, MinStopAtr);
             if (CommissionPerLot <= 0)
                 Print("CONFIG WARNING: Commission $ per Lot is 0 - the cost hurdle ignores commission. Enter your broker's round-turn rate.");
-            if (Minutes(Session1Start) < Minutes(800) || Minutes(Session2Start) < Minutes(1400))
+            // Warn only when a non-empty session actually overlaps 07:00-08:00 or 12:00-14:00 UTC.
+            Func<int, int, int, int, bool> overlaps = (st, en, a, z) =>
+                Minutes(en) > Minutes(st) && Minutes(st) < Minutes(z) && Minutes(en) > Minutes(a);
+            if (overlaps(Session1Start, Session1End, 700, 800) || overlaps(Session1Start, Session1End, 1200, 1400) ||
+                overlaps(Session2Start, Session2End, 700, 800) || overlaps(Session2Start, Session2End, 1200, 1400))
                 Print("CONFIG WARNING: sessions include 07:00 or 12:00-13:59 UTC, the hours that lost money in every backtest.");
         }
 

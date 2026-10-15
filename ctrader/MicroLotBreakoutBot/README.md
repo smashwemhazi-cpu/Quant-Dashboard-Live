@@ -204,3 +204,16 @@ Same frozen strategy, but it trades only **01:00–06:00 UTC**. That covers the 
 - **Setup 2:** sell at 4157.95, moved to breakeven at 1R, closed −$0.17 and −$0.10.
 - **Fix:** new setting `Exclusive Symbol` (default on). The bot stands aside while another label holds a position or pending order on the same symbol. Two instances started in the same second can still race each other, so **run only one instance per symbol**.
 - Two setups is not enough data to judge the strategy. Live trading began before the 2024 check and the demo period were done.
+
+## Asian bot (MicroLotAsianBot) backtests, $200 start, m1-bar data
+| Period | Net | PF | Trades | Max DD | MC profitable |
+|---|---|---|---|---|---|
+| Jan 2024 – Dec 2025 (log) | +$840 | 1.89 | 367 | — | — |
+| 10 Jan – 14 Dec 2025 | +$840 | 1.98 | 332 | 18.7% | 100% |
+| 10 Jan – 14 Oct 2026 | +$2,358 | 2.24 | 588 | 24.2% | 100% |
+
+- **2024 had only 35 trades and lost about $8.** Asian hours were too quiet for the $4 minimum stop, so the bot mostly stayed out. That's the correct behaviour.
+- **Profit is concentrated:** Sep–Nov 2025 made $708 of the $840. The results depend on how volatile the Asian session is, and the higher-volatility conditions continued into 2026.
+- **The percentage returns are inflated by compounding.** RiskPercent sizing moves up from 0.01 lot as equity grows. Judge the bot on profit factor and on results per trade.
+- **Execution risk is higher than in the main sessions:** average stop slippage was $1.92 (vs about $1.24), the worst was $17.57, and 35 trades lost more than 3× their planned risk. The backtest uses a fixed spread, and real Asian spreads are wider, so these costs need checking on demo.
+- **Fix:** the false "sessions include 07:00 / 12:00" warning now fires only when a session really overlaps those hours.
