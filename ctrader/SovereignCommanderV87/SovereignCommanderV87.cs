@@ -134,7 +134,7 @@ namespace cAlgo
         public double TrailTriggerR { get; set; }
 
         private const string Label = "SovApexV87";
-        private const string BuildTag = "V87-2026-10-15a";
+        private const string BuildTag = "V87-2026-10-15b";
 
         private class Setup
         {
@@ -181,6 +181,23 @@ namespace cAlgo
                 StructureLookbackBars, DisplacementAtr, VolumeSurgeThreshold, VolumeSmaPeriod, DisplacementWindow, MinFvgAtr, H1EmaPeriod);
             Print("CONFIG TP {0}R | trail {1} {2}xATR from {3}R | sessions asia={4} london={5} ny={6}",
                 TakeProfitR, EnableTrendTrailing, AtrTrailMultiplier, TrailTriggerR, EnableAsianSession, EnableLondonSession, EnableNySession);
+            // Tick-volume sanity check: the displacement filter needs real, varying tick volume.
+            int n = Math.Min(500, Bars.Count - 1);
+            if (n > 50)
+            {
+                var vols = Enumerable.Range(Bars.Count - 1 - n, n).Select(k => Bars.TickVolumes[k]).ToList();
+                double avgVol = vols.Average();
+                int zeros = vols.Count(v => v <= 0);
+                double sd = Math.Sqrt(vols.Average(v => (v - avgVol) * (v - avgVol)));
+                double surgeShare = Enumerable.Range(Bars.Count - 1 - n + VolumeSmaPeriod, n - VolumeSmaPeriod)
+                    .Count(j => Bars.TickVolumes[j] >= VolumeSurgeThreshold * Enumerable.Range(j - VolumeSmaPeriod, VolumeSmaPeriod).Average(k => Bars.TickVolumes[k]))
+                    / (double)(n - VolumeSmaPeriod);
+                Print("VOLUME CHECK last {0} bars: avg {1:F0}, sd {2:F0}, zero bars {3}, bars passing the {4}x surge {5:P1}",
+                    n, avgVol, sd, zeros, VolumeSurgeThreshold, surgeShare);
+                if (zeros > n / 2 || sd < 1e-9)
+                    Print("WARNING: tick volume is missing or flat in this data, so the volume surge can never pass. " +
+                          "Use tick data, or set Displacement Volume Surge Multiplier = 0 to disable the filter.");
+            }
             if (!SymbolName.StartsWith("XAU", StringComparison.OrdinalIgnoreCase))
                 Print("WARNING: stops and floors are sized for gold; {0} needs its own settings and test.", SymbolName);
             if (TakeProfitR <= 0 && !EnableTrendTrailing)
