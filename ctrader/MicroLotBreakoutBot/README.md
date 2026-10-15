@@ -194,3 +194,6 @@ This copies the structure of the manual trades you showed: **several limit order
 - New `Stop When Untradable` setting (default on). When the risk cap falls below the minimum stop cost, the bot logs `UNTRADABLE` with the equity needed to trade again, then stops.
 - At 3% risk the minimum equity is **about $136**. On a $200 account, the real drawdown headroom is therefore about $64 (about 15 full losses), not $80.
 - New build stamp `MLB-2026-10-14b`.
+
+## Asian-session test (`asian-test.cbotset`)
+Same frozen strategy, but it trades only **01:00–06:00 UTC**. That covers the Tokyo and Shanghai Gold Exchange hours and skips the 21:00–00:00 rollover, when spreads are widest. Session 2 is switched off by setting its start equal to its end. The label `MLBASIA` keeps its daily limits separate from the main instance. This is a measurement, not a recommendation. Compare its profit factor, trade count and average stop slippage against the 08:00–16:30 results before trading Asia live.
