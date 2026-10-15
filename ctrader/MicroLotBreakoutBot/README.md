@@ -197,3 +197,10 @@ This copies the structure of the manual trades you showed: **several limit order
 
 ## Asian-session test (`asian-test.cbotset`)
 Same frozen strategy, but it trades only **01:00–06:00 UTC**. That covers the Tokyo and Shanghai Gold Exchange hours and skips the 21:00–00:00 rollover, when spreads are widest. Session 2 is switched off by setting its start equal to its end. The label `MLBASIA` keeps its daily limits separate from the main instance. This is a measurement, not a recommendation. Compare its profit factor, trade count and average stop slippage against the 08:00–16:30 results before trading Asia live.
+
+## First live session, 15 Oct 2026: two copies of the bot on one account
+- The same strategy was running live as two instances, label `MLB` and label `H4TP` ("Sov XAUUSD Hunter"). Every setup was therefore taken twice.
+- **Setup 1:** sell fade at 4152.38/39, stopped out −$4.79 and −$4.78. Double the planned risk: $9.57, about 4.5% of equity.
+- **Setup 2:** sell at 4157.95, moved to breakeven at 1R, closed −$0.17 and −$0.10.
+- **Fix:** new setting `Exclusive Symbol` (default on). The bot stands aside while another label holds a position or pending order on the same symbol. Two instances started in the same second can still race each other, so **run only one instance per symbol**.
+- Two setups is not enough data to judge the strategy. Live trading began before the 2024 check and the demo period were done.

@@ -58,6 +58,8 @@
     "LadderMinStopAtr": "1",
     "LadderExpiryBars": "3",
     "UseTrendLadder": "True",
-    "StopTrigger": "1"
+    "StopTrigger": "1",
+    "ExclusiveSymbol": "True",
+    "StopWhenUntradable": "True"
   }
 }

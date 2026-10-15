@@ -231,6 +231,13 @@ namespace cAlgo.Robots
         [Parameter("Stop When Untradable", Group = "Risk", DefaultValue = true)]
         public bool StopWhenUntradable { get; set; }
 
+        // Live log 15/10/2026: the same strategy ran as two instances (labels MLB and H4TP) on one
+        // $210 account, so every setup was taken twice (double risk) and each copy kept its own
+        // daily limits. With this on, the bot stands aside while any OTHER label holds a position
+        // or pending order on this symbol.
+        [Parameter("Exclusive Symbol (one bot per symbol)", Group = "Risk", DefaultValue = true)]
+        public bool ExclusiveSymbol { get; set; }
+
         // ------------------------------------------------------------------ Execution
         [Parameter("Max Slippage (pips)", Group = "Execution", DefaultValue = 5, MinValue = 0, Step = 1)]
         public double MaxSlippagePips { get; set; }
@@ -332,7 +339,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-2026-10-14b");
+            Print("BUILD MLB-2026-10-16a");
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
@@ -821,6 +828,12 @@ namespace cAlgo.Robots
                 return false;
             if (OurPositions().Any() || OurOrders().Any())
                 return false;
+            if (ExclusiveSymbol && (Positions.Any(p => p.SymbolName == SymbolName && !IsOurLabel(p.Label))
+                                    || PendingOrders.Any(o => o.SymbolName == SymbolName && !IsOurLabel(o.Label))))
+            {
+                reason = "another bot active on this symbol";
+                return false;
+            }
             if (InNewsWindow(now)) { reason = "news window"; return false; }
 
             DateTime dayStart = now.Date;
