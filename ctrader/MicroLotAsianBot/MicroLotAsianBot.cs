@@ -362,7 +362,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-ASIA-2026-10-16c (Asian session 01:00-06:00 UTC)");
+            Print("BUILD MLB-ASIA-2026-10-16d (Asian session 01:00-06:00 UTC)");
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
@@ -1009,10 +1009,14 @@ namespace cAlgo.Robots
                 return;
             _dataChecked = true;
             double perBar = (double)_ticksSeen / _barsSeen;
+            // Same Asian config, Jun-Oct 2026: open prices +$1,100, tick data -$37.68. Bar-based
+            // modes fill limits and targets more favourably than real ticks, so only tick data counts.
             if (perBar < 1.5)
-                Print("DATA WARNING | {0:F1} prices per bar: this looks like 'Open prices only' data. Limit and stop fills are simulated at bar opens, so results are NOT valid for this bot. Use 'm1 bars from server' or tick data.", perBar);
+                Print("DATA WARNING | {0:F1} prices per bar: this looks like 'Open prices only' data. Limit and stop fills are simulated at bar opens, so results are NOT valid for this bot. Use tick data.", perBar);
+            else if (perBar < 50)
+                Print("DATA WARNING | {0:F1} prices per bar: this looks like m1-bar data. Limit and take-profit fills are optimistic; confirm any result on tick data before trusting it.", perBar);
             else
-                Print("DATA CHECK | {0:F1} prices per bar - OK.", perBar);
+                Print("DATA CHECK | {0:F1} prices per bar - tick data, OK.", perBar);
         }
 
         private void OnOrderFilled(PendingOrderFilledEventArgs args)

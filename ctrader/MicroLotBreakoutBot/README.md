@@ -230,3 +230,20 @@ Same frozen strategy, but it trades only **01:00–06:00 UTC**. That covers the 
 ## Build 16c
 - **Gap Fill Handling** (Risk group): `KeepStop` (default, the 16a behaviour), `WidenToFloor` (16b), `CloseImmediately`. Every fill whose stop is closer than the floor is logged, and the RUN SUMMARY reports how many gap fills there were, how many won and their net. Run all three options on full 2025 and 2026, on m1 data, and compare that line.
 - **Data check:** after 50 bars of a backtest, the bot prints `DATA CHECK ... OK` or `DATA WARNING`. The warning means fewer than 1.5 prices per bar, which is what "Open prices only" data looks like.
+
+## Asian bot on tick data (3 Jun – 15 Oct 2026, $200): 165 trades, PF 0.91, −$37.68
+The first tick-data test. On the same dates, the open-prices run made about +$1,100.
+
+| Stop distance | Tick data, $200 | Open prices, $3,000+ equity |
+|---|---|---|
+| < $4 (gap fills) | 13 trades, 15% won, −$23 | 99 trades, 26% won, +$95 |
+| $4–6 | **141 trades, 29% won, −$23** | 69 trades, 42% won, +$253 |
+| $6–10 | 11 trades, 36% won, +$8 | 103 trades, 46% won, +$430 |
+| $10+ | none | 27 trades, 48% won, +$216 |
+
+(Net figures are per 0.01 lot.)
+
+- **Bar data overstates the win rate in every stop bucket.** It fills limits and targets more favourably than real ticks do, so earlier results from open-prices and m1-bar runs are inflated.
+- **At $200, the 3% cap is about $5–6.** That forces the bot into $4–6 stops, the bucket that loses on ticks: 1,949 setups were rejected for exceeding the risk cap. Wider stops were the only positive bucket here, but with 11 trades that isn't proof.
+- **Build 16d:** the data check now also flags m1-bar data (fewer than 50 prices per bar). Only tick data counts as a valid test.
+- **Next test:** `asian-tick-widestop.cbotset` raises the floor to $6.15 (max slippage share 0.13). Run it on tick data, 2025 to Oct 2026, at $500, to find out whether wide-stop trades have a real edge.
