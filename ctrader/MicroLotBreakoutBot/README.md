@@ -263,3 +263,13 @@ The first tick-data test. On the same dates, the open-prices run made about +$1,
 ## 16e run (17 Oct): the session change never took effect
 - The log reads `BUILD ...16e` but `CONFIG | sessions=0100-0600`. The saved instance kept its old Session 1 End of 0600, so the run was trade-for-trade identical to 16c (−$37.65).
 - **Build 16f** adds a new parameter, `Skip 05:00-06:00 UTC` (default on). A new parameter always starts at its default, even on old instances, so the block applies whatever the session times say. The CONFIG line prints the entry window that is actually in effect.
+
+## 16f on tick data (3 Jun – 17 Oct 2026, $200): 126 trades, PF 1.11, +$36.22
+- The 05:00 cut worked: +$73.87 better than the 06:00 run.
+- **One month carried the result.** September made +$68; the other four months together lost about $32.
+- **Rejected ideas** (in-sample on this window, or contradicted by earlier periods):
+  - Targets under 1.5R did best here (PF 3.17), but on 2025 bar data 1.5–2.5R was best.
+  - Hour 1 was weak here (PF 0.85) but strong in both bar-data years.
+  - Pullback buys did poorly (PF 0.42) because gold fell through this window.
+- **Wide stops ($6–10) were positive again:** 12 trades, +$1.73 each. This is the only pattern that has held in both tick runs, and it is still too small a sample. Test it at $500 with `asian-tick-widestop.cbotset`.
+- **Verdict:** demo only. Do not trade live until a forward demo or the wide-stop test shows PF ≥ 1.3.
