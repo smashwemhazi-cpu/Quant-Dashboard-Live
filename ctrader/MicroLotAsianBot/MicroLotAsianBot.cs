@@ -271,7 +271,9 @@ namespace cAlgo.Robots
         [Parameter("Session 1 Start (UTC hhmm)", Group = "Sessions", DefaultValue = 100, MinValue = 0, MaxValue = 2359)]
         public int Session1Start { get; set; }
 
-        [Parameter("Session 1 End (UTC hhmm)", Group = "Sessions", DefaultValue = 600, MinValue = 0, MaxValue = 2359)]
+        // 05:00-06:00 UTC was the worst hour in every test: tick data Jun-Oct 2026 50 trades PF 0.45
+        // (-$90), and even optimistic bar data lost there in 2025 (PF 0.90) and Jan-May 2026 (PF 0.62).
+        [Parameter("Session 1 End (UTC hhmm)", Group = "Sessions", DefaultValue = 500, MinValue = 0, MaxValue = 2359)]
         public int Session1End { get; set; }
 
         [Parameter("Session 2 Start (UTC hhmm)", Group = "Sessions", DefaultValue = 1400, MinValue = 0, MaxValue = 2359)]
@@ -362,7 +364,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-ASIA-2026-10-16d (Asian session 01:00-06:00 UTC)");
+            Print("BUILD MLB-ASIA-2026-10-16e (Asian session 01:00-05:00 UTC)");
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 

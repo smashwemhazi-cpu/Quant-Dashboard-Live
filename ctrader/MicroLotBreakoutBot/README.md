@@ -247,3 +247,15 @@ The first tick-data test. On the same dates, the open-prices run made about +$1,
 - **At $200, the 3% cap is about $5–6.** That forces the bot into $4–6 stops, the bucket that loses on ticks: 1,949 setups were rejected for exceeding the risk cap. Wider stops were the only positive bucket here, but with 11 trades that isn't proof.
 - **Build 16d:** the data check now also flags m1-bar data (fewer than 50 prices per bar). Only tick data counts as a valid test.
 - **Next test:** `asian-tick-widestop.cbotset` raises the floor to $6.15 (max slippage share 0.13). Run it on tick data, 2025 to Oct 2026, at $500, to find out whether wide-stop trades have a real edge.
+
+## Asian tick run, breakdown by trade group (3 Jun – 16 Oct 2026, 167 trades)
+| Group | Trades | Net | PF |
+|---|---|---|---|
+| 01:00–05:00 UTC | 117 | +$52.53 | 1.19 |
+| **05:00–06:00 UTC** | **50** | **−$90.18** | **0.45** |
+| Sells | 79 | +$88 | 1.53 |
+| Buys | 88 | −$126 | 0.55 |
+
+- **05:00–06:00 is the worst hour in all three independent periods.** It lost even on optimistic bar data: 2025 PF 0.90, Jan–May 2026 PF 0.62. **Build 16e ends the Asian session at 05:00**, and both Asian cbotsets are updated to match.
+- **The buy/sell split is not a fix.** Gold fell from about 4,480 to 4,170 over this window, so sells were favoured by the market direction. A sells-only filter would be fitted to that fall.
+- **01:00–05:00 at PF 1.19 is still not enough** after real costs, and it comes from 117 trades in one window. Next run: 16e on tick data, and the wide-stop preset at $500.
