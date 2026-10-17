@@ -45,6 +45,7 @@
     "StaleQuoteSeconds": "60",
     "Session1Start": "100",
     "Session1End": "500",
+    "SkipLateAsiaHour": "True",
     "Session2Start": "1400",
     "Session2End": "1400",
     "NewsTimes": "",

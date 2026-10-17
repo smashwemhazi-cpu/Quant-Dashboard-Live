@@ -259,3 +259,7 @@ The first tick-data test. On the same dates, the open-prices run made about +$1,
 - **05:00–06:00 is the worst hour in all three independent periods.** It lost even on optimistic bar data: 2025 PF 0.90, Jan–May 2026 PF 0.62. **Build 16e ends the Asian session at 05:00**, and both Asian cbotsets are updated to match.
 - **The buy/sell split is not a fix.** Gold fell from about 4,480 to 4,170 over this window, so sells were favoured by the market direction. A sells-only filter would be fitted to that fall.
 - **01:00–05:00 at PF 1.19 is still not enough** after real costs, and it comes from 117 trades in one window. Next run: 16e on tick data, and the wide-stop preset at $500.
+
+## 16e run (17 Oct): the session change never took effect
+- The log reads `BUILD ...16e` but `CONFIG | sessions=0100-0600`. The saved instance kept its old Session 1 End of 0600, so the run was trade-for-trade identical to 16c (−$37.65).
+- **Build 16f** adds a new parameter, `Skip 05:00-06:00 UTC` (default on). A new parameter always starts at its default, even on old instances, so the block applies whatever the session times say. The CONFIG line prints the entry window that is actually in effect.

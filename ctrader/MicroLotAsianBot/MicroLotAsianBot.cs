@@ -276,6 +276,12 @@ namespace cAlgo.Robots
         [Parameter("Session 1 End (UTC hhmm)", Group = "Sessions", DefaultValue = 500, MinValue = 0, MaxValue = 2359)]
         public int Session1End { get; set; }
 
+        // 16e test 17/10/2026: the code default moved to 05:00 but the saved instance kept 0600, so the
+        // run was identical (-$37.65). A NEW parameter always starts at its default on old instances,
+        // so the 05:00-06:00 block lives here and applies whatever the session times say.
+        [Parameter("Skip 05:00-06:00 UTC", Group = "Sessions", DefaultValue = true)]
+        public bool SkipLateAsiaHour { get; set; }
+
         [Parameter("Session 2 Start (UTC hhmm)", Group = "Sessions", DefaultValue = 1400, MinValue = 0, MaxValue = 2359)]
         public int Session2Start { get; set; }
 
@@ -364,7 +370,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-ASIA-2026-10-16e (Asian session 01:00-05:00 UTC)");
+            Print("BUILD MLB-ASIA-2026-10-16f");
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
@@ -387,6 +393,10 @@ namespace cAlgo.Robots
                 EntryMode, LadderOrders, LadderDepthAtr, LadderStopAtr, LadderMinStopAtr, LadderExpiryBars, UseTrendLadder);
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
                 Session1Start, Session1End, Session2Start, Session2End, UseBreakout, UseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
+            Print("CONFIG | skip 05:00-06:00 UTC = {0} -> effective entry window {1}", SkipLateAsiaHour,
+                SkipLateAsiaHour && Minutes(Session1End) > 300 && Minutes(Session1Start) < 300
+                    ? string.Format("{0:D4}-0500 UTC", Session1Start)
+                    : string.Format("{0:D4}-{1:D4} UTC", Session1Start, Session1End));
             if (MaxSpreadPips > 20)
                 Print("CONFIG WARNING: Max Spread {0} pips is very wide (on XAUUSD 1 pip = $0.10 at 0.01 lot). Recommended: 6.", MaxSpreadPips);
             if (LadderMinStopAtr < MinStopAtr * 0.66)
@@ -1296,6 +1306,8 @@ namespace cAlgo.Robots
             if (t.DayOfWeek == DayOfWeek.Saturday || t.DayOfWeek == DayOfWeek.Sunday)
                 return false;
             int m = t.Hour * 60 + t.Minute;
+            if (SkipLateAsiaHour && m >= 300 && m < 360)
+                return false;
             return (m >= Minutes(Session1Start) && m < Minutes(Session1End)) ||
                    (m >= Minutes(Session2Start) && m < Minutes(Session2End));
         }
