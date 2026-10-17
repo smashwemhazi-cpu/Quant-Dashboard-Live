@@ -158,6 +158,13 @@ namespace cAlgo.Robots
         [Parameter("Fade Min Reward/Risk", Group = "Range Fade", DefaultValue = 1.0, MinValue = 0.3, MaxValue = 3.0, Step = 0.1)]
         public double FadeMinRewardRisk { get; set; }
 
+        // Deep ladder rungs fill only when price runs through the zone toward the stop, so their
+        // reward:risk to the shared target looks large (> 2.5) but they are adverse-selection fills.
+        // Weakest group in all five datasets: tick Jun-Oct 2026 PF 0.83 / 0.69 / 0.47 ($200, $200
+        // 05:00-cut, $500), bar data 2025 and Jan-May 2026 lowest PF of the three groups too.
+        [Parameter("Max Order Reward:Risk (0=off)", Group = "Ladder", DefaultValue = 2.5, MinValue = 0, Step = 0.25)]
+        public double MaxOrderRewardRisk { get; set; }
+
         [Parameter("Fade Target (fraction to mid band)", Group = "Range Fade", DefaultValue = 1.0, MinValue = 0.3, MaxValue = 1.0, Step = 0.05)]
         public double FadeTargetFraction { get; set; }
 
@@ -370,7 +377,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-ASIA-2026-10-16f");
+            Print("BUILD MLB-ASIA-2026-10-16g");
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
@@ -393,6 +400,7 @@ namespace cAlgo.Robots
                 EntryMode, LadderOrders, LadderDepthAtr, LadderStopAtr, LadderMinStopAtr, LadderExpiryBars, UseTrendLadder);
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
                 Session1Start, Session1End, Session2Start, Session2End, UseBreakout, UseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
+            Print("CONFIG | max order reward:risk = {0} (0 = off)", MaxOrderRewardRisk);
             Print("CONFIG | skip 05:00-06:00 UTC = {0} -> effective entry window {1}", SkipLateAsiaHour,
                 SkipLateAsiaHour && Minutes(Session1End) > 300 && Minutes(Session1Start) < 300
                     ? string.Format("{0:D4}-0500 UTC", Session1Start)
@@ -737,6 +745,17 @@ namespace cAlgo.Robots
                 : (side == TradeType.Buy ? shallow + RewardR * (shallow - stop) : shallow - RewardR * (stop - shallow));
             double targetDist = side == TradeType.Buy ? tp - shallow : shallow - tp;
             if (targetDist <= 0) { Reject("LD: target not beyond entries"); return; }
+
+            if (MaxOrderRewardRisk > 0)
+            {
+                int before = levels.Count;
+                levels.RemoveAll(l => Math.Abs(tp - l) > MaxOrderRewardRisk * Math.Abs(l - stop));
+                if (levels.Count < before)
+                    Reject("LD: deep rung dropped (reward:risk above max)");
+                if (levels.Count == 0) return;
+                shallow = levels[0];
+                targetDist = side == TradeType.Buy ? tp - shallow : shallow - tp;
+            }
             if (!PassesCostAndSpread(Math.Abs(shallow - stop), targetDist, "LD"))
                 return;
 

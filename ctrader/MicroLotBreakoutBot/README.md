@@ -273,3 +273,17 @@ The first tick-data test. On the same dates, the open-prices run made about +$1,
   - Pullback buys did poorly (PF 0.42) because gold fell through this window.
 - **Wide stops ($6–10) were positive again:** 12 trades, +$1.73 each. This is the only pattern that has held in both tick runs, and it is still too small a sample. Test it at $500 with `asian-tick-widestop.cbotset`.
 - **Verdict:** demo only. Do not trade live until a forward demo or the wide-stop test shows PF ≥ 1.3.
+
+## 16f on tick data at $500 (3 Jun – 17 Oct 2026): 272 trades, PF 1.04, +$36.33
+| Group | Trades | Net (per 0.01 lot) |
+|---|---|---|
+| Stop $4–6 | 81 | −$104 |
+| Stop $6–10 | 175 | +$42 (+$0.24 each) |
+| Stop $10+ | 12 | +$109 |
+| Reward:risk > 2.5 (deep ladder rungs) | 42 | −$116 (PF 0.47) |
+
+- **Reward:risk above 2.5 is the weakest group in all five datasets**, both tick runs and bar runs. These are deep ladder rungs that fill only when price runs through the zone toward the stop.
+- **Build 16g** adds `Max Order Reward:Risk` (default 2.5), which drops those rungs before the orders are placed.
+- **Next tests, both at $500:**
+  - A = 16g with a $4 stop floor (`asian-16g-500-A.cbotset`)
+  - B = 16g with the $6.15 floor (`asian-16g-500-B-widestop.cbotset`)

@@ -25,6 +25,7 @@
     "BbStdDev": "2",
     "FadeStopBufferAtr": "0.25",
     "FadeMinRewardRisk": "1",
+    "MaxOrderRewardRisk": "2.5",
     "FadeTargetFraction": "1",
     "StopMode": "1",
     "MinStopAtr": "1.5",
