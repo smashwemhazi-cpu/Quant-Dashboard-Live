@@ -235,6 +235,12 @@ namespace cAlgo.Robots
         [Parameter("Max Daily Loss %", Group = "Risk", DefaultValue = 6.0, MinValue = 1.0, MaxValue = 20.0, Step = 0.5)]
         public double MaxDailyLossPercent { get; set; }
 
+        // Losses cluster: July 2026 lost in every tick run. Replaying the three Jun-Oct 2026 tick runs
+        // with a 4% weekly stop: $500 run +$57 -> +$164 (max DD $170 -> $114), $500 16f +$36 -> +$148
+        // (DD $199 -> $118), $200 run +$36 -> +$52 (DD $72 -> $44). Week = Monday 00:00 UTC.
+        [Parameter("Max Weekly Loss % (0=off)", Group = "Risk", DefaultValue = 4.0, MinValue = 0, MaxValue = 30.0, Step = 0.5)]
+        public double MaxWeeklyLossPercent { get; set; }
+
         [Parameter("Max Losses In A Row (per day)", Group = "Risk", DefaultValue = 2, MinValue = 1, MaxValue = 10, Step = 1)]
         public int MaxDailyLossStreak { get; set; }
 
@@ -377,7 +383,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-ASIA-2026-10-16g");
+            Print("BUILD MLB-ASIA-2026-10-16h");
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
@@ -400,7 +406,7 @@ namespace cAlgo.Robots
                 EntryMode, LadderOrders, LadderDepthAtr, LadderStopAtr, LadderMinStopAtr, LadderExpiryBars, UseTrendLadder);
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
                 Session1Start, Session1End, Session2Start, Session2End, UseBreakout, UseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
-            Print("CONFIG | max order reward:risk = {0} (0 = off)", MaxOrderRewardRisk);
+            Print("CONFIG | max order reward:risk = {0} (0 = off) | max weekly loss = {1}% (0 = off)", MaxOrderRewardRisk, MaxWeeklyLossPercent);
             Print("CONFIG | skip 05:00-06:00 UTC = {0} -> effective entry window {1}", SkipLateAsiaHour,
                 SkipLateAsiaHour && Minutes(Session1End) > 300 && Minutes(Session1Start) < 300
                     ? string.Format("{0:D4}-0500 UTC", Session1Start)
@@ -910,6 +916,18 @@ namespace cAlgo.Robots
                 .OrderByDescending(x => x.Closed).ToList();
             double dayPnl = closedToday.Sum(x => x.Net);
             if (dayPnl <= -Account.Balance * MaxDailyLossPercent / 100.0) { reason = "daily loss cap"; return false; }
+
+            if (MaxWeeklyLossPercent > 0)
+            {
+                DateTime weekStart = dayStart.AddDays(-(((int)dayStart.DayOfWeek + 6) % 7));
+                double weekPnl = OurHistory().Where(t => t.ClosingTime >= weekStart).Sum(t => t.NetProfit);
+                double weekStartBalance = Account.Balance - weekPnl;
+                if (weekPnl <= -weekStartBalance * MaxWeeklyLossPercent / 100.0)
+                {
+                    reason = "weekly loss cap";
+                    return false;
+                }
+            }
 
             int streak = 0;
             foreach (var t in closedToday)

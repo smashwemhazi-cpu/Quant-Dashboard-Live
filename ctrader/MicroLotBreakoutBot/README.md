@@ -287,3 +287,10 @@ The first tick-data test. On the same dates, the open-prices run made about +$1,
 - **Next tests, both at $500:**
   - A = 16g with a $4 stop floor (`asian-16g-500-A.cbotset`)
   - B = 16g with the $6.15 floor (`asian-16g-500-B-widestop.cbotset`)
+
+## 16g on tick data at $500, $4 floor: 245 trades, PF 1.06, +$57.29, max DD $170
+- The reward:risk filter dropped 514 deep rungs. That gave +$21 more profit and $29 less drawdown than 16f at $500, well short of the +$150 estimate.
+- **The sharp drops are bad weeks, not bad trades.** The worst stretch ran from 29 Jun to 3 Aug (−$170). July lost in every tick run.
+- **Using a single ladder order would not help.** Keeping only the first order of each setup comes to +$38.
+- **Build 16h** adds `Max Weekly Loss %` (default 4). In a replay of the three tick runs, net profit rose and max drawdown fell by 30–40% in each one.
+- **Feasibility:** the best tick-data PF so far is about 1.1. The Asian session is not proven tradable at this broker's costs.

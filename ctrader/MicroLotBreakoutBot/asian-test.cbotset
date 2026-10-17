@@ -38,6 +38,7 @@
     "MaxRiskCash": "0",
     "MaxTradesPerDay": "3",
     "MaxDailyLossPercent": "6",
+    "MaxWeeklyLossPercent": "4",
     "MaxDailyLossStreak": "2",
     "EquityFloor": "120",
     "MaxSlippagePips": "5",
