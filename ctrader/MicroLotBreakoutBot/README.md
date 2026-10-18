@@ -324,3 +324,14 @@ The first tick-data test. On the same dates, the open-prices run made about +$1,
   - The data is the same Jun–Oct window that every fix was tuned on.
 - **Build 16j:** on start, the shadow curve is rebuilt from the bot's own closed trades. A restart on a VPS or demo therefore no longer resets the filter. Backtests are unchanged, because history is empty at the start of a backtest.
 - **Next step:** demo for 6–8 weeks with `asian-16i-200.cbotset` on build 16j.
+
+## 16j on m1-bar data (10 Jan – 18 Oct 2026, $200): 200 trades, PF 1.88, +$544, max DD $83
+| Window | Trades | Win % | PF | t |
+|---|---|---|---|---|
+| Jan–May (no fix was tuned on this) | 80 | 44% | 1.86 | 2.26 |
+| Jun–Oct (all fixes tuned here) | 120 | 45% | 1.90 | 2.84 |
+| Jun–Oct on **tick** data | 81 | 40% | 1.49 | 1.52 |
+
+- **The untuned window behaves like the tuned one.** That is the first evidence that the 16f–16j fixes are not only fitted to Jun–Oct.
+- **The bar-to-tick haircut on the same window is about PF −0.4** (1.90 to 1.49). Applying it to Jan–May gives an estimated PF of about 1.45 on tick data.
+- **The equity filter kept 225 trades to paper.** They lost $460 in total, so the filter avoided those losses. The two losing months left were March (−$30) and July (−$31).
