@@ -310,3 +310,17 @@ The first tick-data test. On the same dates, the open-prices run made about +$1,
 - **Presets:**
   - `asian-16i-200.cbotset`: $200, 4% risk, 4% weekly limit, filter on
   - `asian-16i-500.cbotset`: $500, filter on
+
+## 16i on tick data, $200 (3 Jun – 18 Oct 2026): 81 trades, PF 1.49, +$111.85, max DD $41 (15%)
+- This is the best $200 result so far: the previous best was +$50.54 with a $92 drawdown.
+- **The filter worked as designed.**
+  - 98 paper trades lost −$83.60. Those are losses the real account avoided.
+  - July: −$73.60 was lost on paper, against only −$17.95 in real trades.
+  - The cost: September paper trades made +$24 that the real account missed.
+  - The filter paused 10 times and resumed 10 times.
+- **Still unproven.**
+  - t = 1.5 over 81 trades.
+  - Monte Carlo worst 5%: net −$3, PF 0.99.
+  - The data is the same Jun–Oct window that every fix was tuned on.
+- **Build 16j:** on start, the shadow curve is rebuilt from the bot's own closed trades. A restart on a VPS or demo therefore no longer resets the filter. Backtests are unchanged, because history is empty at the start of a backtest.
+- **Next step:** demo for 6–8 weeks with `asian-16i-200.cbotset` on build 16j.

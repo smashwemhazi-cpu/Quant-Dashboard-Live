@@ -408,12 +408,13 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-ASIA-2026-10-16i");
+            Print("BUILD MLB-ASIA-2026-10-16j");
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
             PrintConfig();
             PrintFeasibilityReport();
+            SeedShadowCurveFromHistory();
             if (RunningMode != RunningMode.RealTime)
                 Print("DATA CHECK | backtest: data mode is checked after 50 bars (needs more than 1 price per bar).");
         }
@@ -1216,6 +1217,25 @@ namespace cAlgo.Robots
                 _filterAllowed = allowed;
             }
             return allowed;
+        }
+
+        // A restart (VPS reboot, platform update, re-adding the instance) would otherwise wipe the
+        // shadow curve and switch the filter back on blindly. Rebuild it from this bot's own closed
+        // trades; paper trades from before the restart are not recoverable and are left out.
+        private void SeedShadowCurveFromHistory()
+        {
+            if (!UseEquityCurveFilter)
+                return;
+            var past = OurHistory().OrderBy(t => t.ClosingTime).ToList();
+            foreach (var t in past.Skip(Math.Max(0, past.Count - 200)))
+                AddToShadowCurve(t.NetProfit);
+            if (past.Count > 0)
+            {
+                _filterAllowed = true;
+                bool allowed = EquityFilterAllows();
+                Print("EQUITY FILTER | seeded from {0} closed trades in history -> {1}", Math.Min(past.Count, 200),
+                    allowed ? "real trading allowed" : "starting PAUSED (paper trading)");
+            }
         }
 
         private void AddToShadowCurve(double net)
