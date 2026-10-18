@@ -241,6 +241,17 @@ namespace cAlgo.Robots
         [Parameter("Max Weekly Loss % (0=off)", Group = "Risk", DefaultValue = 4.0, MinValue = 0, MaxValue = 30.0, Step = 0.5)]
         public double MaxWeeklyLossPercent { get; set; }
 
+        // Equity-curve filter: every ladder signal is tracked on a shadow equity curve (real trades
+        // plus paper trades). Real orders are placed only while that curve is at or above the
+        // average of its last N points; below it the ladder is paper-traded until the curve
+        // recovers. Replay on five Jun-Oct 2026 tick runs: drawdown roughly halved in all five,
+        // net better in four, worse in one ($200 16f: +$36 -> -$25). LimitLadder entry mode only.
+        [Parameter("Use Equity Curve Filter", Group = "Equity Curve Filter", DefaultValue = true)]
+        public bool UseEquityCurveFilter { get; set; }
+
+        [Parameter("Equity Curve Average (trades)", Group = "Equity Curve Filter", DefaultValue = 10, MinValue = 2, MaxValue = 100, Step = 1)]
+        public int EquityCurveTrades { get; set; }
+
         [Parameter("Max Losses In A Row (per day)", Group = "Risk", DefaultValue = 2, MinValue = 1, MaxValue = 10, Step = 1)]
         public int MaxDailyLossStreak { get; set; }
 
@@ -340,6 +351,20 @@ namespace cAlgo.Robots
         private double _maxStopSlippageCash;
         private readonly HashSet<long> _gapFilled = new HashSet<long>();
         private int _gapFills;
+
+        // Shadow (paper) trading for the equity-curve filter.
+        private sealed class VOrder { public string Setup; public TradeType Side; public double Level, Stop, Tp; public DateTime Expiry; }
+        private sealed class VPos { public string Setup; public TradeType Side; public double Entry, Stop, Tp, Risk; public DateTime EntryTime; public bool BeDone; }
+        private sealed class VClosed { public string Setup; public DateTime EntryTime, CloseTime; public double Net; }
+        private readonly List<VOrder> _vOrders = new List<VOrder>();
+        private readonly List<VPos> _vPos = new List<VPos>();
+        private readonly List<VClosed> _vClosed = new List<VClosed>();
+        private readonly List<double> _shadowCurve = new List<double> { 0.0 };
+        private double _shadowEquity;
+        private bool _filterAllowed = true;
+        private int _vSetups;
+        private int _vWins;
+        private double _vNet;
         private int _gapWins;
         private double _gapNet;
         private long _ticksSeen;
@@ -383,7 +408,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-ASIA-2026-10-16h");
+            Print("BUILD MLB-ASIA-2026-10-16i");
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
@@ -407,6 +432,8 @@ namespace cAlgo.Robots
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
                 Session1Start, Session1End, Session2Start, Session2End, UseBreakout, UseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
             Print("CONFIG | max order reward:risk = {0} (0 = off) | max weekly loss = {1}% (0 = off)", MaxOrderRewardRisk, MaxWeeklyLossPercent);
+            Print("CONFIG | equity curve filter = {0} (average of last {1} trades{2})", UseEquityCurveFilter, EquityCurveTrades,
+                EntryMode == MicroEntryMode.LimitLadder ? "" : "; INACTIVE - needs LimitLadder entry mode");
             Print("CONFIG | skip 05:00-06:00 UTC = {0} -> effective entry window {1}", SkipLateAsiaHour,
                 SkipLateAsiaHour && Minutes(Session1End) > 300 && Minutes(Session1Start) < 300
                     ? string.Format("{0:D4}-0500 UTC", Session1Start)
@@ -443,6 +470,7 @@ namespace cAlgo.Robots
 
                 CheckEquityFloor();
                 ManageBreakeven();
+                ProcessShadow();
             }
             catch (Exception ex)
             {
@@ -467,6 +495,8 @@ namespace cAlgo.Robots
                 // ladder keeps its remaining orders (that is the scale-in).
                 if (EntryMode == MicroEntryMode.LimitLadder && OurOrders().Any() && !OurPositions().Any())
                     CancelOurOrders();
+                if (_vOrders.Any() && !_vPos.Any())
+                    _vOrders.Clear();
 
                 string reason;
                 if (!CanOpenNew(out reason))
@@ -773,6 +803,17 @@ namespace cAlgo.Robots
             string setupId = "L" + Server.Time.ToString("yyyyMMddHHmm", CultureInfo.InvariantCulture);
             stop = Math.Round(stop, Symbol.Digits);
             tp = Math.Round(tp, Symbol.Digits);
+
+            if (!EquityFilterAllows())
+            {
+                foreach (double lvl in levels)
+                    _vOrders.Add(new VOrder { Setup = setupId, Side = side, Level = lvl, Stop = stop, Tp = tp, Expiry = expiry });
+                _vSetups++;
+                Print("SHADOW LADDER {0} {1} {2} order(s) @ {3} | SL {4} | TP {5} (paper only - equity filter)",
+                    fade ? "FADE" : "PULLBACK", side, levels.Count,
+                    string.Join("/", levels.Select(l => l.ToString(CultureInfo.InvariantCulture))), stop, tp);
+                return;
+            }
             int placed = 0;
             foreach (double lvl in levels)
             {
@@ -895,7 +936,7 @@ namespace cAlgo.Robots
 
             if (!InSession(now) || PastFlatTime(now))
                 return false;
-            if (OurPositions().Any() || OurOrders().Any())
+            if (OurPositions().Any() || OurOrders().Any() || _vPos.Any() || _vOrders.Any())
                 return false;
             if (ExclusiveSymbol && (Positions.Any(p => p.SymbolName == SymbolName && !IsOurLabel(p.Label))
                                     || PendingOrders.Any(o => o.SymbolName == SymbolName && !IsOurLabel(o.Label))))
@@ -907,7 +948,8 @@ namespace cAlgo.Robots
 
             DateTime dayStart = now.Date;
             // A ladder's fills share one comment (setup id) and count as ONE trade.
-            int tradesToday = OurHistory().Where(t => t.EntryTime >= dayStart).Select(SetupKey).Distinct().Count();
+            int tradesToday = OurHistory().Where(t => t.EntryTime >= dayStart).Select(SetupKey)
+                .Concat(_vClosed.Where(v => v.EntryTime >= dayStart).Select(v => v.Setup)).Distinct().Count();
             if (tradesToday >= MaxTradesPerDay) { reason = "daily trade cap"; return false; }
 
             var closedToday = OurHistory().Where(t => t.ClosingTime >= dayStart)
@@ -929,8 +971,13 @@ namespace cAlgo.Robots
                 }
             }
 
+            // Paper trades count toward the losing streak (signal quality), not toward cash limits.
+            var streakList = closedToday.Select(x => new { x.Net, x.Closed })
+                .Concat(_vClosed.Where(v => v.CloseTime >= dayStart).GroupBy(v => v.Setup)
+                    .Select(g => new { Net = g.Sum(v => v.Net), Closed = g.Max(v => v.CloseTime) }))
+                .OrderByDescending(x => x.Closed);
             int streak = 0;
-            foreach (var t in closedToday)
+            foreach (var t in streakList)
             {
                 if (t.Net < 0) streak++;
                 else break;
@@ -1000,10 +1047,16 @@ namespace cAlgo.Robots
             {
                 CancelOurOrders();
                 CloseOurPositions("flat time");
+                _vOrders.Clear();
+                foreach (VPos v in _vPos.ToArray())
+                    CloseShadow(v, v.Side == TradeType.Buy ? Symbol.Bid : Symbol.Ask, "flat time");
                 return;
             }
             if (!InSession(now) || InNewsWindow(now))
+            {
                 CancelOurOrders();
+                _vOrders.Clear();
+            }
         }
 
         private void ManageBreakeven()
@@ -1138,10 +1191,96 @@ namespace cAlgo.Robots
                     _gapWins++;
             }
             Print("CLOSED {0} {1} | reason={2} | net={3:F2} | equity={4:F2}", p.Label, p.TradeType, args.Reason, p.NetProfit, Account.Equity);
+            AddToShadowCurve(p.NetProfit);
             RecordStopSlippage(p, args.Reason);
 
             if (p.Label == BotLabel + LadderTag && !OurPositions().Any())
                 CancelOurOrders();
+        }
+
+        // ================================================================== Equity-curve filter
+        private bool EquityFilterAllows()
+        {
+            bool allowed = true;
+            double avg = 0;
+            if (UseEquityCurveFilter)
+            {
+                int n = Math.Min(EquityCurveTrades, _shadowCurve.Count);
+                avg = _shadowCurve.Skip(_shadowCurve.Count - n).Average();
+                allowed = _shadowEquity >= avg - 1e-9;
+            }
+            if (allowed != _filterAllowed)
+            {
+                Print("EQUITY FILTER: {0} | shadow curve {1:F2} vs {2}-trade average {3:F2}",
+                    allowed ? "RESUMED real trading" : "PAUSED - paper trading only", _shadowEquity, EquityCurveTrades, avg);
+                _filterAllowed = allowed;
+            }
+            return allowed;
+        }
+
+        private void AddToShadowCurve(double net)
+        {
+            _shadowEquity += net;
+            _shadowCurve.Add(_shadowEquity);
+            if (_shadowCurve.Count > 500)
+                _shadowCurve.RemoveAt(0);
+        }
+
+        // Paper fills mirror the real rules: limit fills at the level (or better on a gap), stop
+        // exits at the market price, target at the limit, breakeven at Breakeven R.
+        private void ProcessShadow()
+        {
+            if (_vOrders.Count == 0 && _vPos.Count == 0)
+                return;
+            DateTime now = Server.Time;
+            double bid = Symbol.Bid, ask = Symbol.Ask;
+
+            foreach (VOrder o in _vOrders.ToArray())
+            {
+                if (now >= o.Expiry) { _vOrders.Remove(o); continue; }
+                bool buy = o.Side == TradeType.Buy;
+                if (buy ? ask > o.Level : bid < o.Level)
+                    continue;
+                double entry = buy ? Math.Min(o.Level, ask) : Math.Max(o.Level, bid);
+                _vPos.Add(new VPos { Setup = o.Setup, Side = o.Side, Entry = entry, Stop = o.Stop, Tp = o.Tp,
+                                     Risk = Math.Abs(entry - o.Stop), EntryTime = now });
+                _vOrders.Remove(o);
+            }
+
+            foreach (VPos v in _vPos.ToArray())
+            {
+                bool buy = v.Side == TradeType.Buy;
+                if (!v.BeDone && BreakevenR > 0 && v.Risk > 0)
+                {
+                    double fav = buy ? bid - v.Entry : v.Entry - ask;
+                    if (fav >= BreakevenR * v.Risk && (buy ? v.Entry > v.Stop : v.Entry < v.Stop))
+                    {
+                        v.Stop = v.Entry;
+                        v.BeDone = true;
+                    }
+                }
+                if (buy ? bid <= v.Stop : ask >= v.Stop)
+                    CloseShadow(v, buy ? bid : ask, "stop");
+                else if (buy ? bid >= v.Tp : ask <= v.Tp)
+                    CloseShadow(v, v.Tp, "target");
+            }
+        }
+
+        private void CloseShadow(VPos v, double exit, string why)
+        {
+            double move = v.Side == TradeType.Buy ? exit - v.Entry : v.Entry - exit;
+            double net = Math.Sign(move) * CashForPriceMove(Math.Abs(move))
+                         - CommissionPerLot * Symbol.VolumeInUnitsToQuantity(_volume);
+            _vPos.Remove(v);
+            _vClosed.Add(new VClosed { Setup = v.Setup, EntryTime = v.EntryTime, CloseTime = Server.Time, Net = net });
+            if (_vClosed.Count > 2000)
+                _vClosed.RemoveAt(0);
+            _vNet += net;
+            if (net > 0) _vWins++;
+            AddToShadowCurve(net);
+            Print("SHADOW CLOSED {0} | {1} | net={2:F2} (paper) | shadow curve {3:F2}", v.Side, why, net, _shadowEquity);
+            if (!_vPos.Any(x => x.Setup == v.Setup))
+                _vOrders.RemoveAll(o => o.Setup == v.Setup);
         }
 
         private void CancelOurOrders()
@@ -1208,6 +1347,8 @@ namespace cAlgo.Robots
                 _stopFills, _stopSlippageCash, _stopFills > 0 ? _stopSlippageCash / _stopFills : 0, _maxStopSlippageCash, net, net + _stopSlippageCash);
             Print("RUN SUMMARY | gap fills ({0}): {1} trades, {2} wins, net ${3:F2}",
                 GapFillHandling, _gapFills, _gapWins, _gapNet);
+            Print("RUN SUMMARY | equity filter: {0} paper setups, {1} paper trades, {2} wins, paper net ${3:F2} ({4})",
+                _vSetups, _vClosed.Count, _vWins, _vNet, _vNet < 0 ? "losses avoided" : "profit missed");
             foreach (var kv in _rejections.OrderByDescending(k => k.Value))
                 Print("RUN SUMMARY | rejected {0,6} x  {1}", kv.Value, kv.Key);
         }

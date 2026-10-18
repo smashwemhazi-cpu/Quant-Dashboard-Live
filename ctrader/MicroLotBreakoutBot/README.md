@@ -294,3 +294,19 @@ The first tick-data test. On the same dates, the open-prices run made about +$1,
 - **Using a single ladder order would not help.** Keeping only the first order of each setup comes to +$38.
 - **Build 16h** adds `Max Weekly Loss %` (default 4). In a replay of the three tick runs, net profit rose and max drawdown fell by 30–40% in each one.
 - **Feasibility:** the best tick-data PF so far is about 1.1. The Asian session is not proven tradable at this broker's costs.
+
+## Build 16i: equity-curve filter
+- **What it does.** Every ladder signal goes onto a shadow equity curve that holds both real trades and paper trades. Real orders are placed only while that curve is at or above the average of its last 10 points. Below that, the bot paper-trades the signals until the curve recovers.
+- **Settings:** `Use Equity Curve Filter` (default on) and `Equity Curve Average (trades)` (default 10).
+- **Log lines:**
+  - `EQUITY FILTER: PAUSED` / `EQUITY FILTER: RESUMED`
+  - `SHADOW LADDER` / `SHADOW CLOSED`
+  - a RUN SUMMARY line with the paper trades' net result (losses avoided or profit missed)
+- **How paper trades work:**
+  - Fills follow the real rules: limit orders, stop at market, target, and breakeven.
+  - Paper trades count toward the daily trade cap and the losing streak, but not toward the cash loss limits.
+  - The shadow curve resets when the bot restarts.
+- **Replay** on the five Jun–Oct 2026 tick runs: drawdown was roughly halved in all five, net was better in four and worse in one. All five runs cover the same period, so treat this as unproven until it has run on demo.
+- **Presets:**
+  - `asian-16i-200.cbotset`: $200, 4% risk, 4% weekly limit, filter on
+  - `asian-16i-500.cbotset`: $500, filter on
