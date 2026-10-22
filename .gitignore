@@ -1,0 +1,4 @@
+jarvis/data/samples/
+jarvis/data/*.db
+__pycache__/
+.pytest_cache/
