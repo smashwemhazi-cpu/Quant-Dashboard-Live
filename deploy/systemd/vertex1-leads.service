@@ -1,0 +1,21 @@
+[Unit]
+Description=DONNA lead monitor (Telegram user session)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vertex1
+Group=vertex1
+WorkingDirectory=/opt/vertex1/app
+EnvironmentFile=/etc/vertex1/vertex1.env
+ExecStart=/opt/vertex1/venv/bin/python -m donna.lead_monitor
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/vertex1
+
+[Install]
+WantedBy=multi-user.target

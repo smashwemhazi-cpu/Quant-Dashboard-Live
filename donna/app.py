@@ -585,7 +585,7 @@ def ingest_lead(lead: LeadIn, bg: BackgroundTasks, actor: str = Depends(require_
     with db() as c:
         if c.execute("SELECT 1 FROM do_not_contact WHERE handle = ?", (handle,)).fetchone():
             return {"status": "DO_NOT_CONTACT"}
-        cur = c.execute("""INSERT INTO leads (lead_id, handle, source_chat, intent_score, matched_terms, snippet,
+        c.execute("""INSERT INTO leads (lead_id, handle, source_chat, intent_score, matched_terms, snippet,
                            status, first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?,?)
                            ON CONFLICT(handle) DO UPDATE SET mentions = mentions + 1, last_seen = excluded.last_seen,
                            intent_score = MAX(intent_score, excluded.intent_score)""",

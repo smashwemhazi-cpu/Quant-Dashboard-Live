@@ -18,7 +18,7 @@ except Exception:
 
 from jarvis.core import audit  # noqa: E402
 from jarvis.core.config import settings  # noqa: E402
-from jarvis.core.registry import agents, load_builtin_agents  # noqa: E402
+from jarvis.core.registry import load_builtin_agents  # noqa: E402
 
 st.set_page_config(page_title="JARVIS Console", page_icon="🤖", layout="wide")
 ACCENT, MUTED = "#00E676", "#8892B0"

@@ -13,6 +13,7 @@ Expected columns (map your system's fields onto these):
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Protocol
 
@@ -34,7 +35,8 @@ class CsvSource:
 
     def load(self, table: str) -> pd.DataFrame:
         path = self.root / f"{table}.csv"
-        if not path.exists() and self.root == _DEMO_DIR:
+        # Synthetic data only in demo mode; production sets JARVIS_DEMO=0 so missing data is an error.
+        if not path.exists() and self.root == _DEMO_DIR and os.getenv("JARVIS_DEMO", "1") == "1":
             from jarvis.data.make_samples import main as make_samples  # demo mode
 
             make_samples()

@@ -5,7 +5,6 @@ import psycopg2
 import requests
 import yfinance as yf
 import xml.etree.ElementTree as ET
-from datetime import datetime
 
 # --- 1. CONFIGURATION & CLOUD CONNECTIONS ---
 st.set_page_config(page_title="Quant Command Center", page_icon="🏦", layout="wide")
@@ -28,7 +27,7 @@ def init_connection():
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = True 
         return conn
-    except Exception as e:
+    except Exception:
         return None
 
 conn = init_connection()
