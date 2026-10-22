@@ -37,11 +37,22 @@ def job_pipeline() -> None:
     notify("stale_deals", agents()["pipeline"].analyse()["stale_deals"])
 
 
+def job_desk_report() -> None:
+    notify("desk_report", agents()["dealing"].desk_report())
+
+
+def job_lp_slippage() -> None:
+    eps = [e for e in agents()["dealing"].slippage()["episodes"] if e["raise_with_lp"]]
+    if eps:
+        notify("lp_slippage_alert", eps[:5])
+
+
 def job_morning_brief() -> None:
     from jarvis.core.brain import Brain
 
     brief = Brain().ask([{"role": "user", "content":
-        "Morning brief: market regime + macro, execution issues overnight, top 5 at-risk clients, "
+        "Morning brief: dealing desk report (LP slippage episodes, toxic traders, exposure), "
+        "market regime + macro, execution issues overnight, top 5 at-risk clients, "
         "stale deals over 14 days, my overdue tasks. Max 250 words, bullets."}], user="scheduler")
     notify("morning_brief", brief)
 
@@ -49,6 +60,8 @@ def job_morning_brief() -> None:
 # (name, every_n_minutes, weekday_only_hour or None, fn)
 JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("execution", 15, None, job_execution),
+    ("lp_slippage", 60, None, job_lp_slippage),
+    ("desk_report", 60 * 24, 6, job_desk_report),
     ("retention", 60 * 6, None, job_retention),
     ("pipeline", 60 * 24, None, job_pipeline),
     ("morning_brief", 60 * 24, 7, job_morning_brief),

@@ -50,7 +50,33 @@ flowchart LR
 | Personal trading | `trading.plan_trade`, `trading.trail` | Sizing by risk %, ATR hard stop, TP, max slippage and spread, daily-loss kill switch, open-risk cap. It produces plans only |
 | Ask anything across all of the above | Console → *Ask JARVIS* | Claude chains the tools together and every call is audited |
 
+## AI dealing desk (`jarvis/agents/dealing.py`)
+This covers what a dealing-desk risk SaaS does, plus the parts such products tend to leave out:
+
+| Desk question | Tool | How it answers |
+|---|---|---|
+| Hold LPs accountable for slippage: *what caused it, when it started, how long it lasted* | `dealing.slippage` | **Episodes** per LP and symbol, each with start, end, duration, volume, client cost by order type, and a cause backed by evidence. If the other LPs were fine in the same window, the cause is LP-specific. A quote age far above normal means a stale feed. Otherwise it's news or a fast market. LP-actionable episodes are listed first. |
+| Does an LP keep positive slippage? | LP scorecard → `adverse_share_of_slipped_pct` | Symmetric slippage sits around 50%. A figure well above that means the LP keeps positive slippage and passes on negative slippage. |
+| Daily, with weekly comparison | `dealing.slippage_week_compare` | Cost and average slippage per LP per day |
+| Who belongs in A-book vs B-book | `dealing.traders` | Markouts at 1s, 5s and 60s, holding time, news share, and a toxicity score from 0 to 100. **An account is proposed for B-book only when its losses are statistically significant (t < −2)**, so the desk never switches on noise. The result also shows what each switch would have earned. |
+| One clear daily picture | `dealing.desk_report` | Revenue, client P&L, active traders, volume, net exposure per symbol, slippage, toxic accounts, and recommended actions |
+| Check before approving a withdrawal | `dealing.account_report` | A one-click trader summary with behaviour flags |
+
+**Data contract (`fills` table):** `ts_request, ts_fill, account, group, equity, symbol, side, order_type, units, request_price, fill_price, pip_size, quote_to_usd, lp, quote_age_ms, mid_fill, mid_1s, mid_5s, mid_60s, markup_usd, commission_usd, client_pnl_usd, hold_seconds`. Request price and LP come from the bridge logs. Mid-price markouts come from your tick history. Write an adapter for your bridge export and your cTrader deal history.
+
+## Bot lab (`jarvis/agents/botlab.py`)
+Upload a cTrader log containing `RLOG`/`RLOG2` lines and the Bot lab reports:
+- Expectancy in R with a bootstrap 95% confidence interval and P(edge > 0)
+- Results by hour, by exit and by side
+- How often breakeven scratches a trade that had already reached 1R
+- An MFE-replay take-profit sweep (an upper bound only)
+- A plain verdict
+
+It also builds the cBot's `Events UTC` parameter from the economic calendar. See `bots/ctrader/REVIEW.md`.
+
 ## Automations you didn't ask for (in `jarvis/scheduler.py`)
+- **Every hour:** an LP slippage alert for any LP-actionable episode.
+- **Daily at 06:00:** the dealing-desk report.
 - **Every 15 minutes:** an execution alert when the fill rate drops below 98% or slippage passes the limit.
 - **Every 6 hours:** a retention scan that pushes the top 10 at-risk clients.
 - **Daily:** stale deals with no activity for more than 14 days.

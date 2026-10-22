@@ -79,3 +79,57 @@ def test_slippage_sign_is_adverse_positive():
 def test_registry_exposes_write_gated_tools():
     tools = {t.name: t for a in load_builtin_agents().values() for t in a.tools}
     assert tools["ops__draft_note"].writes and not tools["clients__at_risk"].writes
+
+
+# ---------------------------------------------------------------- dealing desk & bot lab
+from jarvis.agents.botlab import analyse, parse_rlog  # noqa: E402
+from jarvis.agents.dealing import classify_traders, lp_scorecard, prepare, slippage_episodes  # noqa: E402
+
+
+def _fill(ts, lp, slip, acc="A1", side="buy", age=50, mk1=0.0, hold=600.0, pnl=0.0):
+    sign = 1 if side == "buy" else -1
+    return dict(ts_request=ts, ts_fill=ts, account=acc, group="std", equity=1000, symbol="EURUSD", side=side,
+                order_type="market", units=10000, request_price=1.1, fill_price=1.1 + sign * slip * 1e-4,
+                pip_size=1e-4, quote_to_usd=1.0, lp=lp, quote_age_ms=age, mid_fill=1.1,
+                mid_1s=1.1 + sign * mk1 * 1e-4, mid_5s=1.1, mid_60s=1.1, markup_usd=1, commission_usd=1,
+                client_pnl_usd=pnl, hold_seconds=hold)
+
+
+def test_lp_specific_episode_found_and_ranked_first():
+    t0 = pd.Timestamp("2026-01-05 09:00")
+    rows = [_fill(t0 + pd.Timedelta(minutes=m), "LP-B", 2.0) for m in range(0, 10, 2)]
+    rows += [_fill(t0 + pd.Timedelta(minutes=m), "LP-A", 0.0) for m in range(0, 10, 2)]
+    rows += [_fill(t0 + pd.Timedelta(hours=3, minutes=m), "LP-A", 1.5) for m in range(3)]  # news window
+    ev = pd.DataFrame({"ts": [t0 + pd.Timedelta(hours=3)], "event": ["CPI"], "impact": ["high"]})
+    eps = slippage_episodes(prepare(pd.DataFrame(rows)), ev)
+    assert eps[0]["lp"] == "LP-B" and eps[0]["raise_with_lp"]
+    assert eps[0]["probable_cause"][0].startswith("LP-specific")
+    assert any(e["lp"] == "LP-A" and not e["raise_with_lp"] for e in eps)
+
+
+def test_asymmetric_lp_slippage_visible():
+    t0 = pd.Timestamp("2026-01-05 09:00")
+    rows = [_fill(t0, "LP-X", 1.0)] * 9 + [_fill(t0, "LP-X", -1.0)]
+    assert lp_scorecard(prepare(pd.DataFrame(rows)))[0]["adverse_share_of_slipped_pct"] == 90.0
+
+
+def test_latency_arb_is_toxic_and_loser_needs_significance():
+    t0 = pd.Timestamp("2026-01-05 09:00")
+    rng = np.random.default_rng(0)
+    rows = [_fill(t0, "L", 0, acc="ARB", mk1=1.0, hold=5, pnl=5) for _ in range(40)]
+    rows += [_fill(t0, "L", 0, acc="LOSER", pnl=float(rng.normal(-20, 10))) for _ in range(40)]
+    rows += [_fill(t0, "L", 0, acc="NOISE", pnl=float(rng.normal(-1, 50))) for _ in range(40)]
+    t = classify_traders(prepare(pd.DataFrame(rows)), pd.DataFrame(columns=["ts", "event", "impact"]))
+    assert t.loc["ARB", "profile"] == "toxic"
+    assert t.loc["LOSER", "recommendation"] == "B-book candidate"
+    assert t.loc["NOISE", "recommendation"] != "B-book candidate"
+
+
+def test_rlog_parser_and_verdicts():
+    lines = ["RLOG2,id,side,entryUtc,exitUtc,hours,R,mfeR,maeR,exit,hour,stopPips,spreadPips,slipPips,costPips,net"]
+    for i in range(50):
+        r = -1.0 if i % 2 else -0.2
+        lines.append(f"x | RLOG2,{i},Buy,2026-01-{1 + i % 28:02d} 08:00,2026-01-01 09:00,1,{r},0.5,1,StopLoss,8,10,2,0.1,0.5,-5")
+    out = analyse(parse_rlog("\n".join(lines)))
+    assert out["trades"] == 50 and out["expectancy_R"] == pytest.approx(-0.6)
+    assert "negative with 95% confidence" in out["verdict"][-1]

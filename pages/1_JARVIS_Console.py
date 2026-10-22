@@ -52,11 +52,12 @@ light = mac.get("risk_light", "unknown")
 k[4].metric("Macro light", {"green": "🟢", "amber": "🟡", "red": "🔴"}.get(light, "⚪") + f" {light}",
             f"VIX {mac.get('VIX', {}).get('last', '–')}")
 
-tabs = st.tabs(["💬 Ask JARVIS", "👥 Retention", "📈 Pipeline", "⚙️ Execution", "🌍 Markets",
-                "🎯 Trade planner", "🗂 Tasks", "📜 Activity"])
+tabs = st.tabs(["💬 Ask JARVIS", "🏦 Dealing desk", "🧪 Bot lab", "👥 Retention", "📈 Pipeline",
+                "⚙️ Execution", "🌍 Markets", "🎯 Trade planner", "🗂 Tasks", "📜 Activity"])
+T_CHAT, T_DEAL, T_LAB, T_RET, T_PIPE, T_EXE, T_MKT, T_PLAN, T_TASK, T_LOG = tabs
 
 # --- Chat ------------------------------------------------------------------
-with tabs[0]:
+with T_CHAT:
     st.caption(f"Model: `{settings.model}` · effort `{settings.effort}` · tools: "
                + ", ".join(t.name for a in A.values() for t in a.tools))
     hist = st.session_state.setdefault("jarvis_chat", [])
@@ -76,8 +77,106 @@ with tabs[0]:
             st.markdown(answer)
         hist.append({"role": "assistant", "content": answer})
 
+# --- Dealing desk ------------------------------------------------------------
+with T_DEAL:
+    desk = run("dealing", "desk_report")
+    if "error" in desk:
+        st.error(desk["error"])
+    else:
+        st.subheader(f"Desk report · session {desk['session']}")
+        c = st.columns(5)
+        c[0].metric("Revenue", f"${desk['revenue_usd']:,.0f}")
+        c[1].metric("Client P&L", f"${desk['client_pnl_usd']:,.0f}")
+        c[2].metric("Active traders", desk["active_traders"])
+        c[3].metric("Volume", f"${desk['volume_usd'] / 1e6:,.1f}M")
+        c[4].metric("Slippage cost", f"${desk['slippage_cost_usd']:,.0f}", f"{desk['slippage_episodes']} episodes",
+                    delta_color="off")
+        st.markdown("**Recommended actions**")
+        for a in desk["recommended_actions"] or ["Nothing needs attention."]:
+            st.markdown(f"- {a}")
+        exp = pd.Series(desk["net_client_exposure_usd"])
+        st.plotly_chart(go.Figure(go.Bar(x=exp.index, y=exp.values,
+                                         marker_color=[ACCENT if v >= 0 else "#FF5252" for v in exp.values]))
+                        .update_layout(height=240, title="Net client exposure by symbol (USD)", margin=dict(t=40, b=0)),
+                        width="stretch")
+
+    st.markdown("#### Slippage root cause")
+    scope = st.radio("Scope", ["latest session", "all data"], horizontal=True)
+    sl = run("dealing", "slippage", day="all" if scope == "all data" else "")
+    if "error" not in sl:
+        st.markdown("**LP scorecard** – adverse share well above 50% means the LP keeps positive slippage")
+        st.dataframe(pd.DataFrame(sl["lp_scorecard"]), hide_index=True, width="stretch")
+        st.markdown("**Episodes** (LP-actionable first)")
+        eps = pd.DataFrame(sl["episodes"])
+        if len(eps):
+            eps["probable_cause"] = eps["probable_cause"].str.join("; ")
+            st.dataframe(eps, hide_index=True, width="stretch")
+        else:
+            st.info("No slippage episodes.")
+        wk = pd.DataFrame(run("dealing", "slippage_week_compare"))
+        if len(wk):
+            fig = go.Figure([go.Bar(name=lp, x=g["day"], y=g["cost_usd"]) for lp, g in wk.groupby("lp")])
+            st.plotly_chart(fig.update_layout(barmode="group", height=260, title="Daily slippage cost by LP",
+                                              margin=dict(t=40, b=0)), width="stretch")
+
+    st.markdown("#### Traders & book")
+    tr = pd.DataFrame(run("dealing", "traders", limit=500))
+    if len(tr):
+        st.plotly_chart(go.Figure(go.Scatter(
+            x=tr["mk1"], y=tr["client_pnl"], mode="markers", text=tr["account"] + " · " + tr["recommendation"],
+            marker=dict(size=(tr["trades"] ** 0.5) * 2, color=tr["toxicity"], colorscale="RdYlGn_r", showscale=True,
+                        colorbar=dict(title="toxicity"))))
+            .update_layout(height=340, xaxis_title="1s markout (pips, + = client wins instantly)",
+                           yaxis_title="client P&L (USD)", margin=dict(t=10, b=0)), width="stretch")
+        st.dataframe(tr, hide_index=True, width="stretch",
+                     column_config={"toxicity": st.column_config.ProgressColumn("toxicity", min_value=0, max_value=100)})
+        st.caption("B-book moves are recommendations only: they need dealing-desk and compliance sign-off "
+                   "and must match your licence and conflicts-of-interest policy.")
+    acc = st.text_input("One-click account report (e.g. before approving a withdrawal)")
+    if acc:
+        st.json(run("dealing", "account_report", account=acc.strip()))
+
+# --- Bot lab ---------------------------------------------------------------------
+with T_LAB:
+    st.caption("Upload a cTrader log (backtest or live) containing RLOG/RLOG2 lines from the scalper. "
+               "Without an upload the synthetic demo log is used.")
+    up = st.file_uploader("cBot log", type=["txt", "log", "csv"])
+    if up is not None:
+        from jarvis.agents.botlab import analyse, parse_rlog
+
+        lab = analyse(parse_rlog(up.read().decode(errors="ignore")))
+    else:
+        lab = run("botlab", "analyse_log")
+    if "error" in lab:
+        st.error(lab["error"])
+    else:
+        c = st.columns(5)
+        c[0].metric("Trades", lab["trades"])
+        c[1].metric("Expectancy (R)", lab["expectancy_R"], f"95% CI {lab['expectancy_95ci']}", delta_color="off")
+        c[2].metric("P(edge > 0)", lab["prob_edge_positive"])
+        c[3].metric("Max DD (R)", lab["max_drawdown_R"])
+        c[4].metric("Profit factor", lab["profit_factor"])
+        for v in lab["verdict"]:
+            st.warning(v)
+        h = pd.DataFrame(lab["by_hour"])
+        st.plotly_chart(go.Figure(go.Bar(x=h["hour"], y=h["expectancy"], text=h["trades"],
+                                         marker_color=[ACCENT if v >= 0 else "#FF5252" for v in h["expectancy"]]))
+                        .update_layout(height=260, title="Expectancy by entry hour (UTC) · labels = trades",
+                                       margin=dict(t=40, b=0)), width="stretch")
+        c1, c2 = st.columns(2)
+        c1.markdown("**By exit**")
+        c1.dataframe(pd.DataFrame(lab["by_exit"]), hide_index=True, width="stretch")
+        c2.markdown("**TP sweep (MFE replay – upper bound, re-backtest before using)**")
+        c2.dataframe(pd.DataFrame(lab["tp_sweep_mfe_replay"]), hide_index=True, width="stretch")
+        st.caption(f"Trades scratched after reaching 1R: {lab['breakeven_scratched_after_1R']} · "
+                   f"MFE quantiles (R): {lab['mfe_quantiles_R']}"
+                   + (f" · costs = {lab['cost_share_of_stop_pct']}% of the stop" if "cost_share_of_stop_pct" in lab else ""))
+    ev = run("botlab", "events_param")
+    st.text_input("cBot 'Events UTC' parameter from the calendar (next 60 days, high impact)",
+                  ev.get("param", "") or "(no upcoming events in the loaded calendar)")
+
 # --- Retention -------------------------------------------------------------
-with tabs[1]:
+with T_RET:
     min_s = st.slider("Minimum risk score", 0, 100, 35)
     rows = run("clients", "at_risk", min_score=min_s, limit=100)
     if isinstance(rows, list) and rows:
@@ -92,7 +191,7 @@ with tabs[1]:
         st.info(rows if isinstance(rows, dict) else "No clients above this score.")
 
 # --- Pipeline --------------------------------------------------------------
-with tabs[2]:
+with T_PIPE:
     if "error" in pipe:
         st.error(pipe["error"])
     else:
@@ -106,7 +205,7 @@ with tabs[2]:
         c2.dataframe(pd.DataFrame(pipe["best_sources"]), hide_index=True, width="stretch")
 
 # --- Execution -------------------------------------------------------------
-with tabs[3]:
+with T_EXE:
     if "error" in exe:
         st.error(exe["error"])
     else:
@@ -120,7 +219,7 @@ with tabs[3]:
         st.dataframe(fails, hide_index=True, width="stretch")
 
 # --- Markets ---------------------------------------------------------------
-with tabs[4]:
+with T_MKT:
     tick = st.text_input("Watchlist (Yahoo tickers)", "EURUSD=X,GBPUSD=X,USDJPY=X,XAUUSD=X,^GSPC,BTC-USD")
     if st.button("Analyse regime"):
         res = run("market", "regime", tickers=tick)
@@ -128,7 +227,7 @@ with tabs[4]:
     st.json(mac, expanded=False)
 
 # --- Trade planner ---------------------------------------------------------
-with tabs[5]:
+with T_PLAN:
     st.caption("Plans only – nothing is sent to a platform. Use a live quote from your terminal. "
                "Personal-account-dealing rules may apply.")
     with st.form("plan"):
@@ -155,7 +254,7 @@ with tabs[5]:
                f"trail {settings.trail_atr_mult}×ATR · max slippage {settings.max_slippage_pips} pips")
 
 # --- Tasks -----------------------------------------------------------------
-with tabs[6]:
+with T_TASK:
     t = run("ops", "tasks")
     if "error" in t:
         st.error(t["error"])
@@ -166,7 +265,7 @@ with tabs[6]:
         st.dataframe(pd.DataFrame(t["this_week"]), hide_index=True, width="stretch")
 
 # --- Activity / audit --------------------------------------------------------
-with tabs[7]:
+with T_LOG:
     rows = audit.recent(100)
     for r in rows:
         r["payload"] = json.loads(r["payload"])
