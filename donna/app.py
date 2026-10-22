@@ -296,7 +296,7 @@ def exec_send_reply(row: sqlite3.Row) -> str:
 def exec_broadcast(row: sqlite3.Row) -> str:
     if not SIGNAL_TARGETS:
         raise channels.ChannelError("DONNA_SIGNAL_TARGETS not configured")
-    res = channels.broadcast(f"{row['preview_text']}\n\n{SIGNAL_DISCLAIMER}", SIGNAL_TARGETS, "Signal")
+    res = channels.broadcast(f"{row['preview_text']}\n\n{SIGNAL_DISCLAIMER}", SIGNAL_TARGETS, "TradingView signal")
     failed = {k: v for k, v in res.items() if v.startswith("ERROR")}
     if len(failed) == len(res):
         raise channels.ChannelError(json.dumps(failed))

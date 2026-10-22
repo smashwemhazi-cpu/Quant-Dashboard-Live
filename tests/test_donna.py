@@ -144,3 +144,47 @@ def test_lead_scorer_ignores_substrings_and_promoters():
     assert score_message("is it possible the bible is visible").value == 0
     assert score_message("Join my VIP signals t.me/abc for FIX API").value == 0
     assert score_message("Looking for a broker with FIX API for 50 lots/month?").value >= 5
+
+
+def test_discord_embeds_named_webhook_and_rate_limit(monkeypatch):
+    from donna import channels
+
+    monkeypatch.setenv("DONNA_DISCORD_WEBHOOK_REPORTS", "https://discord.test/hook")
+    calls = []
+
+    class R:
+        def __init__(self, code, body):
+            self.status_code, self._b, self.text = code, body, str(body)
+
+        def json(self):
+            return self._b
+
+    def fake_post(url, params=None, json=None, timeout=None):
+        calls.append((url, json))
+        return R(429, {"retry_after": 0}) if len(calls) == 1 else R(200, {"id": str(len(calls))})
+
+    monkeypatch.setattr(channels.requests, "post", fake_post)
+    monkeypatch.setattr(channels.time, "sleep", lambda s: None)
+    text = "\n".join(f"Gold (XAU): $4,2{i:02d}.00 | day +0.40%" for i in range(300)) + "\n```evil```"
+    out = channels.broadcast(text, ["discord:reports"], title="Vertex 1 daily_wrap")
+    assert out["discord:reports"].startswith("discord:reports msg")
+    sent = [j for _, j in calls[1:]]
+    assert len(sent) >= 2 and sent[0]["embeds"][0]["title"] == "Vertex 1 daily_wrap"
+    assert all(len(j["embeds"][0]["description"]) <= 4096 for j in sent)
+    assert all(j["allowed_mentions"] == {"parse": []} for j in sent)
+    assert "```evil```" not in "".join(j["embeds"][0]["description"] for j in sent)
+    assert channels.broadcast("x", ["discord:missing"])["discord:missing"].startswith("ERROR")
+
+
+def test_broadcast_survives_network_failure(monkeypatch):
+    from donna import channels
+
+    monkeypatch.setenv("DONNA_DISCORD_WEBHOOK_URL", "https://discord.test/hook")
+
+    def boom(*a, **k):
+        raise channels.requests.ConnectionError("proxy said no")
+
+    monkeypatch.setattr(channels.requests, "post", boom)
+    out = channels.broadcast("hi", ["discord", "slack:#desk"])
+    assert out["discord"] == "ERROR discord unreachable: ConnectionError"
+    assert out["slack:#desk"].startswith("ERROR")  # other targets still attempted

@@ -27,7 +27,8 @@ DONNA_TELEGRAM_APPROVER_IDS=<your Telegram user id>
 # Slack (bot token with chat:write, invited to the channel)
 DONNA_SLACK_BOT_TOKEN=xoxb-...
 # Discord / Teams (channel webhook URLs; Teams: Workflows "post to channel when a webhook request is received")
-DONNA_DISCORD_WEBHOOK_URL=...
+DONNA_DISCORD_WEBHOOK_REPORTS=...    # see 1b
+DONNA_DISCORD_WEBHOOK_SIGNALS=...
 DONNA_TEAMS_WEBHOOK_URL=...
 # Email (Gmail: 2FA + app password, or your mail server)
 DONNA_SMTP_HOST=smtp.gmail.com
@@ -35,8 +36,8 @@ DONNA_SMTP_PORT=465
 DONNA_SMTP_USER=desk@vertex1...
 DONNA_SMTP_PASSWORD=<app password>
 # Where things go
-DONNA_SIGNAL_TARGETS=discord,telegram:-100<public channel>     # approved TradingView signals
-JARVIS_REPORT_TARGETS=telegram:-100<desk group>,email:exec@vertex1...,slack:#desk
+DONNA_SIGNAL_TARGETS=discord:signals,telegram:-100<public channel>     # approved TradingView signals
+JARVIS_REPORT_TARGETS=discord:reports,telegram:-100<desk group>,email:exec@vertex1...
 DONNA_DEMO_DEPLOY_DIR=/srv/ctrader-demo/cbots                   # approved cBots land here (DEMO only)
 DONNA_REP_NAME="Simba from the Vertex 1 desk"
 DONNA_FIRM_DISCLOSURE="Vertex 1 Brokers (FSP <number>)"
@@ -44,6 +45,28 @@ DONNA_URL=http://127.0.0.1:8080
 ```
 Register the Telegram approval webhook once:
 `https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<host>/api/telegram/webhook&secret_token=<DONNA_TELEGRAM_WEBHOOK_SECRET>`
+
+## 1b. Discord, step by step
+1. **Create the channels.** In your Discord server, make two channels, for example `#desk-reports` (private) and `#signals`.
+2. **Create a webhook for each.** Open the channel, then go to ⚙ Edit Channel → Integrations → Webhooks → New Webhook. Name it DONNA and choose **Copy Webhook URL**.
+3. **Put the URLs in `.env` on the server.** Never put them in code or in chat: anyone holding the URL can post as DONNA.
+   ```bash
+   DONNA_DISCORD_WEBHOOK_REPORTS=https://discord.com/api/webhooks/...   # target "discord:reports"
+   DONNA_DISCORD_WEBHOOK_SIGNALS=https://discord.com/api/webhooks/...   # target "discord:signals"
+   JARVIS_REPORT_TARGETS=discord:reports,telegram:-100<desk group>
+   DONNA_SIGNAL_TARGETS=discord:signals
+   ```
+4. **Test the webhook.** Run `python -m donna.channels test discord:reports`. You should see the test message in the channel, and the command prints `discord:reports msg <id>`. If the command prints `ERROR ...`, the text after ERROR tells you why. HTTP 401 or 404 means the URL is wrong or the webhook was deleted.
+5. **Check the reports.** Send one for real with `python -c "from jarvis.core.registry import load_builtin_agents as l; print(l()['briefing'].daily_wrap(send=True)['delivery'])"`.
+
+**How the reports look:**
+- Each report arrives as an embed with a title and a monospace body, so the columns line up.
+- Long reports are split across several messages; nothing is cut off.
+- `@everyone` and `@here` pings are blocked.
+- Discord's rate limit is handled with a retry.
+- If Discord is down, the other channels still get the report.
+
+**To stop posting to Discord:** remove `discord...` from `JARVIS_REPORT_TARGETS` and `DONNA_SIGNAL_TARGETS`, or delete the webhook in Discord, which stops it immediately.
 
 ## 2. Processes (systemd, run as a non-root user)
 ```bash

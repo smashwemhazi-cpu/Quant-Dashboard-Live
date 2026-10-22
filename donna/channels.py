@@ -4,7 +4,9 @@ ChannelError on any failure so callers can mark an action FAILED honestly.
 Env:
   DONNA_TELEGRAM_BOT_TOKEN                   bot that posts to internal chats / your channels
   DONNA_SLACK_BOT_TOKEN                      xoxb-... with chat:write
-  DONNA_DISCORD_WEBHOOK_URL                  channel webhook
+  DONNA_DISCORD_WEBHOOK_URL                  default channel webhook (target "discord")
+  DONNA_DISCORD_WEBHOOK_<NAME>               named webhooks (target "discord:<name>"), e.g.
+                                             DONNA_DISCORD_WEBHOOK_REPORTS, DONNA_DISCORD_WEBHOOK_SIGNALS
   DONNA_TEAMS_WEBHOOK_URL                    Teams Workflows "post to a channel when a webhook request is received" URL
   DONNA_SMTP_HOST / _PORT / _USER / _PASSWORD / _FROM   e.g. smtp.gmail.com:465 + an app password
 
@@ -16,6 +18,8 @@ from __future__ import annotations
 
 import os
 import smtplib
+import sys
+import time
 from email.message import EmailMessage
 from typing import Optional
 
@@ -86,12 +90,40 @@ def send_slack(channel: str, text: str, thread_ts: Optional[str] = None) -> str:
     return f"slack {channel} ts {body.get('ts')}"
 
 
-def send_discord(text: str) -> str:
-    url = _env("DONNA_DISCORD_WEBHOOK_URL")
-    for part in chunks(text, 2000):
-        _check(requests.post(url, json={"content": part, "allowed_mentions": {"parse": []}}, timeout=TIMEOUT),
-               "discord")
-    return "discord ok"
+DISCORD_EMBED_LIMIT = 4096 - 8   # embed description limit minus the code-block fences
+DISCORD_COLOURS = {"default": 0x00E676, "alert": 0xFF5252, "info": 0x5865F2}
+FENCE = "`" * 3
+
+
+def _discord_post(url: str, payload: dict) -> dict:
+    for _ in range(3):
+        r = requests.post(url, params={"wait": "true"}, json=payload, timeout=TIMEOUT)
+        if r.status_code == 429:  # rate limited: Discord says how long to wait
+            time.sleep(float(r.json().get("retry_after", 1)) + 0.25)
+            continue
+        return _check(r, "discord").json()
+    raise ChannelError("discord: still rate limited after 3 attempts")
+
+
+def send_discord(text: str, title: str = "DONNA", webhook: str = "", colour: str = "default") -> str:
+    """Post as embeds with a monospace body so report columns line up. `webhook` picks a named
+    webhook (DONNA_DISCORD_WEBHOOK_<NAME>); blank uses DONNA_DISCORD_WEBHOOK_URL."""
+    url = _env(f"DONNA_DISCORD_WEBHOOK_{webhook.upper()}" if webhook else "DONNA_DISCORD_WEBHOOK_URL")
+    body = text.replace(FENCE, "\u02cb" * 3)  # look-alike so text can't break out of the code block
+    parts = chunks(body, DISCORD_EMBED_LIMIT)
+    ids = []
+    for n, part in enumerate(parts, 1):
+        embed = {"description": f"{FENCE}\n{part}\n{FENCE}",
+                 "color": DISCORD_COLOURS.get(colour, DISCORD_COLOURS["default"])}
+        if n == 1:
+            embed["title"] = title[:256]
+        if n == len(parts):
+            embed["footer"] = {"text": "DONNA | internal"}
+            embed["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # one embed per message keeps every message under Discord's 6000-character total
+        ids.append(_discord_post(url, {"username": "DONNA", "embeds": [embed],
+                                       "allowed_mentions": {"parse": []}}).get("id", "?"))
+    return f"discord{':' + webhook if webhook else ''} msg {','.join(ids)}"
 
 
 def send_teams(text: str, title: str = "DONNA") -> str:
@@ -138,7 +170,7 @@ def broadcast(text: str, targets: list[str], title: str = "DONNA") -> dict[str, 
             elif kind == "slack":
                 results[t] = send_slack(arg, text)
             elif kind == "discord":
-                results[t] = send_discord(text)
+                results[t] = send_discord(text, title, webhook=arg)
             elif kind == "teams":
                 results[t] = send_teams(text, title)
             elif kind == "email":
@@ -147,4 +179,15 @@ def broadcast(text: str, targets: list[str], title: str = "DONNA") -> dict[str, 
                 results[t] = f"ERROR unknown channel '{kind}'"
         except ChannelError as e:
             results[t] = f"ERROR {e}"
+        except requests.RequestException as e:  # DNS, proxy, TLS, timeout - report, don't crash
+            results[t] = f"ERROR {kind} unreachable: {type(e).__name__}"
     return results
+
+
+if __name__ == "__main__":
+    # python -m donna.channels test discord:reports   -> sends a test message, prints the result
+    if len(sys.argv) == 3 and sys.argv[1] == "test":
+        print(broadcast("DONNA channel test - if you can read this, delivery works.\n"
+                        "Columns   | line up | in a code block", [sys.argv[2]], title="DONNA test"))
+    else:
+        print("usage: python -m donna.channels test <target>   e.g. discord, discord:reports, telegram:-100123")
