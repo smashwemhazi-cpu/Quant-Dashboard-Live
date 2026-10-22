@@ -125,7 +125,7 @@ def send_discord(text: str, title: str = "DONNA", webhook: str = "", colour: str
             embed["footer"] = {"text": "DONNA | internal"}
             embed["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         # one embed per message keeps every message under Discord's 6000-character total
-        ids.append(_discord_post(url, {"username": "DONNA", "embeds": [embed],
+        ids.append(_discord_post(url, {"username": os.getenv("DONNA_DISCORD_NAME", "D.O.N.N.A"), "embeds": [embed],
                                        "allowed_mentions": {"parse": []}}).get("id", "?"))
     return f"discord{':' + webhook if webhook else ''} msg {','.join(ids)}"
 
