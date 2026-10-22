@@ -34,7 +34,8 @@ class ChannelError(RuntimeError):
 
 
 def _env(name: str) -> str:
-    v = os.getenv(name, "")
+    # tolerate copy-paste debris: surrounding spaces, quotes or <>
+    v = os.getenv(name, "").strip().strip("\"'<>").strip()
     if not v:
         raise ChannelError(f"{name} not configured")
     return v
@@ -108,7 +109,10 @@ def _discord_post(url: str, payload: dict) -> dict:
 def send_discord(text: str, title: str = "DONNA", webhook: str = "", colour: str = "default") -> str:
     """Post as embeds with a monospace body so report columns line up. `webhook` picks a named
     webhook (DONNA_DISCORD_WEBHOOK_<NAME>); blank uses DONNA_DISCORD_WEBHOOK_URL."""
-    url = _env(f"DONNA_DISCORD_WEBHOOK_{webhook.upper()}" if webhook else "DONNA_DISCORD_WEBHOOK_URL")
+    name = f"DONNA_DISCORD_WEBHOOK_{webhook.upper()}" if webhook else "DONNA_DISCORD_WEBHOOK_URL"
+    url = _env(name)
+    if not url.startswith(("https://discord.com/api/webhooks/", "https://discordapp.com/api/webhooks/")):
+        raise ChannelError(f"{name} is not a Discord webhook URL (must start with https://discord.com/api/webhooks/)")
     body = text.replace(FENCE, "\u02cb" * 3)  # look-alike so text can't break out of the code block
     parts = chunks(body, DISCORD_EMBED_LIMIT)
     ids = []

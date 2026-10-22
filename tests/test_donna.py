@@ -149,7 +149,7 @@ def test_lead_scorer_ignores_substrings_and_promoters():
 def test_discord_embeds_named_webhook_and_rate_limit(monkeypatch):
     from donna import channels
 
-    monkeypatch.setenv("DONNA_DISCORD_WEBHOOK_REPORTS", "https://discord.test/hook")
+    monkeypatch.setenv("DONNA_DISCORD_WEBHOOK_REPORTS", "https://discord.com/api/webhooks/1/test")
     calls = []
 
     class R:
@@ -179,7 +179,7 @@ def test_discord_embeds_named_webhook_and_rate_limit(monkeypatch):
 def test_broadcast_survives_network_failure(monkeypatch):
     from donna import channels
 
-    monkeypatch.setenv("DONNA_DISCORD_WEBHOOK_URL", "https://discord.test/hook")
+    monkeypatch.setenv("DONNA_DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1/test")
 
     def boom(*a, **k):
         raise channels.requests.ConnectionError("proxy said no")
@@ -188,3 +188,13 @@ def test_broadcast_survives_network_failure(monkeypatch):
     out = channels.broadcast("hi", ["discord", "slack:#desk"])
     assert out["discord"] == "ERROR discord unreachable: ConnectionError"
     assert out["slack:#desk"].startswith("ERROR")  # other targets still attempted
+
+
+def test_discord_url_debris_and_bad_url(monkeypatch):
+    from donna import channels
+
+    monkeypatch.setenv("DONNA_DISCORD_WEBHOOK_REPORTS", '  "https://discord.com/api/webhooks/1/abc"  ')
+    assert channels._env("DONNA_DISCORD_WEBHOOK_REPORTS") == "https://discord.com/api/webhooks/1/abc"
+    monkeypatch.setenv("DONNA_DISCORD_WEBHOOK_REPORTS", "paste-here")
+    out = channels.broadcast("x", ["discord:reports"])["discord:reports"]
+    assert "not a Discord webhook URL" in out
