@@ -17,6 +17,7 @@ from pathlib import Path
 import pandas as pd
 
 _ROOT = Path(__file__).resolve().parents[1]
+MIN_TV_BARS = int(os.getenv("JARVIS_MIN_TV_BARS", "260"))
 TV_EXPORT_DIR = Path(os.getenv("JARVIS_TV_EXPORT_DIR", str(_ROOT / "data" / "tradingview")))
 
 
@@ -81,7 +82,9 @@ def _from_yahoo(inst: Instrument, period: str) -> pd.DataFrame:
 def daily_bars(inst: Instrument, period: str = "6y") -> tuple[pd.DataFrame, str]:
     """Returns (date-indexed OHLC, source label)."""
     tv = pd.concat([_from_export(inst), _from_webhook(inst)], ignore_index=True)
-    if len(tv):
+    # Only trust TradingView once it has real history (CSV export); a few webhook days alone
+    # would starve the predictor and 5-day stats, so fall back to Yahoo until then.
+    if len(tv) >= MIN_TV_BARS:
         df, src = tv, "TradingView"
     else:
         try:

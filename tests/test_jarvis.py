@@ -153,3 +153,16 @@ def test_channel_chunking_respects_limits():
     text = "\n".join(f"line {i} " + "x" * 50 for i in range(300))
     parts = chunks(text, 4096)
     assert all(len(p) <= 4096 for p in parts) and "".join(parts) == text
+
+
+def test_short_tradingview_history_falls_back_to_yahoo(monkeypatch):
+    from jarvis.adapters import market as m
+    few = pd.DataFrame({"date": pd.bdate_range("2026-01-01", periods=5), "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0})
+    many = pd.DataFrame({"date": pd.bdate_range("2020-01-01", periods=400), "open": 2.0, "high": 2.0, "low": 2.0, "close": 2.0})
+    monkeypatch.setattr(m, "_from_export", lambda i: pd.DataFrame())
+    monkeypatch.setattr(m, "_from_webhook", lambda i: few)
+    monkeypatch.setattr(m, "_from_yahoo", lambda i, p: many)
+    df, src = m.daily_bars(m.WATCHLIST[0])
+    assert src.startswith("Yahoo") and len(df) == 400
+    monkeypatch.setattr(m, "_from_export", lambda i: many)
+    assert m.daily_bars(m.WATCHLIST[0])[1] == "TradingView"
