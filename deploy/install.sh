@@ -10,7 +10,7 @@ apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip nginx >/dev/null
 
 id vertex1 &>/dev/null || useradd --system --home /var/lib/vertex1 --shell /usr/sbin/nologin vertex1
-install -d -o vertex1 -g vertex1 -m 750 /var/lib/vertex1 /var/lib/vertex1/data /var/lib/vertex1/generated /var/lib/vertex1/tradingview
+install -d -o vertex1 -g vertex1 -m 750 /var/lib/vertex1 /var/lib/vertex1/data /var/lib/vertex1/generated /var/lib/vertex1/tradingview /var/lib/vertex1/inbox
 install -d -o root -g vertex1 -m 750 /etc/vertex1 /opt/vertex1
 
 # code: replace atomically, keep the previous release for rollback

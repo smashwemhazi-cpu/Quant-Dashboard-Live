@@ -12,6 +12,7 @@ streamlit==1.66.1
 yfinance==1.7.0
 psycopg2-binary==2.9.13
 psutil==7.2.2
+openpyxl==3.1.5
 Telethon==1.45.0
 # Optional - only for /api/strategy/generate (not installed by default, pulls many packages):
 # crewai

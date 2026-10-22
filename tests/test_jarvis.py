@@ -166,3 +166,56 @@ def test_short_tradingview_history_falls_back_to_yahoo(monkeypatch):
     assert src.startswith("Yahoo") and len(df) == 400
     monkeypatch.setattr(m, "_from_export", lambda i: many)
     assert m.daily_bars(m.WATCHLIST[0])[1] == "TradingView"
+
+
+def test_backoffice_ingests_ctrader_and_syntellicore_exports(tmp_path, monkeypatch):
+    from jarvis.agents import backoffice as bo
+
+    box = tmp_path / "inbox"
+    box.mkdir()
+    monkeypatch.setenv("JARVIS_INBOX_DIR", str(box))
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    cols = ["Trader Account", "Group", "Deposit currency", "Balance", "Credit", "Equity", "Margin",
+            "Net Unrealized PnL (A-Book)", "Net Unrealized PnL (B-Book)"]
+    day1 = [[1, "PAMM", "USD", 9000, 0, 9000, 0, 0, 0], [2, "Std", "USD", 400, 300, 320, 290, -80, 0],
+            [3, "Std", "USD", 0, 0, 0, 0, 0, 0], [4, "Std", "USD", 1000, 0, 1000, 0, 0, 0]]
+    pd.DataFrame(day1, columns=cols).to_csv(box / "cta_EndOfDayReport_2026-10-21_21-00.csv", index=False)
+    (box / "Performance-Overview-KPIs-2026-10-21.csv").write_text(
+        '*|id|*,*|caption_3|*,*|value|*\n"1","Leads","141"\n"2","FTDs","14"\n"6","Deposits ($)","32,201.21"\n')
+    (box / "Customer-Documents-2026-10-21.csv").write_bytes(
+        ('*|date|*,*|customer_no|*,*|assigned_to|*,*|first_name|*,*|last_name|*,*|type|*,*|document_status|*,'
+         '*|verification_date|*,*|expiration_date|*\n'
+         '"2026-10-01 10:00:00.0","CU1","0","QA","Automation","wire","Pending","1900-01-01 00:00:00.0","1900-01-01 00:00:00.0"\n'
+         '"2026-10-01 10:00:00.0","CU2","0","Zo\xeb","A","wire","Pending","1900-01-01 00:00:00.0","1900-01-01 00:00:00.0"\n'
+         '"2026-10-01 10:00:00.0","CU3","0","B","C","Utility Bill","Rejected","1900-01-01 00:00:00.0","1900-01-01 00:00:00.0"\n'
+         '"2026-10-02 10:00:00.0","CU3","0","B","C","Utility Bill","Verified","2026-10-02 00:00:00.0","1900-01-01 00:00:00.0"\n'
+         '"2026-10-01 10:00:00.0","CU4","0","D","E","Selfie","Rejected","1900-01-01 00:00:00.0","1900-01-01 00:00:00.0"\n'
+         ).encode("cp1252"))
+    res = bo.BackOfficeAgent().ingest()["files"]
+    assert sorted(r["kind"] for r in res) == ["docs", "eod", "kpi"] and not list(box.glob("*.csv"))
+
+    b = bo.book_summary()
+    assert b["funded"] == 3 and b["margin_alerts"][0]["account"] == "2" and b["credit_heavy"][0]["account"] == "2"
+    assert bo.kpi_summary()["kpis"]["Deposits ($)"] == pytest.approx(32201.21)
+    q = bo.kyc_summary(pd.Timestamp("2026-10-22"))
+    assert q["pending_customers"] == 1 and q["test_pending"] == 1      # QA Automation excluded
+    assert q["rejected_open"] == {"CU4": "Selfie"}                      # CU3 re-uploaded and verified
+
+    day2 = [r[:] for r in day1]
+    day2[2][3:6] = [500, 0, 500]          # newly funded
+    day2[3][3:6] = [0, 0, 0]              # emptied
+    day2[0][5] = 6000                     # -33% equity
+    pd.DataFrame(day2, columns=cols).to_csv(box / "cta_EndOfDayReport_2026-10-22_21-00.csv", index=False)
+    bo.BackOfficeAgent().ingest()
+    b = bo.book_summary()
+    assert b["newly_funded"] == ["3"] and b["emptied"] == ["4"] and b["drawdowns"][0]["account"] == "1"
+    text = "\n".join(bo.report_lines())
+    assert "Zo" not in text and "Automation" not in text               # never names in reports
+    assert "retention call" in text and "near stop-out" in text
+
+
+def test_backoffice_missing_data_says_no_data(tmp_path, monkeypatch):
+    from jarvis.agents import backoffice as bo
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "empty.db"))
+    assert all("NO DATA" in line for line in bo.report_lines() if line and ":" in line[:12])

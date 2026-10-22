@@ -8,3 +8,4 @@ yfinance
 anthropic>=2.1
 pytest
 psutil
+openpyxl

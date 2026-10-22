@@ -167,6 +167,16 @@ def desk() -> list[str]:
     return out + (d["recommended_actions"] or ["No toxic flow or LP slippage episodes found in the data received."])
 
 
+def business() -> list[str]:
+    from jarvis.agents import backoffice
+
+    try:
+        backoffice.BackOfficeAgent().ingest()  # pick up anything dropped since the last run
+        return backoffice.report_lines()
+    except Exception as e:
+        return [f"NO DATA - back office section failed ({type(e).__name__}: {e})"]
+
+
 def outlook(rows: list[dict[str, Any]], log: bool) -> list[dict[str, Any]]:
     res = []
     for r in rows:
@@ -205,7 +215,7 @@ def render_morning() -> tuple[str, dict[str, Any]]:
     for cat, items in nw.items():
         L.append(f"{cat.title()}:")
         L += [f" - {x['title']}" for x in items] or [" - none in the last 12h"]
-    L += ["", "CRM"] + crm() + ["", "DESK PRIORITIES"] + desk()
+    L += ["", "CRM"] + crm() + ["", "BUSINESS (back office)"] + business() + ["", "DESK PRIORITIES"] + desk()
     L += ["", LINE, "Internal use only. Predictor output is statistical and not a trading instruction."]
     return "\n".join(L), {"telemetry": t, "outlook": ol, "news": nw}
 
@@ -235,6 +245,7 @@ def render_wrap() -> tuple[str, dict[str, Any]]:
     for cat, items in nw.items():
         L.append(f"{cat.title()}:")
         L += [f" - {x['title']}" for x in items] or [" - none"]
+    L += ["", "BUSINESS (back office)"] + business()
     L += ["", "PREDICTOR SCORECARD (last 60 days, live predictions only)"]
     L += [f"{x['symbol']}: {x['scored']} scored | hit {x['hit_rate']:.0%} | Brier {x['brier']:.3f} (coin flip = 0.250)"
           for x in rec] or ["No scored predictions yet - the track record starts with the first morning dispatch."]

@@ -47,6 +47,12 @@ def job_lp_slippage() -> None:
         notify("lp_slippage_alert", eps[:5])
 
 
+def job_backoffice_ingest() -> None:
+    r = agents()["backoffice"].ingest()
+    if r.get("files"):
+        notify("backoffice_ingest", r)
+
+
 def job_morning_dispatch() -> None:
     notify("morning_dispatch", agents()["briefing"].morning_dispatch(send=True).get("delivery"))
 
@@ -68,6 +74,7 @@ def job_morning_brief() -> None:
 # (name, every_n_minutes, weekday_only_hour or None, fn)
 JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("execution", 15, None, job_execution),
+    ("backoffice_ingest", 15, None, job_backoffice_ingest),
     ("lp_slippage", 60, None, job_lp_slippage),
     ("desk_report", 60 * 24, 6, job_desk_report),
     ("retention", 60 * 6, None, job_retention),
