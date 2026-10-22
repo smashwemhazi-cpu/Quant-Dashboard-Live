@@ -8,6 +8,7 @@ into Slack/Teams/email when you are ready.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -53,6 +54,27 @@ def job_backoffice_ingest() -> None:
         notify("backoffice_ingest", r)
 
 
+def job_inbox_triage() -> None:
+    from jarvis.agents.personal import PERSONAL_TARGETS
+
+    r = agents()["assistant"].triage()
+    items = r.get("processed", [])
+    if not items:
+        return
+    notify("inbox_triage", {"processed": len(items)})
+    urgent = [x for x in items if x.get("urgency") == "high"]
+    if urgent and PERSONAL_TARGETS:
+        from donna.channels import broadcast
+
+        text = "\n".join(f"{x['subject'][:90]}\n  {x['summary'][:200]}" + (
+            f"\n  tasks #{', #'.join(map(str, x['task_ids']))}" if x.get("task_ids") else "") for x in urgent)
+        broadcast(text, PERSONAL_TARGETS, title="D.O.N.N.A urgent email")
+
+
+def job_my_day() -> None:
+    notify("my_day", agents()["assistant"].my_day(send=True).get("delivery"))
+
+
 def job_morning_dispatch() -> None:
     notify("morning_dispatch", agents()["briefing"].morning_dispatch(send=True).get("delivery"))
 
@@ -82,6 +104,8 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("morning_dispatch", 60 * 24, 6, job_morning_dispatch),   # 06:00 UTC, before London
     ("daily_wrap", 60 * 24, 22, job_daily_wrap),              # 22:00 UTC, after the NY close
     ("morning_brief", 60 * 24, 7, job_morning_brief),
+    ("inbox_triage", 15, None, job_inbox_triage),
+    ("my_day", 60 * 24, int(os.getenv("JARVIS_MYDAY_UTC_HOUR", "4")), job_my_day),
 ]
 
 

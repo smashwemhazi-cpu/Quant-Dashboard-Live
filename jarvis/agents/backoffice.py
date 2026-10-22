@@ -171,7 +171,15 @@ def _stream_group(path: Path) -> str:
 
 
 def ingest_file(path: Path) -> dict[str, Any]:
+    from jarvis.agents import personal  # personal journal + cBot logs share this inbox
+
+    if personal.is_bot_log(path):
+        who, n = personal.store_bot_log(path)
+        return {"file": path.name, "status": "STORED", "kind": "botlog", "bot": who, "rows": n}
     d = _read(path)
+    if personal.is_statement(d):
+        acc, n = personal.store_statement(d, path)
+        return {"file": path.name, "status": "STORED", "kind": "statement", "account": acc, "rows": n}
     kind = detect(d)
     if kind is None:
         return {"file": path.name, "status": "UNRECOGNISED", "columns": list(d.columns)[:12]}
@@ -415,7 +423,7 @@ class BackOfficeAgent(Agent):
         done = box / "processed"
         done.mkdir(exist_ok=True)
         results = []
-        for p in sorted(x for x in box.iterdir() if x.suffix.lower() in (".csv", ".xlsx", ".xls")):
+        for p in sorted(x for x in box.iterdir() if x.suffix.lower() in (".csv", ".xlsx", ".xls", ".log", ".txt")):
             try:
                 r = ingest_file(p)
             except Exception as e:  # one bad file must not block the others

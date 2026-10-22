@@ -9,3 +9,5 @@ anthropic>=2.1
 pytest
 psutil
 openpyxl
+icalendar
+recurring-ical-events

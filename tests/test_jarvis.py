@@ -253,3 +253,117 @@ def test_backoffice_activity_and_price_streams(tmp_path, monkeypatch):
     assert s["widened"] == [("Standard Global", "XAUUSD.mp", 3.7, 9.0)]
     text = "\n".join(bo.report_lines())
     assert "AML review" in text and "NO QUOTES" in text and "Name" not in text
+
+
+# ---------------------------------------------------------------- personal journal, bots, assistant
+def test_personal_statement_and_bot_log(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    from jarvis.agents import backoffice as bo, personal
+
+    box = tmp_path / "inbox"
+    box.mkdir()
+    monkeypatch.setenv("JARVIS_INBOX_DIR", str(box))
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("JARVIS_CTRADER_UTC_OFFSET", "4")
+    nets = [2.0, 3.0, -1.0, 2.5, -40.0, 2.0, 1.5]
+    bal, rows = 300.0, []
+    for i, n in enumerate(nets):
+        bal += n + (250 if i == 5 else 0)  # deposit before trade 6
+        rows.append({"Symbol": "XAUUSD.mp", "Opening direction": "Buy", "Closing time": f"0{1 + i}/10/2026 10:0{i}:00.000",
+                     "Entry price": 4000, "Closing price": 4001, "Closing Quantity": 0.01, "Closing volume": 1,
+                     "Net $": n, "Balance $": bal})
+    pd.DataFrame(rows).to_excel(box / "cT_6000013_2026-10-22_23-40.xlsx", index=False, sheet_name="Records")
+    (box / "2026-10-22_23-49_-_MicroLotBreakoutBot_Instance_42.log").write_text(
+        "22/10/2026 15:44:14.342 Info | CLOSED MLB-LD Sell | reason=Closed | net=7.77 | equity=414.73\n\n"
+        "22/10/2026 15:18:26.262 Info | FILLED MLB-LD Sell @ 4060.11 | SL 4067.27 | TP 4045.4\n"
+        "22/10/2026 15:15:00.308 Trade | → Placing Limit Order to Sell 1 XAUUSD.mp (Price: 4059.98) SUCCEEDED, PendingOrder OID9030\n"
+        "22/10/2026 15:10:00.308 Trade | → Placing Limit Order to Sell 1 XAUUSD.mp (Price: 4059.98) FAILED with error \"NotEnoughMoney\"\n"
+        "22/10/2026 02:37:42.119 Info | BUILD MLB-2026-10-16c\n"
+        "22/10/2026 02:37:39.187 Info | CBot instance [MicroLotBreakoutBot, XAUUSD.mp, m5] started.\n", encoding="utf-8")
+    kinds = sorted(r["kind"] for r in bo.BackOfficeAgent().ingest()["files"])
+    assert kinds == ["botlog", "statement"]
+    j = personal.journal()
+    assert j["trades"] == 7 and j["account"] == "6000013" and j["cash_flows"] == pytest.approx(250)
+    assert len(j["big_losses"]) == 1 and j["big_losses"][0]["net"] == -40.0
+    assert j["net_without_big_losses"] == pytest.approx(10.0)
+    assert j["quick_reentries"]["trades"] == 0
+    b = personal.bots(now=datetime(2026, 10, 23, 16, 0))
+    assert b[0]["state"] == "running" and b[0]["closed"] == 1 and b[0]["failures"] == 1 and b[0]["build"] == "MLB-2026-10-16c"
+    text = "\n".join(personal.report_lines())
+    assert "lost more than 3%" in text and "NotEnoughMoney" in text
+    bo.BackOfficeAgent().ingest()  # re-uploading the same files must not duplicate
+    assert personal.journal()["trades"] == 7
+
+
+def test_assistant_masks_triages_and_creates_tasks(tmp_path, monkeypatch):
+    import email.message
+
+    from jarvis.agents import assistant as a
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    assert a.mask("call +27 82 555 1234, ID 9001015009087, a@b.co.za, acc 6000013") == \
+        "call [number], ID [number], [email], acc 6000013"
+
+    msg = email.message.EmailMessage()
+    msg["Subject"], msg["From"], msg["Message-ID"] = "Withdrawal still pending", "Client <x@client.com>", "<m1@x>"
+    msg["Date"] = "Wed, 22 Oct 2026 08:00:00 +0000"
+    msg.set_content("My withdrawal for account 6000013 is late, card 4111 1111 1111 1111. Please fix today.")
+    raw = msg.as_bytes()
+
+    class FakeIMAP:
+        def __init__(self, host): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def login(self, u, p): pass
+        def select(self, box, readonly): assert readonly
+        def search(self, *a): return "OK", [b"1"]
+        def fetch(self, num, what):
+            assert "PEEK" in what
+            return "OK", [(b"1", b"Message-ID: <m1@x>\r\n\r\n" if "HEADER" in what else raw)]
+
+    seen = {}
+
+    class FakeClient:
+        class beta:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    seen["content"] = kw["messages"][0]["content"]
+                    assert kw["output_config"]["format"]["type"] == "json_schema"
+                    out = {"category": "payments", "urgency": "high", "summary": "Client withdrawal late",
+                           "needs_reply": True, "tasks": [{"title": "Chase withdrawal with payments", "due": "2026-10-22",
+                                                           "priority": "high"}]}
+                    blk = type("B", (), {"type": "text", "text": __import__("json").dumps(out)})
+                    return type("R", (), {"stop_reason": "end_turn", "content": [blk]})
+
+    monkeypatch.setattr(a.imaplib, "IMAP4_SSL", FakeIMAP)
+    import dataclasses
+    monkeypatch.setattr(a, "settings", dataclasses.replace(a.settings, imap_host="imap.gmail.com",
+                                                           imap_user="me@vertex1.example", imap_password="app-pass"))
+    r = a.triage_inbox(client=FakeClient())["processed"]
+    assert r[0]["urgency"] == "high" and r[0]["task_ids"]
+    assert "4111" not in seen["content"] and "x@client.com" not in seen["content"] and "client.com" in seen["content"]
+    assert a.triage_inbox(client=FakeClient())["processed"] == []          # same email never re-processed
+    t = a.list_tasks()
+    assert t[0]["title"] == "Chase withdrawal with payments" and t[0]["due"] == "2026-10-22"
+    assert a.complete_task(t[0]["id"]) and not a.list_tasks()
+    assert a.add_task("bad date", "tomorrow-ish") and a.list_tasks()[0]["due"] is None
+
+
+def test_calendar_from_ics(monkeypatch):
+    from datetime import date
+
+    from jarvis.agents import assistant as a
+
+    ics = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n"
+           "BEGIN:VEVENT\r\nUID:1\r\nDTSTART:20261023T060000Z\r\nDTEND:20261023T063000Z\r\nSUMMARY:LP call\r\n"
+           "RRULE:FREQ=DAILY;COUNT=5\r\nEND:VEVENT\r\n"
+           "BEGIN:VEVENT\r\nUID:2\r\nDTSTART;VALUE=DATE:20261023\r\nSUMMARY:Month-end\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+    monkeypatch.setenv("JARVIS_GCAL_ICS_URL", "https://calendar.google.com/x/basic.ics")
+    monkeypatch.setattr(a, "LOCAL_TZ", __import__("zoneinfo").ZoneInfo("Etc/GMT-4"))
+    monkeypatch.setattr(a.requests, "get", lambda url, timeout: type("R", (), {
+        "content": ics.encode(), "raise_for_status": lambda self: None})())
+    ev = a.calendar_events(date(2026, 10, 24))["events"]          # recurring instance on the next day
+    assert ev == [{"title": "LP call", "all_day": False, "start": "2026-10-24 10:00", "end": "10:30", "location": ""}]
+    assert [e["title"] for e in a.calendar_events(date(2026, 10, 23))["events"]] == ["Month-end", "LP call"]

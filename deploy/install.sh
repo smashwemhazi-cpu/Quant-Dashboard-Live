@@ -32,6 +32,7 @@ ln -sf /etc/vertex1/secrets.toml /opt/vertex1/app/.streamlit/secrets.toml
 
 cp "$SRC"/deploy/systemd/*.service /etc/systemd/system/
 [[ -f /etc/nginx/sites-available/vertex1 ]] || cp "$SRC/deploy/nginx/vertex1.conf" /etc/nginx/sites-available/vertex1
+install -m 755 "$SRC/deploy/vertex1-connect" /usr/local/bin/vertex1-connect
 systemctl daemon-reload
 
 echo
