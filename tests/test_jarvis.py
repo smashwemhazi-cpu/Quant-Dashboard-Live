@@ -219,3 +219,37 @@ def test_backoffice_missing_data_says_no_data(tmp_path, monkeypatch):
 
     monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "empty.db"))
     assert all("NO DATA" in line for line in bo.report_lines() if line and ":" in line[:12])
+
+
+def test_backoffice_activity_and_price_streams(tmp_path, monkeypatch):
+    from jarvis.agents import backoffice as bo
+
+    box = tmp_path / "inbox"
+    box.mkdir()
+    monkeypatch.setenv("JARVIS_INBOX_DIR", str(box))
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    acc = pd.DataFrame({"Account": [1, 2, 3], "Name": ["A", "B", "C"], "Equity (USD)": ["USD 300.00", "USD 0.00", "USD 2 000.00"],
+                        "Deposit (USD)": ["USD 0.00", "USD 2 037.38", "USD 0.00"],
+                        "Withdrawal (USD)": ["USD 0.00", "USD 2 037.38", "USD 0.00"],
+                        "Closed positions": [5, 0, 2], "Total Deals": [10, 0, 4], "Rejected deals": [0, 0, 1],
+                        "Traded Volume (USD)": ["USD 781 491.84", "USD 0.00", "USD 24 421.62"],
+                        "Realized Swaps (USD)": ["USD -2.64", "USD 0.00", "USD 0.00"],
+                        "Realized Commissions (USD)": ["USD -0.96", "USD 0.00", "USD 0.00"],
+                        "Realised net P&L (USD)": ["USD -82.38", "USD 0.00", "USD 21.65"]})
+    acc.to_excel(box / "cta_ActiveAccounts_2026-10-22_22-14.xlsx", index=False)
+    ps = lambda xau: pd.DataFrame({"Valid": "YES", "Enabled": [True, True, False], "Symbol": ["XAUUSD.mp", "XAUEUR.mp", "EURUSD"],  # noqa: E731
+                                   "Asset class": "Metals", "Markup Type": "Points", "Spread": [xau, "No Quotes", 0.1],
+                                   "Markup Bid": [12, 10, 0], "Markup Ask": [12, 10, 0]})
+    ps(3.7).to_excel(box / "cta_PriceStreams_Standard_Global__2026-10-21_22-10.xlsx", index=False)
+    ps(9.0).to_excel(box / "cta_PriceStreams_Standard_Global__2026-10-22_22-10.xlsx", index=False)
+    assert all(r["status"] == "STORED" for r in bo.BackOfficeAgent().ingest()["files"])
+
+    t = bo.activity_summary()
+    assert t["volume"] == pytest.approx(805913.46) and t["rejected"] == 1
+    assert t["high_turnover"][0]["account"] == "1" and t["in_out_no_trading"] == ["2"]
+    s = bo.streams_summary()
+    g = s["groups"]["Standard Global"]
+    assert g["enabled"] == 2 and g["no_quotes"] == ["XAUEUR.mp"]
+    assert s["widened"] == [("Standard Global", "XAUUSD.mp", 3.7, 9.0)]
+    text = "\n".join(bo.report_lines())
+    assert "AML review" in text and "NO QUOTES" in text and "Name" not in text

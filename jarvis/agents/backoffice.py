@@ -6,6 +6,8 @@ inbox/processed/. Supported:
   cTrader   "End of day report"      (.xlsx/.csv: Trader Account, Group, Balance, Credit, Equity, Margin, ...)
   Syntellicore "Performance Overview KPIs"  (.csv: caption/value pairs - Leads, FTDs, Deposits ...)
   Syntellicore "Customer Documents"         (.csv: customer_no, type, document_status, ...)
+  cTrader   "Active Accounts"        (.xlsx: deposits, withdrawals, deals, rejected deals, volume, realised P&L)
+  cTrader   "Price Streams <group>"  (.xlsx: symbol, enabled, spread, markups)
 
 Snapshots accumulate, so day-over-day signals (new funded accounts, accounts emptied,
 equity drawdowns) appear from the second end-of-day file onward.
@@ -31,6 +33,9 @@ MARGIN_ALERT_PCT = float(os.getenv("JARVIS_MARGIN_ALERT_PCT", "150"))   # margin
 CREDIT_HEAVY_PCT = float(os.getenv("JARVIS_CREDIT_HEAVY_PCT", "50"))    # credit as % of balance
 DRAWDOWN_ALERT_PCT = float(os.getenv("JARVIS_DRAWDOWN_ALERT_PCT", "20"))
 EXPIRY_WARN_DAYS = int(os.getenv("JARVIS_DOC_EXPIRY_WARN_DAYS", "60"))
+TURNOVER_ALERT_X = float(os.getenv("JARVIS_TURNOVER_ALERT_X", "1000"))  # traded volume / equity
+SPREAD_WIDEN_PCT = float(os.getenv("JARVIS_SPREAD_WIDEN_PCT", "50"))
+WATCH_SYMBOLS = re.compile(os.getenv("JARVIS_SPREAD_WATCH", r"^(XAUUSD|XAGUSD|EURUSD|GBPUSD|US30|USOIL|BTCUSD|GER\d\d|NAS100|USTEC)\b"), re.I)
 TEST_NAME = re.compile(r"test|\bqa\b|automation", re.I)
 NULL_DATE = "1900-01-01"
 
@@ -49,6 +54,11 @@ def _db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS bo_kpi (asof TEXT, metric TEXT, value REAL, PRIMARY KEY (asof, metric));
         CREATE TABLE IF NOT EXISTS bo_docs (uploaded TEXT, customer TEXT, assigned TEXT, doc_type TEXT,
             status TEXT, verified TEXT, expires TEXT, is_test INTEGER);
+        CREATE TABLE IF NOT EXISTS bo_activity (asof TEXT, account TEXT, equity REAL, deposit REAL, withdrawal REAL,
+            closed INTEGER, deals INTEGER, rejected INTEGER, volume REAL, swaps REAL, commission REAL, net_pnl REAL,
+            PRIMARY KEY (asof, account));
+        CREATE TABLE IF NOT EXISTS bo_streams (asof TEXT, grp TEXT, symbol TEXT, asset TEXT, enabled INTEGER,
+            spread REAL, markup_bid REAL, markup_ask REAL, PRIMARY KEY (asof, grp, symbol));
         CREATE TABLE IF NOT EXISTS bo_meta (key TEXT PRIMARY KEY, value TEXT);
     """)
     return c
@@ -71,7 +81,8 @@ def _read(path: Path) -> pd.DataFrame:
 
 
 def _num(s: pd.Series) -> pd.Series:
-    return pd.to_numeric(s.astype(str).str.replace(r"[,%$\s]", "", regex=True), errors="coerce").fillna(0.0)
+    # handles "1,246.00", "9.93%", "USD 2 037.38", "USD -2.64"
+    return pd.to_numeric(s.astype(str).str.replace(r"[^0-9.\-]", "", regex=True), errors="coerce").fillna(0.0)
 
 
 def _asof(path: Path) -> str:
@@ -85,6 +96,10 @@ def detect(d: pd.DataFrame) -> str | None:
         return "eod"
     if {"customer_no", "document_status"} <= cols:
         return "docs"
+    if {"account", "traded volume (usd)", "total deals"} <= cols:
+        return "activity"
+    if {"symbol", "spread", "markup bid", "enabled"} <= cols:
+        return "streams"
     if "value" in cols and any(c.startswith("caption") for c in cols):
         return "kpi"
     return None
@@ -123,6 +138,38 @@ def _store_docs(c: sqlite3.Connection, d: pd.DataFrame) -> int:
     return len(rows)
 
 
+def _store_activity(c: sqlite3.Connection, d: pd.DataFrame, asof: str) -> int:
+    col = {k.lower(): k for k in d.columns}
+    g = lambda name: _num(d[col[name]]) if name in col else pd.Series(0.0, index=d.index)  # noqa: E731
+    rows = pd.DataFrame({  # names in this export are deliberately not stored
+        "asof": asof, "account": d[col["account"]].astype(str).str.replace(r"\.0$", "", regex=True),
+        "equity": g("equity (usd)"), "deposit": g("deposit (usd)"), "withdrawal": g("withdrawal (usd)"),
+        "closed": g("closed positions").astype(int), "deals": g("total deals").astype(int),
+        "rejected": g("rejected deals").astype(int), "volume": g("traded volume (usd)"),
+        "swaps": g("realized swaps (usd)"), "commission": g("realized commissions (usd)"),
+        "net_pnl": g("realised net p&l (usd)")})
+    c.execute("DELETE FROM bo_activity WHERE asof = ?", (asof,))
+    c.executemany("INSERT INTO bo_activity VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows.itertuples(index=False, name=None))
+    return len(rows)
+
+
+def _store_streams(c: sqlite3.Connection, d: pd.DataFrame, asof: str, grp: str) -> int:
+    rows = pd.DataFrame({
+        "asof": asof, "grp": grp, "symbol": d["Symbol"].astype(str), "asset": d.get("Asset class", "").astype(str),
+        "enabled": d["Enabled"].astype(str).str.lower().isin(["true", "yes", "1"]).astype(int),
+        "spread": pd.to_numeric(d["Spread"], errors="coerce"),  # "No Quotes" -> NULL
+        "markup_bid": _num(d["Markup Bid"]), "markup_ask": _num(d.get("Markup Ask", d["Markup Bid"]))})
+    rows = rows.drop_duplicates(["symbol"])
+    c.execute("DELETE FROM bo_streams WHERE asof = ? AND grp = ?", (asof, grp))
+    c.executemany("INSERT INTO bo_streams VALUES (?,?,?,?,?,?,?,?)", rows.itertuples(index=False, name=None))
+    return len(rows)
+
+
+def _stream_group(path: Path) -> str:
+    m = re.search(r"PriceStreams_(.+?)_+\d{4}-\d{2}-\d{2}", path.name)
+    return m.group(1).replace("_", " ").strip() if m else "default"
+
+
 def ingest_file(path: Path) -> dict[str, Any]:
     d = _read(path)
     kind = detect(d)
@@ -131,7 +178,8 @@ def ingest_file(path: Path) -> dict[str, Any]:
     asof = _asof(path)
     with _db() as c:
         n = {"eod": lambda: _store_eod(c, d, asof), "kpi": lambda: _store_kpi(c, d, asof),
-             "docs": lambda: _store_docs(c, d)}[kind]()
+             "docs": lambda: _store_docs(c, d), "activity": lambda: _store_activity(c, d, asof),
+             "streams": lambda: _store_streams(c, d, asof, _stream_group(path))}[kind]()
         c.execute("INSERT OR REPLACE INTO bo_meta VALUES (?, ?)", (f"last_{kind}", asof))
     return {"file": path.name, "status": "STORED", "kind": kind, "asof": asof, "rows": n}
 
@@ -209,6 +257,52 @@ def kyc_summary(today: pd.Timestamp | None = None) -> dict[str, Any]:
     }
 
 
+def activity_summary() -> dict[str, Any]:
+    with _db() as c:
+        dates = [r[0] for r in c.execute("SELECT DISTINCT asof FROM bo_activity ORDER BY asof DESC LIMIT 1")]
+        if not dates:
+            return {"error": "NO DATA - no cTrader Active Accounts report ingested"}
+        a = pd.read_sql_query("SELECT * FROM bo_activity WHERE asof = ?", c, params=dates)
+    traded = a[a.deals > 0]
+    turn = traded[traded.equity > 0].assign(x=lambda t: t.volume / t.equity)
+    return {
+        "asof": dates[0], "accounts": len(a), "trading": len(traded), "volume": a.volume.sum(), "deals": int(a.deals.sum()),
+        "rejected": int(a.rejected.sum()), "deposits": a.deposit.sum(), "withdrawals": a.withdrawal.sum(),
+        "commission": -a.commission.sum(), "swaps": -a.swaps.sum(), "client_net_pnl": a.net_pnl.sum(),
+        "winners": int((traded.net_pnl > 0).sum()), "losers": int((traded.net_pnl < 0).sum()),
+        "top_volume": traded.sort_values("volume", ascending=False)[["account", "volume", "net_pnl"]].head(3).to_dict("records"),
+        "high_turnover": turn[turn.x >= TURNOVER_ALERT_X].sort_values("x", ascending=False)[["account", "x"]].to_dict("records"),
+        # money in and straight back out with no trading is a standard AML review trigger
+        "in_out_no_trading": a[(a.deposit > 0) & (a.withdrawal >= a.deposit * 0.9) & (a.deals == 0)].account.tolist(),
+        "rejections": a[a.rejected > 0][["account", "rejected", "deals"]].to_dict("records"),
+    }
+
+
+def streams_summary() -> dict[str, Any]:
+    with _db() as c:
+        dates = [r[0] for r in c.execute("SELECT DISTINCT asof FROM bo_streams ORDER BY asof DESC LIMIT 2")]
+        if not dates:
+            return {"error": "NO DATA - no cTrader Price Streams export ingested"}
+        cur = pd.read_sql_query("SELECT * FROM bo_streams WHERE asof = ?", c, params=(dates[0],))
+        prev = pd.read_sql_query("SELECT * FROM bo_streams WHERE asof = ?", c, params=(dates[1],)) if len(dates) > 1 else None
+    on = cur[cur.enabled == 1]
+    out: dict[str, Any] = {"asof": dates[0], "groups": {}}
+    for grp, g in on.groupby("grp"):
+        w = g[g.symbol.str.match(WATCH_SYMBOLS)].sort_values("symbol")
+        out["groups"][grp] = {
+            "enabled": len(g), "no_quotes": sorted(g[g.spread.isna()].symbol.tolist()),
+            "watch": [(r.symbol, r.spread, r.markup_bid, r.markup_ask) for r in w.itertuples()],
+        }
+    if prev is not None:
+        m = on.merge(prev, on=["grp", "symbol"], suffixes=("", "_p"))
+        wide = m[(m.spread_p > 0) & (m.spread > m.spread_p * (1 + SPREAD_WIDEN_PCT / 100))]
+        out["prev_asof"] = dates[1]
+        out["widened"] = [(r.grp, r.symbol, r.spread_p, r.spread) for r in wide.itertuples()]
+        mk = m[(m.markup_bid != m.markup_bid_p) | (m.markup_ask != m.markup_ask_p)]
+        out["markup_changed"] = [(r.grp, r.symbol) for r in mk.itertuples()]
+    return out
+
+
 # ------------------------------------------------------------------ report section
 def _m(v: float) -> str:
     return f"-${-v:,.0f}" if v < 0 else f"${v:,.0f}"
@@ -255,6 +349,37 @@ def report_lines() -> list[str]:
             L += [f" !! #{a['account']} equity {a['chg_pct']:+.0f}% day-on-day - retention call" for a in b["drawdowns"]]
         else:
             L.append(" Day-on-day changes start with the next end-of-day file.")
+    t = activity_summary()
+    L.append("")
+    if "error" in t:
+        L.append(f"TRADING ACTIVITY: {t['error']}")
+    else:
+        L.append(f"TRADING ACTIVITY (cTrader Active Accounts {t['asof']}, period as exported):")
+        L.append(f" {t['trading']} trading accounts | {t['deals']} deals | volume {_m(t['volume'])} "
+                 f"| rejected deals {t['rejected']}")
+        L.append(f" Commission {_m(t['commission'])} | swaps {_m(t['swaps'])} | client net P&L {_m(t['client_net_pnl'])} "
+                 f"({t['winners']} up, {t['losers']} down)")
+        L.append(" Top volume: " + ", ".join(f"#{a['account']} {_m(a['volume'])} (P&L {_m(a['net_pnl'])})"
+                                            for a in t["top_volume"]))
+        L += [f" !! #{a['account']} traded {a['x']:,.0f}x its equity - leverage / risk review" for a in t["high_turnover"]]
+        L += [f" !! #{a} deposited and withdrew with no trading - AML review" for a in t["in_out_no_trading"]]
+        L += [f" !! #{a['account']} {a['rejected']} rejected of {a['deals']} deals - check execution" for a in t["rejections"]]
+    s = streams_summary()
+    L.append("")
+    if "error" in s:
+        L.append(f"PRICE STREAMS: {s['error']}")
+    else:
+        L.append(f"PRICE STREAMS ({s['asof']}):")
+        for grp, g in s["groups"].items():
+            L.append(f" {grp}: {g['enabled']} symbols enabled")
+            if g["no_quotes"]:
+                L.append(f"  !! Enabled but NO QUOTES ({len(g['no_quotes'])}): " + ", ".join(g["no_quotes"]))
+            if g["watch"]:
+                L.append("  Spreads: " + " | ".join(f"{sym} {sp:g}" if sp == sp else f"{sym} n/q" for sym, sp, _, _ in g["watch"]))
+        if "prev_asof" in s:
+            L += [f"  !! {sym} ({grp}) spread {a:g} -> {b:g} since {s['prev_asof']}" for grp, sym, a, b in s["widened"]]
+            if s["markup_changed"]:
+                L.append(f"  Markup changed on {len(s['markup_changed'])} symbols since {s['prev_asof']} - confirm intended")
     q = kyc_summary()
     L.append("")
     if "error" in q:
@@ -312,6 +437,16 @@ class BackOfficeAgent(Agent):
     def kpis(self) -> dict[str, Any]:
         """Latest Syntellicore performance KPIs (leads, FTDs, conversion, deposits, withdrawals)."""
         return kpi_summary()
+
+    @tool()
+    def activity(self) -> dict[str, Any]:
+        """cTrader account activity: volume, deals, rejected deals, commission, client P&L, turnover and AML flags."""
+        return activity_summary()
+
+    @tool()
+    def price_streams(self) -> dict[str, Any]:
+        """cTrader price-stream config per group: enabled symbols without quotes, watchlist spreads, changes."""
+        return streams_summary()
 
     @tool()
     def kyc_queue(self) -> dict[str, Any]:
