@@ -15,11 +15,14 @@ ask() {  # ask NAME "question" hidden(0/1)
 }
 
 echo "Press Enter to skip any question. Hidden answers show nothing while you paste - that is normal."
-ask DONNA_DISCORD_WEBHOOK_PERSONAL "1/5 Private Discord channel webhook URL (hidden)" 1
-ask JARVIS_IMAP_USER "2/5 Work email address" 0
-ask JARVIS_IMAP_PASSWORD "3/5 Google app password - 16 letters (hidden)" 1
-ask JARVIS_GCAL_ICS_URL "4/5 Google Calendar secret address in iCal format (hidden)" 1
-ask JARVIS_PERSONAL_ACCOUNT "5/5 Your personal cTrader account number" 0
+ask DONNA_DISCORD_WEBHOOK_REPORTS "1/8 Company reports webhook URL - #track-a-brokerage (hidden)" 1
+ask DONNA_DISCORD_WEBHOOK_PERSONAL "2/8 Private webhook URL - #track-b-personal (hidden; Enter = reuse the old reports webhook)" 1
+ask DONNA_DISCORD_BOT_TOKEN "3/8 'DONNA Tasks' bot token for !tasks / !done (hidden)" 1
+ask DONNA_DISCORD_COMMAND_CHANNELS "4/8 Channel for commands (Enter = track-b-personal)" 0
+ask JARVIS_IMAP_USER "5/8 Work email address" 0
+ask JARVIS_IMAP_PASSWORD "6/8 Google app password - 16 letters (hidden)" 1
+ask JARVIS_GCAL_ICS_URL "7/8 Google Calendar secret address in iCal format (hidden)" 1
+ask JARVIS_PERSONAL_ACCOUNT "8/8 Your personal cTrader account number" 0
 
 "$PY" - "$ENV" <<'EOF'
 import os, re, sys
@@ -33,9 +36,16 @@ for k, v in list(new.items()):
     if re.search(r'["`$\\]', v):
         print(f"SKIPPED {k}: contains a quote, backtick, $ or backslash - paste it again without those")
         new.pop(k)
-present = {l.split("=", 1)[0] for l in lines if "=" in l and not l.lstrip().startswith("#")}
+current = {l.split("=", 1)[0]: l.split("=", 1)[1].strip('"') for l in lines if "=" in l and not l.lstrip().startswith("#")}
+present = set(current)
+# reports were going to the personal channel: a new company webhook frees the old one for personal use
+if "DONNA_DISCORD_WEBHOOK_REPORTS" in new and "DONNA_DISCORD_WEBHOOK_PERSONAL" not in new \
+        and not current.get("DONNA_DISCORD_WEBHOOK_PERSONAL") and current.get("DONNA_DISCORD_WEBHOOK_REPORTS"):
+    new["DONNA_DISCORD_WEBHOOK_PERSONAL"] = current["DONNA_DISCORD_WEBHOOK_REPORTS"]
+    print("Moved the old reports webhook to the personal channel")
 for k, v in {"JARVIS_IMAP_HOST": "imap.gmail.com", "JARVIS_LOCAL_TZ": "Etc/GMT-4", "JARVIS_CTRADER_UTC_OFFSET": "4",
-             "JARVIS_PERSONAL_TARGETS": "discord:personal", "JARVIS_INBOX_DIR": "/var/lib/vertex1/inbox"}.items():
+             "JARVIS_PERSONAL_TARGETS": "discord:personal", "JARVIS_INBOX_DIR": "/var/lib/vertex1/inbox",
+             "DONNA_DISCORD_COMMAND_CHANNELS": "track-b-personal"}.items():
     if k not in present:
         new.setdefault(k, v)
 fmt = lambda v: f'"{v}"' if re.search(r"[^A-Za-z0-9_@./:%+=,-]", v) else v  # noqa: E731
@@ -53,6 +63,10 @@ print("Saved:", ", ".join(sorted(new)) or "nothing changed")
 EOF
 
 systemctl restart vertex1-scheduler
+if grep -q '^DONNA_DISCORD_BOT_TOKEN=.\+' "$ENV"; then
+  systemctl enable -q vertex1-discord 2>/dev/null; systemctl restart vertex1-discord; sleep 4
+  echo "COMMANDS  $(systemctl is-active vertex1-discord) - type !help in your command channel"
+fi
 echo
 echo "Checking connections..."
 sudo -u vertex1 bash -c 'set -a; . /etc/vertex1/vertex1.env; cd /opt/vertex1/app; /opt/vertex1/venv/bin/python -c "

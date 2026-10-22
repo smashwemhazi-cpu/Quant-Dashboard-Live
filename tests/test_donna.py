@@ -198,3 +198,26 @@ def test_discord_url_debris_and_bad_url(monkeypatch):
     monkeypatch.setenv("DONNA_DISCORD_WEBHOOK_REPORTS", "paste-here")
     out = channels.broadcast("x", ["discord:reports"])["discord:reports"]
     assert "not a Discord webhook URL" in out
+
+
+def test_discord_task_commands(tmp_path, monkeypatch):
+    from donna import discord_bot as b
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("DONNA_DISCORD_COMMAND_CHANNELS", "#track-b-personal")
+    assert b.allowed(1, "track-b-personal") and not b.allowed(1, "general")
+    monkeypatch.setenv("DONNA_DISCORD_ALLOWED_USERS", "42")
+    assert b.allowed(42, "Track-B-Personal") and not b.allowed(7, "track-b-personal")
+    monkeypatch.delenv("DONNA_DISCORD_COMMAND_CHANNELS")
+    assert not b.allowed(42, "track-b-personal")  # no channel configured -> answer nowhere
+
+    assert b.handle("hello there") is None and b.handle("!unknown") is None
+    assert b.handle("!tasks") == "No open tasks."
+    assert b.handle("!add Call LP about XAU spreads | 2026-10-24 | high") == \
+        "Added #1: Call LP about XAU spreads (due 2026-10-24) [high]"
+    b.handle("!add Archive test KYC docs")
+    assert "#1" in b.handle("!tasks") and "2026-10-24" in b.handle("!tasks")
+    out = b.handle("!done 1 99")
+    assert "#1 done" in out and "#99 not found" in out and "#1 " not in out.split("\n\n")[1]
+    parts = b.chunks("x" * 5000)
+    assert all(len(p) <= 2000 for p in parts) and len(parts) == 3

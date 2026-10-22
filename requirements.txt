@@ -11,3 +11,4 @@ psutil
 openpyxl
 icalendar
 recurring-ical-events
+discord.py
