@@ -1,0 +1,47 @@
+// DONNA daily snapshot - sends the last COMPLETED daily bar + features for 9 symbols
+// to DONNA's /api/tradingview/snapshot webhook, once per day.
+//
+// Setup (TradingView plan with webhook alerts required):
+//   1. Add this indicator to any chart, timeframe 1D. A 24/7 symbol (e.g. BITSTAMP:BTCUSD)
+//      makes the daily alert fire at 00:00 UTC every day.
+//   2. Settings -> set Passphrase to DONNA_TV_PASSPHRASE. Symbols must match
+//      jarvis/adapters/market.py WATCHLIST `tv` values.
+//   3. Create alert: Condition = this indicator -> "Any alert() function call",
+//      Webhook URL = https://<your-host>/api/tradingview/snapshot, Message: leave as is.
+//   4. History: for each symbol, chart -> Export chart data (daily) and save as
+//      jarvis/data/tradingview/<KEY>.csv so the predictor has years of bars on day one.
+//
+// Non-repainting: every value is taken from the previous, closed daily bar ([1]) with
+// lookahead_on, the standard Pine idiom for closed higher-timeframe values.
+// Untested here: compile it in the Pine Editor before relying on it.
+
+//@version=5
+indicator("DONNA daily snapshot", overlay = false)
+
+passphrase = input.string("", "Passphrase (DONNA_TV_PASSPHRASE)")
+s1 = input.symbol("OANDA:XAUUSD", "Symbol 1")
+s2 = input.symbol("OANDA:XAGUSD", "Symbol 2")
+s3 = input.symbol("TVC:USOIL", "Symbol 3")
+s4 = input.symbol("TVC:DJI", "Symbol 4")
+s5 = input.symbol("NASDAQ:NDX", "Symbol 5")
+s6 = input.symbol("XETR:DAX", "Symbol 6")
+s7 = input.symbol("BITSTAMP:BTCUSD", "Symbol 7")
+s8 = input.symbol("OANDA:EURUSD", "Symbol 8")
+s9 = input.symbol("OANDA:GBPUSD", "Symbol 9")
+
+num(float x) =>
+    na(x) ? "null" : str.tostring(x)
+
+snap() =>
+    [time[1], open[1], high[1], low[1], close[1], close[2], ta.rsi(close, 14)[1], ta.atr(14)[1], ta.ema(close, 50)[1], ta.ema(close, 200)[1]]
+
+row(string sym) =>
+    [t, o, h, l, c, pc, r, a, e1, e2] = request.security(sym, "D", snap(), lookahead = barmerge.lookahead_on)
+    '{"symbol":"' + sym + '","t":' + (na(t) ? "0" : str.tostring(t)) + ',"o":' + num(o) + ',"h":' + num(h) + ',"l":' + num(l) + ',"c":' + num(c) + ',"pc":' + num(pc) + ',"rsi":' + num(r) + ',"atr":' + num(a) + ',"e50":' + num(e1) + ',"e200":' + num(e2) + '}'
+
+msg = '{"passphrase":"' + passphrase + '","kind":"daily_snapshot","bars":[' + row(s1) + ',' + row(s2) + ',' + row(s3) + ',' + row(s4) + ',' + row(s5) + ',' + row(s6) + ',' + row(s7) + ',' + row(s8) + ',' + row(s9) + ']}'
+
+if barstate.isconfirmed and timeframe.isdaily
+    alert(msg, alert.freq_once_per_bar_close)
+
+plot(na, title = "placeholder")

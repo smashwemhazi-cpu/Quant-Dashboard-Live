@@ -55,7 +55,7 @@ def test_approval_is_atomic_and_honest(client):
     aid = _stage(client)
     assert len(aid) == 32
     r = client.post(f"/api/actions/{aid}/approve", headers=APPR).json()
-    assert r["status"] == "FAILED" and "no executor wired" in r["result"]  # never a fake EXECUTED
+    assert r["status"] == "FAILED" and "not configured" in r["result"]  # never a fake EXECUTED
     assert client.post(f"/api/actions/{aid}/approve", headers=APPR).status_code == 409
     assert client.post(f"/api/actions/{aid}/reject", headers=APPR).status_code == 409  # can't un-execute
     with client.mod.db() as c:
@@ -97,3 +97,50 @@ def test_strategy_job_runs_in_background_and_gates_deploy(client, monkeypatch):
     res = client.get(f"/api/jobs/{job['job_id']}", headers=SVC).json()
     assert res["status"] == "DONE" and res["result"]["compiled"] is False
     assert "action_id" not in res["result"]  # not compiled -> never staged for deployment
+
+
+# ---------------------------------------------------------------- channels, leads, TradingView
+def test_reply_executor_routes_slack_thread(client, monkeypatch):
+    sent = {}
+    monkeypatch.setattr(client.mod.channels, "send_slack",
+                        lambda ch, text, ts=None: sent.update(ch=ch, ts=ts) or "slack ok")
+    r = client.post("/api/comms/inbound", headers=SVC, json={
+        "source": "slack", "sender": "U1", "recipient": "C42", "content": "hi", "thread_id": "123.45"}).json()
+    out = client.post(f"/api/actions/{r['action_id']}/approve", headers=APPR).json()
+    assert out["status"] == "EXECUTED" and sent == {"ch": "C42", "ts": "123.45"}
+
+
+def test_lead_flow_consent_once_and_stop_is_permanent(client):
+    lead = {"handle": "Big_Trader", "source_chat": "FX Pros", "snippet": "need FIX API",
+            "matched_terms": ["fix api"], "intent_score": 5}
+    r = client.post("/api/leads", headers=SVC, json=lead).json()
+    assert r["staged"]
+    text = client.get("/api/actions/pending", headers=APPR).json()[0]["preview_text"]
+    assert "STOP" in text and "raw spread" not in text.lower()     # consent request, not a pitch
+    assert client.post("/api/leads", headers=SVC, json=lead).json()["staged"] is False  # once only
+    aid = r["action_id"]
+    assert client.post(f"/api/actions/{aid}/approve", headers=APPR).json()["result"] == "queued for worker"
+    assert client.get("/api/outreach/approved", headers=SVC).json()[0]["action_id"] == aid
+    client.post(f"/api/outreach/{aid}/result", headers=SVC, json={"ok": True})
+    assert client.post("/api/leads/reply", headers=SVC,
+                       json={"handle": "big_trader", "text": "Please STOP messaging me"}).json()["status"] == "OPTED_OUT"
+    assert client.post("/api/leads", headers=SVC, json=lead).json()["status"] == "DO_NOT_CONTACT"
+    assert client.post("/api/leads/reply", headers=SVC,
+                       json={"handle": "stranger", "text": "yes"}).json()["status"] == "IGNORED"
+
+
+def test_tradingview_snapshot_accepts_text_plain(client):
+    import json as _j
+    body = _j.dumps({"passphrase": "tv", "kind": "daily_snapshot", "bars": [
+        {"symbol": "OANDA:XAUUSD", "t": 1761004800000, "o": 1, "h": 2, "l": 0.5, "c": 1.5, "e200": None}]})
+    r = client.post("/api/tradingview/snapshot", content=body, headers={"Content-Type": "text/plain"})
+    assert r.json() == {"status": "STORED", "bars": 1}
+    bad = body.replace('"tv"', '"nope"')
+    assert client.post("/api/tradingview/snapshot", content=bad, headers={"Content-Type": "text/plain"}).status_code == 401
+
+
+def test_lead_scorer_ignores_substrings_and_promoters():
+    from donna.lead_monitor import score_message
+    assert score_message("is it possible the bible is visible").value == 0
+    assert score_message("Join my VIP signals t.me/abc for FIX API").value == 0
+    assert score_message("Looking for a broker with FIX API for 50 lots/month?").value >= 5

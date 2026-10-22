@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from jarvis.core import audit
@@ -47,6 +47,14 @@ def job_lp_slippage() -> None:
         notify("lp_slippage_alert", eps[:5])
 
 
+def job_morning_dispatch() -> None:
+    notify("morning_dispatch", agents()["briefing"].morning_dispatch(send=True).get("delivery"))
+
+
+def job_daily_wrap() -> None:
+    notify("daily_wrap", agents()["briefing"].daily_wrap(send=True).get("delivery"))
+
+
 def job_morning_brief() -> None:
     from jarvis.core.brain import Brain
 
@@ -64,6 +72,8 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("desk_report", 60 * 24, 6, job_desk_report),
     ("retention", 60 * 6, None, job_retention),
     ("pipeline", 60 * 24, None, job_pipeline),
+    ("morning_dispatch", 60 * 24, 6, job_morning_dispatch),   # 06:00 UTC, before London
+    ("daily_wrap", 60 * 24, 22, job_daily_wrap),              # 22:00 UTC, after the NY close
     ("morning_brief", 60 * 24, 7, job_morning_brief),
 ]
 
@@ -74,7 +84,7 @@ def main() -> None:
     last: dict[str, float] = {}
     while True:
         now = time.time()
-        hour = datetime.now()
+        hour = datetime.now(timezone.utc)  # all schedules are UTC
         for name, every, at_hour, fn in JOBS:
             if at_hour is not None and (hour.hour != at_hour or hour.weekday() >= 5):
                 continue

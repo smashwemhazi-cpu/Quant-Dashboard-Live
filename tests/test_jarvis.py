@@ -133,3 +133,23 @@ def test_rlog_parser_and_verdicts():
     out = analyse(parse_rlog("\n".join(lines)))
     assert out["trades"] == 50 and out["expectancy_R"] == pytest.approx(-0.6)
     assert "negative with 95% confidence" in out["verdict"][-1]
+
+
+def test_predictor_finds_no_edge_in_random_walk_but_finds_planted_signal():
+    from jarvis.agents.predictor import walk_forward
+    rng = np.random.default_rng(1)
+    n = 1400
+    idx = pd.bdate_range("2020-01-01", periods=n)
+    mk = lambda c: pd.DataFrame({"open": c, "high": c * 1.005, "low": c * 0.995, "close": c}, index=idx)  # noqa: E731
+    assert walk_forward(mk(100 * np.exp(np.cumsum(rng.normal(0, .01, n)))))["edge"] is False
+    r, e = np.zeros(n), rng.normal(0, .01, n)
+    for i in range(1, n):
+        r[i] = .35 * r[i - 1] + e[i]
+    assert walk_forward(mk(100 * np.exp(np.cumsum(r))))["edge"] is True
+
+
+def test_channel_chunking_respects_limits():
+    from donna.channels import chunks
+    text = "\n".join(f"line {i} " + "x" * 50 for i in range(300))
+    parts = chunks(text, 4096)
+    assert all(len(p) <= 4096 for p in parts) and "".join(parts) == text

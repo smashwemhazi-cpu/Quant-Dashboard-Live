@@ -61,6 +61,13 @@ class PostgresSource:
             return pd.read_sql_query(f"SELECT * FROM {table}", conn)  # noqa: S608 (whitelisted)
 
 
+def is_demo() -> bool:
+    """True when agents would read the synthetic sample data (never present it as real)."""
+    import os
+
+    return not os.getenv("JARVIS_DATABASE_URL") and Path(settings.data_dir).resolve() == _DEMO_DIR
+
+
 def default_source() -> TableSource:
     import os
 

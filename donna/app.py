@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -34,7 +35,10 @@ from typing import Any, AsyncIterator, Callable, Iterator, Literal, Optional
 
 import aiohttp
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
+
+from donna import channels
 
 log = logging.getLogger("donna")
 
@@ -53,11 +57,19 @@ TG_WEBHOOK_SECRET = os.getenv("DONNA_TELEGRAM_WEBHOOK_SECRET", "")
 TG_APPROVER_IDS = {s for s in os.getenv("DONNA_TELEGRAM_APPROVER_IDS", "").split(",") if s}
 STRATEGY_MODEL = os.getenv("DONNA_STRATEGY_MODEL", "gpt-4o")   # any CrewAI/LiteLLM model id
 CBOT_COMPILE_DIR = os.getenv("DONNA_CBOT_COMPILE_DIR", "")      # dir with a cTrader.Automate csproj
+SIGNAL_TARGETS = [t for t in os.getenv("DONNA_SIGNAL_TARGETS", "").split(",") if t]  # e.g. discord,telegram:-100..
+DEMO_DEPLOY_DIR = os.getenv("DONNA_DEMO_DEPLOY_DIR", "")       # folder synced to the DEMO cTrader VPS
+LEAD_MIN_SCORE = float(os.getenv("DONNA_LEAD_MIN_SCORE", "3"))
+REP_NAME = os.getenv("DONNA_REP_NAME", "the Vertex 1 team")
+FIRM_DISCLOSURE = os.getenv("DONNA_FIRM_DISCLOSURE", "Vertex 1 Brokers")  # e.g. "Vertex 1 Brokers, FSP 12345"
+SIGNAL_DISCLAIMER = os.getenv("DONNA_SIGNAL_DISCLAIMER",
+                              "Market commentary only, not investment advice. CFDs carry a high risk of loss.")
 
 ACTION_TTL = {  # a stale action must not be executable hours later
     "BROADCAST_SIGNAL": timedelta(minutes=10),
     "SEND_REPLY": timedelta(hours=24),
     "DEPLOY_STRATEGY": timedelta(days=7),
+    "DISPATCH_OUTREACH": timedelta(days=3),
 }
 
 def _now() -> datetime:
@@ -105,6 +117,15 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS jobs (
             job_id TEXT PRIMARY KEY, kind TEXT, status TEXT, request TEXT, result TEXT,
             created_at TEXT, finished_at TEXT);
+        CREATE TABLE IF NOT EXISTS leads (
+            lead_id TEXT PRIMARY KEY, handle TEXT NOT NULL UNIQUE, source_chat TEXT, intent_score REAL,
+            matched_terms TEXT, snippet TEXT, mentions INTEGER DEFAULT 1, status TEXT NOT NULL,
+            first_seen TEXT, last_seen TEXT, contacted_at TEXT);
+        CREATE TABLE IF NOT EXISTS do_not_contact (handle TEXT PRIMARY KEY, reason TEXT, ts TEXT);
+        CREATE TABLE IF NOT EXISTS tv_bars (
+            symbol TEXT NOT NULL, bar_time TEXT NOT NULL, open REAL, high REAL, low REAL, close REAL,
+            prev_close REAL, rsi REAL, atr REAL, ema50 REAL, ema200 REAL, received_at TEXT,
+            PRIMARY KEY (symbol, bar_time));
         CREATE TABLE IF NOT EXISTS audit (
             id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, actor TEXT, event TEXT, detail TEXT);
         """)
@@ -255,18 +276,48 @@ def stage_action(source: str, action_type: str, destination: str, payload: Any, 
     return action_id
 
 
-# Executors do the real side effect and raise on failure. Unwired types fail honestly.
-def _not_wired(action_type: str) -> Callable[[sqlite3.Row], str]:
-    def run(_: sqlite3.Row) -> str:
-        raise NotImplementedError(f"no executor wired for {action_type}")
-    return run
+# Executors do the real side effect and raise on failure, so the action is marked FAILED.
+def exec_send_reply(row: sqlite3.Row) -> str:
+    msg = json.loads(row["payload"])
+    text, src = row["preview_text"], row["channel_source"]
+    if src == "slack":      # recipient = channel id, thread_id = thread ts
+        return channels.send_slack(msg.get("recipient") or "", text, msg.get("thread_id"))
+    if src == "telegram":   # thread_id = chat id of the conversation with our bot
+        return channels.send_telegram(msg.get("thread_id") or msg["sender"], text)
+    if src == "gmail":
+        subj = msg.get("subject") or "Your enquiry"
+        return channels.send_email(msg["sender"], subj if subj.lower().startswith("re:") else f"Re: {subj}",
+                                   text, in_reply_to=msg.get("thread_id"))
+    if src == "teams":      # Teams webhooks post to a channel; they cannot DM the sender
+        return channels.send_teams(f"Reply to {msg['sender']}:\n{text}")
+    raise channels.ChannelError(f"no reply route for {src}")
+
+
+def exec_broadcast(row: sqlite3.Row) -> str:
+    if not SIGNAL_TARGETS:
+        raise channels.ChannelError("DONNA_SIGNAL_TARGETS not configured")
+    res = channels.broadcast(f"{row['preview_text']}\n\n{SIGNAL_DISCLAIMER}", SIGNAL_TARGETS, "Signal")
+    failed = {k: v for k, v in res.items() if v.startswith("ERROR")}
+    if len(failed) == len(res):
+        raise channels.ChannelError(json.dumps(failed))
+    return json.dumps(res)
+
+
+def exec_deploy_demo(row: sqlite3.Row) -> str:
+    if not DEMO_DEPLOY_DIR:
+        raise channels.ChannelError("DONNA_DEMO_DEPLOY_DIR not configured")
+    dest = Path(DEMO_DEPLOY_DIR) / Path(row["file_path"]).name
+    shutil.copy2(row["file_path"], dest)
+    return f"copied to DEMO deploy folder {dest}"
 
 
 EXECUTORS: dict[str, Callable[[sqlite3.Row], str]] = {
-    "BROADCAST_SIGNAL": _not_wired("BROADCAST_SIGNAL"),
-    "SEND_REPLY": _not_wired("SEND_REPLY"),
-    "DEPLOY_STRATEGY": _not_wired("DEPLOY_STRATEGY"),   # copy to a DEMO VPS only - never live
+    "BROADCAST_SIGNAL": exec_broadcast,
+    "SEND_REPLY": exec_send_reply,
+    "DEPLOY_STRATEGY": exec_deploy_demo,   # DEMO only - never a live server
 }
+# Executed by an external worker that holds the session (lead monitor's Telegram user account).
+DEFERRED = {"DISPATCH_OUTREACH"}
 
 
 def decide(action_id: str, approve: bool, who: str) -> dict[str, Any]:
@@ -285,6 +336,8 @@ def decide(action_id: str, approve: bool, who: str) -> dict[str, Any]:
     audit(who, "approved" if approve else "rejected", {"action_id": action_id})
     if not approve:
         return {"status": "REJECTED", "action_id": action_id}
+    if row["action_type"] in DEFERRED:
+        return {"status": "APPROVED", "action_id": action_id, "result": "queued for worker"}
 
     try:
         result, status = EXECUTORS[row["action_type"]](row), "EXECUTED"
@@ -355,13 +408,24 @@ async def telegram_webhook(request: Request,
 # ==========================================================================
 # 7. INBOUND WEBHOOKS
 # ==========================================================================
+async def _tv_body(request: Request, model: type[BaseModel]) -> Any:
+    """TradingView sets Content-Type: application/json only when the message parses as JSON,
+    otherwise text/plain - so parse the raw body ourselves and return a clear 422."""
+    try:
+        return model.model_validate_json(await request.body())
+    except ValueError as e:
+        raise HTTPException(422, f"invalid TradingView payload: {str(e)[:300]}")
+
+
 @app.post("/api/tradingview/alert")
-async def tradingview_webhook(alert: TradingViewAlert, bg: BackgroundTasks) -> dict[str, str]:
+async def tradingview_webhook(request: Request, bg: BackgroundTasks) -> dict[str, str]:
+    alert: TradingViewAlert = await _tv_body(request, TradingViewAlert)
     if not _eq(alert.passphrase, TV_PASSPHRASE):
         raise HTTPException(401, "bad passphrase")
     summary = f"TradingView {alert.ticker}: {alert.event} @ {alert.price} ({alert.timeframe})"
     payload = alert.model_dump(exclude={"passphrase"})
-    action_id = stage_action("tradingview", "BROADCAST_SIGNAL", "Discord/Telegram", payload, summary)
+    action_id = await run_in_threadpool(stage_action, "tradingview", "BROADCAST_SIGNAL", "Discord/Telegram",
+                                        payload, summary)
     bg.add_task(notify_admin, action_id, "BROADCAST_SIGNAL", "Discord/Telegram", summary)
     return {"status": "STAGED_FOR_APPROVAL", "action_id": action_id}
 
@@ -491,3 +555,154 @@ def health() -> dict[str, Any]:
     except sqlite3.Error:
         ok = False
     return {"status": "online" if ok else "degraded", "db": ok, "version": app.version}
+
+
+# ==========================================================================
+# 9. LEADS (fed by donna/lead_monitor.py) - consent-first outreach
+# ==========================================================================
+class LeadIn(BaseModel):
+    handle: str = Field(pattern=r"^[A-Za-z0-9_]{4,32}$")
+    source_chat: str = Field(max_length=200)
+    snippet: str = Field(max_length=280)        # minimise stored personal data
+    matched_terms: list[str] = Field(default_factory=list)
+    intent_score: float = Field(ge=0)
+    display_name: str = Field(default="", max_length=64)
+
+
+def consent_request(lead: LeadIn) -> str:
+    # POPIA s69 / GDPR: an unsolicited electronic approach may only ask for consent - once.
+    # No pitch, no pricing claims; identify the firm; give a clear opt-out.
+    name = lead.display_name or f"@{lead.handle}"
+    return (f"Hi {name}, this is {REP_NAME} from {FIRM_DISCLOSURE}. I saw your post in {lead.source_chat} "
+            f"about {', '.join(lead.matched_terms[:3]) or 'trading conditions'}. Would you like us to send "
+            f"you information about our trading accounts? Reply YES if so. If not, reply STOP and we will "
+            f"not contact you again.")
+
+
+@app.post("/api/leads")
+def ingest_lead(lead: LeadIn, bg: BackgroundTasks, actor: str = Depends(require_service)) -> dict[str, Any]:
+    handle, now = lead.handle.lower(), _now().isoformat()
+    with db() as c:
+        if c.execute("SELECT 1 FROM do_not_contact WHERE handle = ?", (handle,)).fetchone():
+            return {"status": "DO_NOT_CONTACT"}
+        cur = c.execute("""INSERT INTO leads (lead_id, handle, source_chat, intent_score, matched_terms, snippet,
+                           status, first_seen, last_seen) VALUES (?,?,?,?,?,?,?,?,?)
+                           ON CONFLICT(handle) DO UPDATE SET mentions = mentions + 1, last_seen = excluded.last_seen,
+                           intent_score = MAX(intent_score, excluded.intent_score)""",
+                        (uuid.uuid4().hex, handle, lead.source_chat, lead.intent_score,
+                         json.dumps(lead.matched_terms), lead.snippet, "DISCOVERED", now, now))
+        row = c.execute("SELECT lead_id, status, contacted_at FROM leads WHERE handle = ?", (handle,)).fetchone()
+        if row["status"] != "DISCOVERED" or row["contacted_at"] or lead.intent_score < LEAD_MIN_SCORE:
+            return {"status": row["status"], "lead_id": row["lead_id"], "staged": False}
+        c.execute("UPDATE leads SET status = 'OUTREACH_STAGED' WHERE handle = ?", (handle,))
+    text = consent_request(lead)
+    action_id = stage_action("lead_monitor", "DISPATCH_OUTREACH", f"@{handle}",
+                             {"handle": handle, "lead_id": row["lead_id"]}, text)
+    bg.add_task(notify_admin, action_id, "DISPATCH_OUTREACH", f"@{handle}",
+                f"{text}\n\nContext: {lead.snippet}\nScore {lead.intent_score}: {', '.join(lead.matched_terms)}")
+    return {"status": "OUTREACH_STAGED", "lead_id": row["lead_id"], "action_id": action_id, "staged": True}
+
+
+@app.get("/api/outreach/approved")
+def outreach_queue(actor: str = Depends(require_service)) -> list[dict[str, Any]]:
+    with db() as c:
+        rows = c.execute("""SELECT action_id, destination, payload, preview_text FROM actions
+                            WHERE action_type = 'DISPATCH_OUTREACH' AND status = 'APPROVED'""").fetchall()
+        dnc = {r["handle"] for r in c.execute("SELECT handle FROM do_not_contact")}
+    return [dict(r) for r in rows if json.loads(r["payload"])["handle"] not in dnc]
+
+
+class OutreachResult(BaseModel):
+    ok: bool
+    detail: str = Field(default="", max_length=500)
+
+
+@app.post("/api/outreach/{action_id}/result")
+def outreach_result(action_id: str, res: OutreachResult, actor: str = Depends(require_service)) -> dict[str, str]:
+    status = "EXECUTED" if res.ok else "FAILED"
+    with db() as c:
+        cur = c.execute("""UPDATE actions SET status = ?, result = ? WHERE action_id = ? AND status = 'APPROVED'
+                           AND action_type = 'DISPATCH_OUTREACH'""", (status, res.detail, action_id))
+        if cur.rowcount != 1:
+            raise HTTPException(409, "action not awaiting a worker result")
+        handle = json.loads(c.execute("SELECT payload FROM actions WHERE action_id = ?",
+                                      (action_id,)).fetchone()["payload"])["handle"]
+        c.execute("UPDATE leads SET status = ?, contacted_at = ? WHERE handle = ?",
+                  ("CONSENT_REQUESTED" if res.ok else "OUTREACH_FAILED", _now().isoformat(), handle))
+    audit("lead_monitor", status.lower(), {"action_id": action_id, "detail": res.detail})
+    return {"status": status}
+
+
+class LeadReply(BaseModel):
+    handle: str
+    text: str = Field(max_length=2000)
+
+
+@app.post("/api/leads/reply")
+def lead_reply(r: LeadReply, bg: BackgroundTasks, actor: str = Depends(require_service)) -> dict[str, str]:
+    """A DM reply from a contacted lead. STOP -> do-not-contact forever; YES -> hand to a human."""
+    handle, t = r.handle.lower(), r.text.strip().lower()
+    with db() as c:
+        lead = c.execute("SELECT status FROM leads WHERE handle = ?", (handle,)).fetchone()
+        if lead is None or lead["status"] not in ("CONSENT_REQUESTED", "CONSENTED", "NEEDS_HUMAN"):
+            return {"status": "IGNORED"}
+        if re.search(r"\b(stop|unsubscribe|no thanks|not interested|remove me)\b", t):
+            c.execute("INSERT OR REPLACE INTO do_not_contact VALUES (?,?,?)", (handle, "opt-out reply", _now().isoformat()))
+            c.execute("UPDATE leads SET status = 'OPTED_OUT' WHERE handle = ?", (handle,))
+            status = "OPTED_OUT"
+        elif re.search(r"\b(yes|sure|ok|okay|interested|send)\b", t):
+            c.execute("UPDATE leads SET status = 'CONSENTED' WHERE handle = ?", (handle,))
+            status = "CONSENTED"
+        else:
+            status = "NEEDS_HUMAN"
+            c.execute("UPDATE leads SET status = 'NEEDS_HUMAN' WHERE handle = ?", (handle,))
+    if status != "OPTED_OUT":
+        bg.add_task(notify_admin, "-", f"LEAD_{status}", f"@{handle}", r.text[:500])
+    audit("lead_monitor", "lead_reply", {"handle": handle, "status": status})
+    return {"status": status}
+
+
+# ==========================================================================
+# 10. TRADINGVIEW DAILY SNAPSHOT (donna/tradingview/donna_daily_snapshot.pine)
+# ==========================================================================
+class TVBar(BaseModel):
+    symbol: str = Field(max_length=64)
+    t: int                                   # bar open time, ms since epoch (Pine `time`)
+    o: Optional[float] = None
+    h: Optional[float] = None
+    l: Optional[float] = None
+    c: Optional[float] = None
+    pc: Optional[float] = None               # previous close
+    rsi: Optional[float] = None
+    atr: Optional[float] = None
+    e50: Optional[float] = None
+    e200: Optional[float] = None
+
+
+class TVSnapshot(BaseModel):
+    passphrase: str
+    kind: Literal["daily_snapshot"]
+    bars: list[TVBar] = Field(max_length=40)
+
+
+@app.post("/api/tradingview/snapshot")
+async def tradingview_snapshot(request: Request) -> dict[str, Any]:
+    s: TVSnapshot = await _tv_body(request, TVSnapshot)
+    return await run_in_threadpool(_store_snapshot, s)
+
+
+def _store_snapshot(s: TVSnapshot) -> dict[str, Any]:
+    if not _eq(s.passphrase, TV_PASSPHRASE):
+        raise HTTPException(401, "bad passphrase")
+    now = _now().isoformat()
+    stored = 0
+    with db() as c:
+        for b in s.bars:
+            if b.c is None:
+                continue
+            bar_time = datetime.fromtimestamp(b.t / 1000, timezone.utc).date().isoformat()
+            c.execute("""INSERT OR REPLACE INTO tv_bars (symbol, bar_time, open, high, low, close, prev_close,
+                         rsi, atr, ema50, ema200, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      (b.symbol, bar_time, b.o, b.h, b.l, b.c, b.pc, b.rsi, b.atr, b.e50, b.e200, now))
+            stored += 1
+    return {"status": "STORED", "bars": stored}
