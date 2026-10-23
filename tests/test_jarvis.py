@@ -367,3 +367,90 @@ def test_calendar_from_ics(monkeypatch):
     ev = a.calendar_events(date(2026, 10, 24))["events"]          # recurring instance on the next day
     assert ev == [{"title": "LP call", "all_day": False, "start": "2026-10-24 10:00", "end": "10:30", "location": ""}]
     assert [e["title"] for e in a.calendar_events(date(2026, 10, 23))["events"]] == ["Month-end", "LP call"]
+
+
+# ---------------------------------------------------------------- compliance & growth
+def _fake_client(payloads):
+    """Anthropic-like client returning the given JSON payloads in order."""
+    import json as _j
+
+    class C:
+        class beta:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    assert kw["output_config"]["format"]["type"] == "json_schema"
+                    blk = type("B", (), {"type": "text", "text": _j.dumps(payloads.pop(0))})
+                    return type("R", (), {"stop_reason": "end_turn", "content": [blk]})
+    return C()
+
+
+def test_compliance_scan_cases_and_obligations(tmp_path, monkeypatch):
+    from jarvis.agents import compliance as co
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setattr(co.bo, "activity_summary", lambda: {
+        "asof": "2026-10-22", "in_out_no_trading": ["79"], "high_turnover": [{"account": "3", "x": 2222.0}],
+        "rejections": [], "volume": 1e6})
+    monkeypatch.setattr(co.bo, "kyc_summary", lambda: {"pending_over_2d": ["CU21"], "rejected_open": {"CU4": "Selfie"},
+                                                      "expiring": [], "unassigned_pct": 92.0, "oldest_pending_days": 34})
+    monkeypatch.setattr(co.bo, "book_summary", lambda: {
+        "asof": "2026-10-22", "margin_alerts": [{"account": "3", "grp": "Std", "level": 111.0, "equity": 321}],
+        "top_account": {"account": "10", "share_pct": 53.0}, "credit_heavy": [], "drawdowns": []})
+    monkeypatch.setattr(co.bo, "streams_summary", lambda: {"error": "NO DATA"})
+    monkeypatch.setattr(co.bo, "kpi_summary", lambda: {"kpis": {"Volume": 0}})
+    r = co.scan()
+    assert r["new_cases"] == 8 and co.scan()["new_cases"] == 0          # never logged twice
+    rules = {c["rule"] for c in co.list_cases()}
+    assert {"AML_IN_OUT_NO_TRADE", "RISK_STOPOUT", "RISK_CONCENTRATION", "DATA_VOLUME_SYNC"} <= rules
+    high = [c for c in co.list_cases() if c["severity"] == "high"]
+    assert len(high) == 2 and all(c["due"] for c in high)
+    cid = high[0]["id"]
+    assert co.update_case(cid, "closed", "documents received") and co.get_case(cid)["resolution"] == "documents received"
+    assert [h["action"] for h in co.get_case(cid)["log"]] == ["opened", "closed"]
+    assert {k["kri"]: k["status"] for k in co.kris()}["Largest client share of equity %"] == "RED"
+    oid = co.add_obligation("Quarterly return", "2026-01-31", "monthly")
+    assert co.complete_obligation(oid) == "done - next due 2026-02-28"   # month-end rolls safely
+    with pytest.raises(ValueError):
+        co.add_obligation("x", "31/01/2026")
+
+
+def test_promo_review_and_discord_case_commands(tmp_path, monkeypatch):
+    from donna import discord_bot as b
+    from jarvis.agents import compliance as co
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    r = co.review_promotion("Guaranteed 20% a month!", _fake_client([{
+        "verdict": "reject", "issues": [{"phrase": "Guaranteed", "problem": "profit guarantee", "fix": "remove"}],
+        "compliant_version": "Trade gold with tight spreads. CFDs are complex..."}]))
+    assert r["verdict"] == "reject" and r["issues"][0]["phrase"] == "Guaranteed"
+    cid = co.open_case("AML", "AML_TEST", "high", "#1", "test finding")
+    assert b.handle(f"!close {cid}").startswith("A case can only be closed")
+    assert b.handle(f"!escalate {cid} sent to MLRO") == f"Case #{cid} -> escalated"
+    assert "escalated" in b.handle(f"!case {cid}") and "#1" in b.handle("!cases")
+    assert "Obligation #1 added" == b.handle("!oblig add FIC return | 2026-11-15 | monthly")
+
+
+def test_leads_export_detected_and_tasks(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    from jarvis.agents import backoffice as bo, growth
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    d = pd.DataFrame({"*|customer_no|*": ["CU1", "CU2", "CU3", "CU4"],
+                      "*|registration_date|*": ["2026-10-23 09:00", "2026-10-15 10:00", "2026-10-14 10:00", "2026-10-22 08:00"],
+                      "*|lead_source|*": ["Google", "IB-77", "Google", ""], "*|lead_status|*": ["New", "No Answer", "Converted", "New"],
+                      "*|assigned_to|*": ["0", "Roy", "Roy", "0"], "*|ftd_amount|*": ["0", "0", "250", "0"]})
+    p = tmp_path / "Leads-2026-10-23.csv"
+    d.to_csv(p, index=False)
+    assert bo.ingest_file(p)["kind"] == "leads"
+    s = growth.leads_summary(now=datetime(2026, 10, 23, 12, 0))
+    assert s["leads"] == 4 and s["ftd"] == 1 and s["unassigned"] == 2 and s["new_24h"] == 1
+    assert s["stale"] == 1 and s["stale_ids"] == ["CU2"]
+    assert {x["source"]: x["conv"] for x in s["by_source"]}["Google"] == 50.0
+    ids = growth.lead_tasks(s)
+    assert len(ids) == 2 and growth.lead_tasks(s) == []                    # one task per batch per day
+    posts = {"posts": [{"channel": "x", "text": "Gold fell 1.9% as yields rose. CFDs are complex..."}]}
+    review = {"verdict": "approve", "issues": [], "compliant_version": ""}
+    drafts = growth.draft_posts(_fake_client([posts, review]), brief="Gold -1.9%")
+    assert drafts[0]["verdict"] == "approve" and "compliance OK" in growth.drafts_text(drafts)
