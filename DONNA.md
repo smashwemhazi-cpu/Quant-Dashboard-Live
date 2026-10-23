@@ -37,7 +37,7 @@ Ranked by how much each step moves DONNA toward "runs my day, thinks with me, gr
 |---|---|---|---|
 | 1 | **Connect your calendar and email** | Already built (read-only email triage into tasks, Google Calendar in the my-day brief and the meeting reminders). Switching it on is what makes her run your day rather than only your task list. | About 10 minutes with `vertex1-connect`: a Google app password and your calendar's private iCal link. No cost. |
 | 2 | ✅ **One morning and one evening message, with live position risk** (step 2 PR) | Up to five reports a day is noise. One morning message and one evening message, ranked by what needs you. The morning one includes your open trades, risk at stop and distance to the daily-loss limit. | Nothing. |
-| 3 | **Growth co-pilot** | Uses the growth and compliance agents from PR #2 (now merged). A weekly growth review covering leads, funnel, IB performance and retention, plus one experiment to run next, and DONNA tracks whether it worked. | Nothing beyond the Syntellicore exports you already upload. |
+| 3 | ✅ **Growth co-pilot** | Uses the growth and compliance agents from PR #2 (now merged). A weekly growth review covering leads, funnel, IB performance and retention, plus one experiment to run next, and DONNA tracks whether it worked. | Nothing beyond the Syntellicore exports you already upload. |
 | 4 | **Proactive nudges, round 2** | Meeting reminders and the midday check are done. Next is to speak up when it matters: a watchlist move beyond its normal range, a compliance case or obligation about to go overdue, a hot lead left untouched, a bot that stopped. | Nothing. |
 | 5 | **Trading guardrails and the personal-account-dealing check** | Weekly and monthly drawdown limits, a daily trade cap, a cool-off after a loss streak, and a news blackout. Before any trade plan she checks your restricted list and holding period, and logs the pre-clearance. | Your firm's PAD policy: restricted list, holding period, pre-clearance rule. |
 | 6 | **Security and audit hardening** | You'd expect this as a compliance officer. Client names and numbers are masked in tool results before they reach Claude. The audit log becomes tamper-evident (each entry chained to the last), and `!audit` shows what DONNA did today. | Nothing. |
@@ -62,6 +62,21 @@ With `DONNA_DIGEST=1` (the default) your private channel gets two scheduled mess
 - any position without a hard stop.
 
 Until a feed is connected, the section says NO DATA.
+
+## Step 3: growth co-pilot
+
+Every Monday (`DONNA_GROWTH_WEEKDAY`, at `JARVIS_GROWTH_UTC_HOUR`) and whenever you type `!growth`, DONNA writes a growth review from the Syntellicore exports you already upload: a headline, up to three wins and three worries, each tied to a number, and **one experiment** for next week.
+
+An experiment is a concrete action (for example "round-robin new leads to sales every hour"), with a target on a number DONNA measures herself from the next exports:
+- new leads in the last 7 days
+- conversion (leads that funded, %)
+- stale leads (untouched for 3+ days)
+- leads with no owner
+- funded accounts
+
+`!exp start 3` records today's value as the baseline. When the end date passes, the next review marks the experiment **won** or **lost** against its target. `!exp` lists them all, and `!exp stop 3` drops one. Proposals stay within what a regulated broker may do: no bonuses or trading incentives, no pressure selling, no profit claims.
+
+Only counts and source or IB names are sent to Claude, never client names, account numbers or customer ids. With no leads export uploaded, the review says NO DATA and doesn't call Claude.
 
 ## Connecting your live cTrader account (read-only)
 

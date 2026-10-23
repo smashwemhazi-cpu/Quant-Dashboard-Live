@@ -169,6 +169,12 @@ def job_ctrader_positions() -> None:
         raise RuntimeError(r["error"])  # reported once per failing run by job_failed
 
 
+def job_growth_review() -> None:
+    r = agents()["copilot"].weekly(send=True)
+    if "skipped" not in r:
+        notify("growth_review", r.get("delivery"))
+
+
 def job_morning() -> None:
     notify("morning", agents()["rhythm"].morning(send=True).get("delivery"))
 
@@ -199,6 +205,7 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     # the two digests: same hours as the my-day brief and the shutdown they replace
     ("morning", 60 * 24, int(os.getenv("JARVIS_MYDAY_UTC_HOUR", "4")), job_morning),
     ("evening", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_evening),
+    ("growth_review", 60 * 24, int(os.getenv("JARVIS_GROWTH_UTC_HOUR", "5")), job_growth_review),  # on DONNA_GROWTH_WEEKDAY
 ]
 
 
