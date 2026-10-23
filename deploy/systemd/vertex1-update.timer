@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for a new Vertex 1 version every 30 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+RandomizedDelaySec=3min
+
+[Install]
+WantedBy=timers.target

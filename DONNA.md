@@ -80,7 +80,7 @@ DONNA reads your balance, open positions, stops and current prices every 5 minut
 I couldn't open the portal from here, so the exact button names may differ slightly.
 
 **On your server:**
-6. Run `sudo vertex1-connect`. Questions 9–12 ask for the four values, and your typing stays hidden. Question 8 is your account number, if it isn't saved yet. The script then checks the connection and prints `CTRADER OK - read-only, N open position(s)`.
+6. Run `sudo vertex1-connect ctrader` (only the cTrader questions; plain `vertex1-connect` asks everything). Questions 9–12 ask for the four values, and your typing stays hidden. Question 8 is your account number, if it isn't saved yet. The script then checks the connection and prints `CTRADER OK - read-only, N open position(s)`.
 7. In Discord, `!risk` shows the live view, and the morning and evening messages include it.
 
 **Never paste these four values into chat, Discord, email or a document.** They only go into the server's env file through `vertex1-connect`. If one ever leaks, delete the token in the Open API portal (or the whole app) and issue a new one.
@@ -107,6 +107,26 @@ I couldn't open the portal from here, so the exact button names may differ sligh
 4. In `#donna`, say hello. Then try `!dump` with whatever is on your mind.
 
 The DONNA Discord bot you already have is reused, so there's no new account, key or cost beyond the Claude API usage per message.
+
+## Hands-off updates
+
+From this release the server updates itself. Every 30 minutes `vertex1-update.timer` checks GitHub for a newer commit on `main`, and installs it only if:
+- the automatic tests (`.github/workflows/tests.yml`) passed on GitHub for that exact commit, and
+- the code contains nothing that looks like a password or key.
+
+After installing it restarts whichever services were running, waits, and checks they are all up (and that `/health` answers). If anything is down it goes back to the previous version by itself. Either way DONNA posts one line in your private channel: "Updated to abc1234: ..." or what went wrong. Your settings and databases are never touched.
+
+- What's installed and what's waiting: `sudo vertex1-update --status`
+- Update now instead of waiting: `sudo vertex1-update`
+- Pause updates: `sudo systemctl disable --now vertex1-update.timer` (resume with `enable --now`)
+- If the GitHub repository is made private, add a read-only token as `VERTEX1_UPDATE_TOKEN` in the env file (a fine-grained token for this one repository with Contents: read).
+
+**One-time setup on a server that predates this:**
+```
+bash <(curl -fsSL https://raw.githubusercontent.com/smashwemhazi-cpu/Quant-Dashboard-Live/main/deploy/vertex1-update)
+```
+
+What changed and why is logged in [CHANGELOG-DONNA.md](CHANGELOG-DONNA.md).
 
 ## Guardrails
 

@@ -6,8 +6,10 @@ set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "run with sudo"; exit 1; }
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 
-apt-get update -qq
-apt-get install -y -qq python3 python3-venv python3-pip nginx >/dev/null
+if [[ -z ${VERTEX1_SKIP_APT:-} ]]; then  # the auto-updater skips this; packages don't change between releases
+  apt-get update -qq
+  apt-get install -y -qq python3 python3-venv python3-pip nginx curl >/dev/null
+fi
 
 id vertex1 &>/dev/null || useradd --system --home /var/lib/vertex1 --shell /usr/sbin/nologin vertex1
 install -d -o vertex1 -g vertex1 -m 750 /var/lib/vertex1 /var/lib/vertex1/data /var/lib/vertex1/generated /var/lib/vertex1/tradingview /var/lib/vertex1/inbox
@@ -30,10 +32,12 @@ chown -R root:vertex1 /opt/vertex1/app && chmod -R g+rX,o-rwx /opt/vertex1/app
 install -d -o root -g vertex1 -m 750 /opt/vertex1/app/.streamlit
 ln -sf /etc/vertex1/secrets.toml /opt/vertex1/app/.streamlit/secrets.toml
 
-cp "$SRC"/deploy/systemd/*.service /etc/systemd/system/
+cp "$SRC"/deploy/systemd/*.service "$SRC"/deploy/systemd/*.timer /etc/systemd/system/
 [[ -f /etc/nginx/sites-available/vertex1 ]] || cp "$SRC/deploy/nginx/vertex1.conf" /etc/nginx/sites-available/vertex1
 install -m 755 "$SRC/deploy/vertex1-connect" /usr/local/bin/vertex1-connect
+install -m 755 "$SRC/deploy/vertex1-update" /usr/local/bin/vertex1-update
 systemctl daemon-reload
+systemctl enable -q --now vertex1-update.timer  # hands-off updates from now on
 
 echo
 echo "Installed to /opt/vertex1/app (previous release kept in /opt/vertex1/app.prev)."
