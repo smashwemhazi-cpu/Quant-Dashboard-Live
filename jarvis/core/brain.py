@@ -53,14 +53,14 @@ class Brain:
         self.client = client or anthropic.Anthropic()
 
     def ask(self, messages: list[dict[str, Any]], user: str = "user", allow_writes: bool = False,
-            on_step: Callable[[str], None] | None = None) -> str:
+            on_step: Callable[[str], None] | None = None, system: str | None = None) -> str:
         audit.log(user, "ask", {"prompt": messages[-1]["content"] if messages else ""})
         tools = [_wrap(t, allow_writes) for t in all_tools()]
         try:
             runner = self.client.beta.messages.tool_runner(
                 model=settings.model,
                 max_tokens=16000,
-                system=SYSTEM,
+                system=system or SYSTEM,
                 tools=tools,
                 messages=messages,
                 max_iterations=settings.max_tool_turns,

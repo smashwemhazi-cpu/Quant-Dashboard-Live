@@ -223,18 +223,22 @@ def test_discord_task_commands(tmp_path, monkeypatch):
     assert all(len(p) <= 2000 for p in parts) and len(parts) == 3
 
 
-def test_discord_ask_uses_read_only_brain(monkeypatch):
+def test_discord_ask_uses_read_only_brain_with_memory(tmp_path, monkeypatch):
     from donna import discord_bot as b
     from jarvis.core import brain
 
-    seen = {}
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    seen = []
 
     class FakeBrain:
-        def ask(self, messages, user, allow_writes):
-            seen.update(q=messages[0]["content"], user=user, writes=allow_writes)
+        def ask(self, messages, user, allow_writes, system=None):
+            seen.append(dict(msgs=messages, user=user, writes=allow_writes, system=system))
             return "3 clients at risk"
 
     monkeypatch.setattr(brain, "Brain", FakeBrain)
-    assert b.handle("!ask who is at risk?") == "3 clients at risk"
-    assert seen == {"q": "who is at risk?", "user": "discord", "writes": False}
+    assert b.handle("!ask who is at risk?", "desk") == "3 clients at risk"
+    assert seen[0]["msgs"] == [{"role": "user", "content": "who is at risk?"}]
+    assert not seen[0]["writes"] and "D.O.N.N.A" in seen[0]["system"]
+    b.handle("!ask and the biggest one?", "desk")
+    assert [m["content"] for m in seen[1]["msgs"]] == ["who is at risk?", "3 clients at risk", "and the biggest one?"]
     assert b.handle("!ask   ").startswith("Usage")
