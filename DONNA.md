@@ -38,7 +38,7 @@ Ranked by how much each step moves DONNA toward "runs my day, thinks with me, gr
 | 1 | **Connect your calendar and email** | Already built (read-only email triage into tasks, Google Calendar in the my-day brief and the meeting reminders). Switching it on is what makes her run your day rather than only your task list. | About 10 minutes with `vertex1-connect`: a Google app password and your calendar's private iCal link. No cost. |
 | 2 | ✅ **One morning and one evening message, with live position risk** (step 2 PR) | Up to five reports a day is noise. One morning message and one evening message, ranked by what needs you. The morning one includes your open trades, risk at stop and distance to the daily-loss limit. | Nothing. |
 | 3 | ✅ **Growth co-pilot** | Uses the growth and compliance agents from PR #2 (now merged). A weekly growth review covering leads, funnel, IB performance and retention, plus one experiment to run next, and DONNA tracks whether it worked. | Nothing beyond the Syntellicore exports you already upload. |
-| 4 | **Proactive nudges, round 2** | Meeting reminders and the midday check are done. Next is to speak up when it matters: a watchlist move beyond its normal range, a compliance case or obligation about to go overdue, a hot lead left untouched, a bot that stopped. | Nothing. |
+| 4 | ✅ **Proactive nudges, round 2** | Meeting reminders and the midday check are done. Next is to speak up when it matters: a watchlist move beyond its normal range, a compliance case or obligation about to go overdue, a hot lead left untouched, a bot that stopped. | Nothing. |
 | 5 | **Trading guardrails and the personal-account-dealing check** | Weekly and monthly drawdown limits, a daily trade cap, a cool-off after a loss streak, and a news blackout. Before any trade plan she checks your restricted list and holding period, and logs the pre-clearance. | Your firm's PAD policy: restricted list, holding period, pre-clearance rule. |
 | 6 | **Security and audit hardening** | You'd expect this as a compliance officer. Client names and numbers are masked in tool results before they reach Claude. The audit log becomes tamper-evident (each entry chained to the last), and `!audit` shows what DONNA did today. | Nothing. |
 | 7 | **Reliable hosting** | Services already restart on a crash, and as of this PR the scheduler survives a restart without repeating reports and tells you when a job fails. Still to add: nightly database backups, and an outside health check that messages you if a service is down. | Possibly a free uptime monitor account. I'll ask before adding anything. |
@@ -77,6 +77,17 @@ An experiment is a concrete action (for example "round-robin new leads to sales 
 `!exp start 3` records today's value as the baseline. When the end date passes, the next review marks the experiment **won** or **lost** against its target. `!exp` lists them all, and `!exp stop 3` drops one. Proposals stay within what a regulated broker may do: no bonuses or trading incentives, no pressure selling, no profit claims.
 
 Only counts and source or IB names are sent to Claude, never client names, account numbers or customer ids. With no leads export uploaded, the review says NO DATA and doesn't call Claude.
+
+## Step 4: daytime heads-ups
+
+Every 15 minutes DONNA checks for things that shouldn't wait for the evening message, and tells you **once** in your private channel:
+- **Market:** a watchlist instrument whose range today is 1.5 times its normal day or more (`DONNA_MOVE_ATR`).
+- **Compliance:** a regulatory obligation due within 2 days (`DONNA_OBLIGATION_WARN_DAYS`), or a case due today or tomorrow, before it becomes overdue.
+- **Leads:** new leads still without an owner 2 hours after DONNA first saw the export (`DONNA_LEAD_HOT_HOURS`).
+- **Bots:** a cBot that crashed or went quiet.
+- **Positions:** a live position without a stop, or the daily-loss limit hit.
+
+Each heads-up is remembered, so a restart never repeats it. If one source is down, the others still run.
 
 ## Connecting your live cTrader account (read-only)
 

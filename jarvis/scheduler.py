@@ -131,6 +131,12 @@ def job_nudges() -> None:
         notify("nudges", r)
 
 
+def job_watch() -> None:
+    r = agents()["watch"].watch()
+    if r["nudges"]:
+        notify("watch", r)
+
+
 def job_midday() -> None:
     r = agents()["mind"].nudge(midday=True)
     if r["nudges"]:
@@ -200,6 +206,7 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("marketing_drafts", 60 * 24, int(os.getenv("JARVIS_CONTENT_UTC_HOUR", "6")), job_marketing_drafts),
     ("shutdown", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_shutdown),  # evening close-out
     ("nudges", 5, None, job_nudges),                                                       # meeting reminders
+    ("watch", 15, None, job_watch),                                                        # moves, deadlines, leads, bots, stops
     ("midday", 60 * 24, int(os.getenv("JARVIS_MIDDAY_UTC_HOUR", "9")), job_midday),         # open high-priority work
     ("ctrader_positions", int(os.getenv("DONNA_CTRADER_POLL_MINUTES", "5")), None, job_ctrader_positions),
     # the two digests: same hours as the my-day brief and the shutdown they replace
