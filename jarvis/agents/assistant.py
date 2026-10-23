@@ -206,6 +206,8 @@ def calendar_events(day: date | None = None, days: int = 1) -> dict[str, Any]:
     url = os.getenv("JARVIS_GCAL_ICS_URL", "").strip().strip("\"'")
     if not url:
         return {"error": "NO DATA - calendar not connected (JARVIS_GCAL_ICS_URL)"}
+    if not url.startswith("https://"):
+        return {"error": "JARVIS_GCAL_ICS_URL is not an https:// link - run vertex1-connect again"}
     import icalendar
     import recurring_ical_events
 

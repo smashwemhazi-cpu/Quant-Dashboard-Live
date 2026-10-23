@@ -32,17 +32,30 @@ lines = open(path).read().splitlines()
 new = {k[4:]: v for k, v in os.environ.items() if k.startswith("SET_")}
 if "JARVIS_IMAP_PASSWORD" in new:
     new["JARVIS_IMAP_PASSWORD"] = new["JARVIS_IMAP_PASSWORD"].replace(" ", "")  # Google shows it in groups of 4
+# check each answer's shape; never print the value itself
+CHECKS = {
+    "DONNA_DISCORD_WEBHOOK_REPORTS": (r"https://(discord|discordapp)\.com/api/webhooks/\S+", "not a Discord webhook link"),
+    "DONNA_DISCORD_WEBHOOK_PERSONAL": (r"https://(discord|discordapp)\.com/api/webhooks/\S+", "not a Discord webhook link"),
+    "DONNA_DISCORD_BOT_TOKEN": (r"[A-Za-z0-9._-]{50,100}", "not a Discord bot token"),
+    "DONNA_DISCORD_COMMAND_CHANNELS": (r"[a-z0-9_,# -]+", "not a channel name"),
+    "JARVIS_IMAP_USER": (r"[^@\s]+@[^@\s]+\.[^@\s]+", "not an email address"),
+    "JARVIS_IMAP_PASSWORD": (r"[a-z]{16}", "not an app password. An app password is 16 lowercase letters made at "
+                             "myaccount.google.com/apppasswords - never type your normal Google password here"),
+    "JARVIS_GCAL_ICS_URL": (r"https://calendar\.google\.com/calendar/ical/\S+\.ics", "not the 'Secret address in iCal format' link"),
+    "JARVIS_PERSONAL_ACCOUNT": (r"\d{4,12}", "not an account number (digits only)"),
+}
 for k, v in list(new.items()):
-    if re.search(r'["`$\\]', v):
-        print(f"SKIPPED {k}: contains a quote, backtick, $ or backslash - paste it again without those")
+    rx, why = CHECKS.get(k, (r"[^\"`$\\]+", "contains characters that are not allowed"))
+    if not re.fullmatch(rx, v) or re.search(r'["`$\\]', v):
+        print(f"SKIPPED {k}: {why}")
         new.pop(k)
 current = {l.split("=", 1)[0]: l.split("=", 1)[1].strip('"') for l in lines if "=" in l and not l.lstrip().startswith("#")}
 present = set(current)
-# reports were going to the personal channel: a new company webhook frees the old one for personal use
-if "DONNA_DISCORD_WEBHOOK_REPORTS" in new and "DONNA_DISCORD_WEBHOOK_PERSONAL" not in new \
-        and not current.get("DONNA_DISCORD_WEBHOOK_PERSONAL") and current.get("DONNA_DISCORD_WEBHOOK_REPORTS"):
+# the first reports webhook was made in the personal channel: reuse it for personal posts
+if "DONNA_DISCORD_WEBHOOK_PERSONAL" not in new and not current.get("DONNA_DISCORD_WEBHOOK_PERSONAL") \
+        and current.get("DONNA_DISCORD_WEBHOOK_REPORTS"):
     new["DONNA_DISCORD_WEBHOOK_PERSONAL"] = current["DONNA_DISCORD_WEBHOOK_REPORTS"]
-    print("Moved the old reports webhook to the personal channel")
+    print("Personal posts will use the existing webhook (#track-b-personal)")
 for k, v in {"JARVIS_IMAP_HOST": "imap.gmail.com", "JARVIS_LOCAL_TZ": "Etc/GMT-4", "JARVIS_CTRADER_UTC_OFFSET": "4",
              "JARVIS_PERSONAL_TARGETS": "discord:personal", "JARVIS_INBOX_DIR": "/var/lib/vertex1/inbox",
              "DONNA_DISCORD_COMMAND_CHANNELS": "track-b-personal"}.items():
