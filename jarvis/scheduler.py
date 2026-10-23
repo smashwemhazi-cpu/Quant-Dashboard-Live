@@ -159,6 +159,14 @@ def job_morning_brief() -> None:
     notify("morning_brief", brief)
 
 
+def job_morning() -> None:
+    notify("morning", agents()["rhythm"].morning(send=True).get("delivery"))
+
+
+def job_evening() -> None:
+    notify("evening", agents()["rhythm"].evening(send=True).get("delivery"))
+
+
 # (name, every_n_minutes, weekday_only_hour or None, fn)
 JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("execution", 15, None, job_execution),
@@ -177,7 +185,19 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("shutdown", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_shutdown),  # evening close-out
     ("nudges", 5, None, job_nudges),                                                       # meeting reminders
     ("midday", 60 * 24, int(os.getenv("JARVIS_MIDDAY_UTC_HOUR", "9")), job_midday),         # open high-priority work
+    # the two digests: same hours as the my-day brief and the shutdown they replace
+    ("morning", 60 * 24, int(os.getenv("JARVIS_MYDAY_UTC_HOUR", "4")), job_morning),
+    ("evening", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_evening),
 ]
+
+
+def active_jobs() -> list[tuple[str, int, int | None, Callable[[], None]]]:
+    """DONNA_DIGEST=1 (default): the morning/evening digests replace the separate personal reports.
+    DONNA_DIGEST=0: the old separate reports, no digests."""
+    from jarvis.agents.rhythm import DIGEST, REPLACED_JOBS
+
+    skip = REPLACED_JOBS if DIGEST else {"morning", "evening"}
+    return [j for j in JOBS if j[0] not in skip]
 
 
 def _state() -> sqlite3.Connection:
@@ -215,7 +235,7 @@ def main() -> None:
     while True:
         now = time.time()
         hour = datetime.now(timezone.utc)  # all schedules are UTC
-        for name, every, at_hour, fn in JOBS:
+        for name, every, at_hour, fn in active_jobs():
             if at_hour is not None and (hour.hour != at_hour or hour.weekday() >= 5):
                 continue
             if now - last.get(name, 0) < every * 60:

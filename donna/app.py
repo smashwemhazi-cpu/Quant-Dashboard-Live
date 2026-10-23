@@ -685,6 +685,35 @@ class TVSnapshot(BaseModel):
     bars: list[TVBar] = Field(max_length=40)
 
 
+class PositionIn(BaseModel):
+    symbol: str
+    side: Literal["buy", "sell"]
+    units: float = Field(gt=0)
+    entry: float = Field(gt=0)
+    stop: Optional[float] = Field(default=None, gt=0)
+    price: float = Field(gt=0)
+    quote_to_account: float = Field(default=1.0, gt=0)   # e.g. 1/USDJPY for a USD account
+
+
+class PositionSnapshot(BaseModel):
+    equity: float = Field(gt=0)
+    start_of_day_equity: Optional[float] = Field(default=None, gt=0)
+    positions: list[PositionIn]
+    source: str = "api"
+
+
+@app.post("/api/positions")
+def positions_snapshot(snap: PositionSnapshot, actor: str = Depends(require_service)) -> dict[str, Any]:
+    """Live open positions for DONNA's risk view (personal account only). Replaces the previous snapshot."""
+    from jarvis.agents import rhythm
+
+    sid = rhythm.store_positions([p.model_dump() for p in snap.positions], snap.equity,
+                                 snap.start_of_day_equity, snap.source[:40])
+    audit(actor, "positions_snapshot", {"id": sid, "count": len(snap.positions)})
+    r = rhythm.position_risk()
+    return {"snapshot_id": sid, "open_risk_pct": r.get("open_risk_pct"), "no_stop": r.get("no_stop", [])}
+
+
 @app.post("/api/tradingview/snapshot")
 async def tradingview_snapshot(request: Request) -> dict[str, Any]:
     s: TVSnapshot = await _tv_body(request, TVSnapshot)

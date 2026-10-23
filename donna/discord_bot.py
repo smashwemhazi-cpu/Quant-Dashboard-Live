@@ -15,6 +15,7 @@ Thinking partner (jarvis/agents/mind.py):
   !park #id  !doing #id  !drop #id   move an idea on the board
   !remember <fact>  !memory  !forget <id>   what D.O.N.N.A knows about you
   !shutdown                      close the day; !week for the weekly review
+  !morning  !evening  !risk      the two daily digests on demand, and live position risk
 
 Plain messages are only answered in DONNA_DISCORD_CHAT_CHANNELS (also private), and only from the
 user IDs in DONNA_DISCORD_ALLOWED_USERS - free chat reaches every agent, so it is never left open.
@@ -59,7 +60,8 @@ HELP = ("D.O.N.N.A commands:\n"
         "!think <idea or #id>       stress-test an idea\n"
         "!park #id  !doing #id  !drop #id\n"
         "!remember <fact>  !memory  !forget <id>\n"
-        "!shutdown  !week           close the day / weekly review")
+        "!shutdown  !week           close the day / weekly review\n"
+        "!morning  !evening  !risk  today's digests / live position risk")
 
 
 def _list(v: str) -> set[str]:
@@ -128,6 +130,11 @@ def mind_command(cmd: str, rest: str, channel: str) -> str | None:
         return "Fresh page. What's on your mind?"
     if cmd == "!shutdown":
         return mind.shutdown_text()
+    if cmd in ("!morning", "!evening", "!risk"):
+        from jarvis.agents import rhythm
+
+        return {"!morning": rhythm.morning_text, "!evening": rhythm.evening_text,
+                "!risk": lambda: "\n".join(rhythm.risk_lines())}[cmd]()
     if cmd == "!week":
         return mind.week_review()
     return None

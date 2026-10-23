@@ -36,13 +36,32 @@ Ranked by how much each step moves DONNA toward "runs my day, thinks with me, gr
 | # | Step | Why it's ranked here | What it needs from you |
 |---|---|---|---|
 | 1 | **Connect your calendar and email** | Already built (read-only email triage into tasks, Google Calendar in the my-day brief and the meeting reminders). Switching it on is what makes her run your day rather than only your task list. | About 10 minutes with `vertex1-connect`: a Google app password and your calendar's private iCal link. No cost. |
-| 2 | **One morning and one evening message, with live position risk** | Up to five reports a day is noise. One morning message and one evening message, ranked by what needs you. The morning one includes your open trades, risk at stop and distance to the daily-loss limit. | Nothing. |
+| 2 | ✅ **One morning and one evening message, with live position risk** (step 2 PR) | Up to five reports a day is noise. One morning message and one evening message, ranked by what needs you. The morning one includes your open trades, risk at stop and distance to the daily-loss limit. | Nothing. |
 | 3 | **Growth co-pilot** | Uses the growth and compliance agents from PR #2 (now merged). A weekly growth review covering leads, funnel, IB performance and retention, plus one experiment to run next, and DONNA tracks whether it worked. | Nothing beyond the Syntellicore exports you already upload. |
 | 4 | **Proactive nudges, round 2** | Meeting reminders and the midday check are done. Next is to speak up when it matters: a watchlist move beyond its normal range, a compliance case or obligation about to go overdue, a hot lead left untouched, a bot that stopped. | Nothing. |
 | 5 | **Trading guardrails and the personal-account-dealing check** | Weekly and monthly drawdown limits, a daily trade cap, a cool-off after a loss streak, and a news blackout. Before any trade plan she checks your restricted list and holding period, and logs the pre-clearance. | Your firm's PAD policy: restricted list, holding period, pre-clearance rule. |
 | 6 | **Security and audit hardening** | You'd expect this as a compliance officer. Client names and numbers are masked in tool results before they reach Claude. The audit log becomes tamper-evident (each entry chained to the last), and `!audit` shows what DONNA did today. | Nothing. |
 | 7 | **Reliable hosting** | Services already restart on a crash, and as of this PR the scheduler survives a restart without repeating reports and tells you when a job fails. Still to add: nightly database backups, and an outside health check that messages you if a service is down. | Possibly a free uptime monitor account. I'll ask before adding anything. |
 | 8 | **Voice** | Talking to her on your phone like Tony and Jarvis. Telegram voice notes go to speech-to-text, she answers as text and optionally voice. Ranked last because it needs a paid speech service and steps 1–4 deliver more day-to-day value. | Your OK on a speech service and its cost (I'll price the options first). |
+
+## Step 2: one morning, one evening
+
+With `DONNA_DIGEST=1` (the default) your private channel gets two scheduled messages a day instead of five or six:
+
+- **Morning** (at `JARVIS_MYDAY_UTC_HOUR`):
+  - **Needs you:** a ranked list of overdue or due-today high-priority tasks, urgent emails, red compliance KRIs, overdue cases and due regulatory obligations, positions without a stop, the daily-loss limit if hit, and stopped bots.
+  - Your focus, today's calendar, position risk, and the three biggest market moves.
+- **Evening** (at `JARVIS_SHUTDOWN_UTC_HOUR`): the shutdown, your trading day, position risk, and markets at the close.
+- **Replaced:** the separate my-day brief, compliance report, marketing drafts, shutdown and the paid AI morning brief. Each is still one command away (`!today`, `!compliance`, `!drafts`, `!shutdown`, or just ask), and `!morning`, `!evening` and `!risk` show the digests on demand.
+- **Unchanged:** urgent emails, meeting reminders, the midday check and alerts still arrive straight away. The team's morning dispatch and daily wrap still go to the team channel.
+
+**Position risk** needs a live feed of your open positions. DONNA accepts them at `POST /api/positions`, with equity, start-of-day equity, and for each position the symbol, side, units, entry, stop and current price. From that she works out:
+- the risk at stop for each position, with the yen and other quote currencies converted;
+- total open risk against your limit;
+- how much room is left before the daily-loss stop;
+- any position without a hard stop.
+
+Until a feed is connected, the section says NO DATA. The cleanest feed is cTrader's Open API, which needs an API application registered under your cTrader ID. I'll ask before setting that up.
 
 ## Switching phase 1 on
 

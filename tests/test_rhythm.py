@@ -1,0 +1,104 @@
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+
+@pytest.fixture()
+def rhythm(tmp_path, monkeypatch):
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    from jarvis.agents import rhythm as r
+    return r
+
+
+POS = [
+    {"symbol": "XAUUSD", "side": "buy", "units": 10, "entry": 2400.0, "stop": 2390.0, "price": 2405.0},
+    {"symbol": "USDJPY", "side": "sell", "units": 10_000, "entry": 150.0, "stop": 150.5, "price": 150.2,
+     "quote_to_account": 1 / 150.2},
+    {"symbol": "EURUSD", "side": "buy", "units": 10_000, "entry": 1.08, "stop": 1.081, "price": 1.083},
+]
+
+
+def test_position_risk_maths(rhythm):
+    rhythm.store_positions(POS, equity=10_000, start_of_day_equity=10_100)
+    r = rhythm.position_risk()
+    gold, jpy, eur = r["positions"]
+    assert gold["risk_at_stop"] == pytest.approx(150.0) and gold["floating"] == pytest.approx(50.0)
+    assert jpy["risk_at_stop"] == pytest.approx(0.3 * 10_000 / 150.2)          # yen converted to dollars
+    assert eur["stop_in_profit"] and eur["risk_at_stop"] == pytest.approx(20.0)  # still gives back 20 to the stop
+    assert r["open_risk_pct"] == pytest.approx((150 + 0.3 * 10_000 / 150.2 + 20) / 100)
+    # 2% of 10,100 = 202 allowed; already -100 today -> 102 left
+    assert r["daily_loss_room"] == pytest.approx(102.0)
+
+
+def test_risk_lines_flag_missing_stop_and_staleness(rhythm):
+    rhythm.store_positions([{**POS[0], "stop": None}], equity=10_000)
+    text = "\n".join(rhythm.risk_lines())
+    assert "NO STOP" in text and "No hard stop on XAUUSD" in text
+    later = datetime.now(timezone.utc) + timedelta(hours=20)
+    assert rhythm.position_risk(now=later)["stale"]
+
+
+def test_no_feed_says_no_data(rhythm):
+    assert "NO DATA" in "\n".join(rhythm.risk_lines())
+
+
+def test_needs_you_ranks_what_only_the_owner_can_move(rhythm, monkeypatch):
+    from jarvis.agents import assistant, personal
+
+    monkeypatch.setattr(personal, "bots", lambda: [])
+    assistant.add_task("Low overdue", "2020-01-01", "low")
+    assistant.add_task("FSCA return", "2020-01-01", "high")
+    rhythm.store_positions([{**POS[0], "stop": None}], equity=10_000)
+    lines = rhythm.needs_you()
+    assert lines[0] == "NEEDS YOU"
+    body = lines[1:]
+    assert "FSCA return" in body[0] or "without a stop" in body[0]
+    assert any("Low overdue" in x for x in body[2:])               # low-priority overdue ranks after
+
+
+def test_digests_survive_dead_sources(rhythm, monkeypatch):
+    from jarvis.agents import briefing, personal
+
+    def boom(*a, **k):
+        raise ConnectionError("feed down")
+
+    monkeypatch.setattr(briefing, "market_table", boom)
+    monkeypatch.setattr(personal, "bots", lambda: [])
+    monkeypatch.setenv("JARVIS_GCAL_ICS_URL", "")
+    m = rhythm.morning_text()
+    assert "GOOD MORNING" in m and "NEEDS YOU" in m and "MARKETS: unavailable (ConnectionError)" in m
+    assert "calendar not connected" in m and "!compliance" in m
+    e = rhythm.evening_text()
+    assert "SHUTDOWN" in e and "TRADING" in e
+
+
+def test_digest_replaces_the_separate_personal_reports(monkeypatch):
+    from jarvis import scheduler
+    from jarvis.agents import rhythm
+
+    monkeypatch.setattr(rhythm, "DIGEST", True)
+    names = {j[0] for j in scheduler.active_jobs()}
+    assert {"morning", "evening", "morning_dispatch", "daily_wrap", "nudges", "inbox_triage"} <= names
+    assert not names & {"my_day", "shutdown", "morning_brief", "compliance_report", "marketing_drafts"}
+    monkeypatch.setattr(rhythm, "DIGEST", False)
+    names = {j[0] for j in scheduler.active_jobs()}
+    assert "my_day" in names and "morning" not in names
+
+
+def test_positions_endpoint(tmp_path, monkeypatch):
+    import importlib
+
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("DONNA_DB_PATH", str(tmp_path / "d.db"))
+    monkeypatch.setenv("DONNA_API_KEY", "svc")
+    import donna.app as m
+    m = importlib.reload(m)
+    body = {"equity": 10_000, "positions": [{**POS[0], "stop": None}]}
+    with TestClient(m.app) as c:
+        assert c.post("/api/positions", json=body).status_code == 401
+        r = c.post("/api/positions", json=body, headers={"X-API-Key": "svc"}).json()
+        assert r["no_stop"] == ["XAUUSD"]
+        bad = {"equity": 10_000, "positions": [{**POS[0], "side": "long"}]}
+        assert c.post("/api/positions", json=bad, headers={"X-API-Key": "svc"}).status_code == 422
