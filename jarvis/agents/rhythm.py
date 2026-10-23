@@ -18,7 +18,7 @@ import json
 import math
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -49,9 +49,17 @@ def _db() -> sqlite3.Connection:
 def store_positions(positions: list[dict[str, Any]], equity: float, start_of_day_equity: float | None = None,
                     source: str = "manual") -> int:
     """positions: [{symbol, side (buy/sell), units, entry, stop (or null), price, quote_to_account (default 1)}]."""
+    now = datetime.now(timezone.utc)
     with _db() as c:
+        if start_of_day_equity is None:  # a feed without it: the first equity seen today (local day) is the start
+            day_start = datetime.now(LOCAL_TZ).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+            first = c.execute("SELECT equity FROM position_snapshots WHERE ts >= ? ORDER BY id LIMIT 1",
+                              (day_start.isoformat(timespec="seconds"),)).fetchone()
+            start_of_day_equity = first["equity"] if first else equity
+        c.execute("DELETE FROM position_snapshots WHERE ts < ?",                  # a feed every 5 min adds up
+                  ((now - timedelta(days=14)).isoformat(timespec="seconds"),))
         return c.execute("INSERT INTO position_snapshots (ts, source, equity, start_of_day_equity, positions) "
-                         "VALUES (?,?,?,?,?)", (datetime.now(timezone.utc).isoformat(timespec="seconds"), source,
+                         "VALUES (?,?,?,?,?)", (now.isoformat(timespec="seconds"), source,
                                                 equity, start_of_day_equity, json.dumps(positions))).lastrowid
 
 
@@ -67,7 +75,7 @@ def position_risk(now: datetime | None = None) -> dict[str, Any]:
     out: list[dict[str, Any]] = []
     for p in json.loads(row["positions"]):
         sign = 1 if p["side"].lower() == "buy" else -1
-        fx = p.get("quote_to_account") or 1.0
+        fx = p.get("quote_to_account") or 1.0     # a feed that can't convert sends None; shown as unconverted
         floating = sign * (p["price"] - p["entry"]) * p["units"] * fx
         stop = p.get("stop")
         # loss from the current price to the stop; 0 once the stop is locked in profit

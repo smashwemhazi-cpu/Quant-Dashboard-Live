@@ -159,6 +159,16 @@ def job_morning_brief() -> None:
     notify("morning_brief", brief)
 
 
+def job_ctrader_positions() -> None:
+    from jarvis.adapters import ctrader_feed
+
+    if not ctrader_feed.configured():
+        return
+    r = ctrader_feed.poll()
+    if "error" in r:
+        raise RuntimeError(r["error"])  # reported once per failing run by job_failed
+
+
 def job_morning() -> None:
     notify("morning", agents()["rhythm"].morning(send=True).get("delivery"))
 
@@ -185,6 +195,7 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("shutdown", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_shutdown),  # evening close-out
     ("nudges", 5, None, job_nudges),                                                       # meeting reminders
     ("midday", 60 * 24, int(os.getenv("JARVIS_MIDDAY_UTC_HOUR", "9")), job_midday),         # open high-priority work
+    ("ctrader_positions", int(os.getenv("DONNA_CTRADER_POLL_MINUTES", "5")), None, job_ctrader_positions),
     # the two digests: same hours as the my-day brief and the shutdown they replace
     ("morning", 60 * 24, int(os.getenv("JARVIS_MYDAY_UTC_HOUR", "4")), job_morning),
     ("evening", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_evening),
@@ -219,8 +230,16 @@ def save_last(job: str, ts: float) -> None:
         c.execute("INSERT OR REPLACE INTO scheduler_runs (job, last) VALUES (?,?)", (job, ts))
 
 
+_fail_alerted: dict[tuple[str, str], float] = {}
+FAIL_REPEAT_HOURS = 6   # a 5-minute job failing the same way is reported once, not every run
+
+
 def job_failed(name: str, e: Exception) -> None:
     audit.log("scheduler", "job_error", {"job": name, "error": str(e)})
+    key, now = (name, str(e)[:200]), time.time()
+    if now - _fail_alerted.get(key, 0) < FAIL_REPEAT_HOURS * 3600:
+        return
+    _fail_alerted[key] = now
     if ALERT_TARGETS:  # a silent failure is how a missing report goes unnoticed for a week
         from donna.channels import broadcast
 

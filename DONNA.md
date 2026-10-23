@@ -61,7 +61,35 @@ With `DONNA_DIGEST=1` (the default) your private channel gets two scheduled mess
 - how much room is left before the daily-loss stop;
 - any position without a hard stop.
 
-Until a feed is connected, the section says NO DATA. The cleanest feed is cTrader's Open API, which needs an API application registered under your cTrader ID. I'll ask before setting that up.
+Until a feed is connected, the section says NO DATA.
+
+## Connecting your live cTrader account (read-only)
+
+DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.
+
+**On the cTrader side (about 10 minutes, then a wait for approval):**
+1. Go to **openapi.ctrader.com** and sign in with the cTrader ID you trade with.
+2. Open **Applications**, choose **Add new app**, name it `DONNA`, and describe it as "Personal read-only risk view". Submit it.
+3. Wait for the status to change to **Active**. Spotware reviews new apps, which can take a day or two.
+4. Open the app's **Credentials** and keep the **Client ID** and **Secret** ready (don't copy them anywhere else).
+5. Open the app's **Playground** and generate a token:
+   - Choose the **Account info** scope (read-only), **not Trading**.
+   - Sign in, and tick only your personal account when cTrader asks which accounts to grant.
+   - You'll get an **Access token** and a **Refresh token**.
+
+I couldn't open the portal from here, so the exact button names may differ slightly.
+
+**On your server:**
+6. Run `sudo vertex1-connect`. Questions 9–12 ask for the four values, and your typing stays hidden. Question 8 is your account number, if it isn't saved yet. The script then checks the connection and prints `CTRADER OK - read-only, N open position(s)`.
+7. In Discord, `!risk` shows the live view, and the morning and evening messages include it.
+
+**Never paste these four values into chat, Discord, email or a document.** They only go into the server's env file through `vertex1-connect`. If one ever leaks, delete the token in the Open API portal (or the whole app) and issue a new one.
+
+**What happens over time:**
+- Tokens last about a month. DONNA refreshes them herself and keeps the new pair in her database on the server.
+- If the connection fails, you get one Discord message, not one every 5 minutes. The risk view then marks the last snapshot as old.
+
+**Compliance:** this is your personal account at a brokerage you work for, so your personal-account-dealing policy applies to the data flow as well as the trading. DONNA keeps the data on your server. Position details are only sent to Claude when you ask her about them in chat.
 
 ## Switching phase 1 on
 
