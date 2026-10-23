@@ -51,6 +51,11 @@ def _pick(cols: dict[str, str], *names: str, exclude: tuple[str, ...] = ()) -> s
     return None
 
 
+def _token(cols: dict[str, str], name: str) -> str | None:
+    """Column whose name contains `name` as a whole word ("ib" must not match "tribe" or "distribution")."""
+    return next((orig for low, orig in cols.items() if name in re.split(r"[^a-z0-9]+", low)), None)
+
+
 def lead_columns(d: pd.DataFrame) -> dict[str, str | None] | None:
     cols = {c.lower(): c for c in d.columns}
     if any(x in cols for x in ("document_status", "trader account", "equity (usd)")):
@@ -58,9 +63,9 @@ def lead_columns(d: pd.DataFrame) -> dict[str, str | None] | None:
     m = {
         "lead": _pick(cols, "customer_no", "lead_id", "lead id", "lead no", "client id", "customer id"),
         "status": _pick(cols, "lead_status", "sales_status", "status", exclude=("document", "kyc")),
-        "source": _pick(cols, "source", "campaign", "utm", "affiliate", "referr", "ib"),
-        "created": _pick(cols, "registration", "created", "date"),
-        "owner": _pick(cols, "assigned_to", "owner", "agent", "sales", "retention"),
+        "source": _pick(cols, "source", "campaign", "utm", "affiliate", "referr") or _token(cols, "ib"),
+        "created": _pick(cols, "registration", "created", "date", exclude=("update", "modif", "birth", "expir", "login")),
+        "owner": _pick(cols, "assigned_to", "owner", "agent", "sales", "retention", exclude=("status",)),
         "country": _pick(cols, "country"),
         "ftd": _pick(cols, "ftd", "first deposit", "first_deposit"),
     }

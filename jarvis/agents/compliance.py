@@ -208,7 +208,7 @@ def kris() -> list[dict[str, Any]]:
         rag = "RED" if value is not None and value >= red else "AMBER" if value is not None and value >= amber else "GREEN"
         out.append({"kri": name, "value": "n/a" if value is None else fmt.format(value), "status": rag if value is not None else "NO DATA"})
 
-    active = list_cases()
+    active = list_cases(limit=100_000)
     overdue = [c for c in active if c["due"] and c["due"] < date.today().isoformat()]
     kri("Open high-severity cases", sum(c["severity"] == "high" for c in active), 1, 3)
     kri("Overdue cases", len(overdue), 1, 5)
@@ -333,7 +333,7 @@ def report_text() -> str:
     L.append(f"New cases since last scan: {res['new_cases']}")
     L += ["", "KEY RISK INDICATORS"]
     L += [f" [{k['status']:<7}] {k['kri']}: {k['value']}" for k in kris()]
-    active = list_cases()
+    active = list_cases(limit=100_000)
     L += ["", f"OPEN CASES ({len(active)})"]
     for c in active[:15]:
         late = "  !! OVERDUE" if c["due"] and c["due"] < today else ""
