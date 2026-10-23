@@ -1,0 +1,9 @@
+[Unit]
+Description=Vertex 1 hands-off update (installs main once its tests pass, rolls back if services fail)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vertex1-update
+TimeoutStartSec=900

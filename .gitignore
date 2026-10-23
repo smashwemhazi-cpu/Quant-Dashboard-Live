@@ -2,5 +2,5 @@ jarvis/data/samples/
 jarvis/data/*.db
 __pycache__/
 .pytest_cache/
-vertex1-update.*
+/vertex1-update.*
 dist/
