@@ -5,6 +5,25 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-24 · Daytime heads-ups (roadmap step 4)
+
+**What was done**
+- Every 15 minutes DONNA checks for things that shouldn't wait for the evening, and tells you once in your private channel:
+  - a big market move (range 1.5x a normal day);
+  - a regulatory obligation due within 2 days, or a compliance case due today or tomorrow;
+  - new leads still unassigned after 2 hours;
+  - a crashed or silent cBot;
+  - a live position without a stop, or the daily-loss limit hit.
+- Each one is sent once, even across restarts. One broken data source can't silence the others.
+
+**Why:** roadmap step 4. DONNA should speak up when it matters, not only at 8am and 8pm.
+
+**What you'll notice:** occasional "heads-up" messages during the day. If they're too frequent, raise `DONNA_MOVE_ATR` (for example to 2) in the settings file.
+
+**Recommendations**
+- Load your regulatory calendar so the deadline warnings have something to watch: `!oblig add FSCA quarterly return | 2026-10-31 | quarterly`, one line per obligation.
+- Position heads-ups start working once the cTrader Secret is fixed.
+
 ## 2026-10-24 · Growth co-pilot (roadmap step 3)
 
 **What was done**
