@@ -221,3 +221,20 @@ def test_discord_task_commands(tmp_path, monkeypatch):
     assert "#1 done" in out and "#99 not found" in out and "#1 " not in out.split("\n\n")[1]
     parts = b.chunks("x" * 5000)
     assert all(len(p) <= 2000 for p in parts) and len(parts) == 3
+
+
+def test_discord_ask_uses_read_only_brain(monkeypatch):
+    from donna import discord_bot as b
+    from jarvis.core import brain
+
+    seen = {}
+
+    class FakeBrain:
+        def ask(self, messages, user, allow_writes):
+            seen.update(q=messages[0]["content"], user=user, writes=allow_writes)
+            return "3 clients at risk"
+
+    monkeypatch.setattr(brain, "Brain", FakeBrain)
+    assert b.handle("!ask who is at risk?") == "3 clients at risk"
+    assert seen == {"q": "who is at risk?", "user": "discord", "writes": False}
+    assert b.handle("!ask   ").startswith("Usage")

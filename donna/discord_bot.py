@@ -4,6 +4,7 @@
   !done 12 [13 ...]              mark tasks done
   !add Call LP about XAU spreads | 2026-10-24 | high     (date and priority optional)
   !today                         the my-day brief (calendar, tasks, inbox, trading, bots)
+  !ask <question>                ask D.O.N.N.A anything; she answers from the live agents (read-only)
   !help
 
 Answers only in the channels named in DONNA_DISCORD_COMMAND_CHANNELS (keep them private - the
@@ -26,7 +27,8 @@ HELP = ("D.O.N.N.A commands:\n"
         "!tasks                     open tasks\n"
         "!done 12 13                mark tasks done\n"
         "!add <title> | YYYY-MM-DD | high/medium/low\n"
-        "!today                     my-day brief")
+        "!today                     my-day brief\n"
+        "!ask <question>            e.g. !ask which clients are at risk this week?")
 
 
 def _list(v: str) -> set[str]:
@@ -68,6 +70,13 @@ def handle(text: str) -> str | None:
         return f"Added #{tid}: {parts[0]}" + (f" (due {due})" if due else "") + f" [{prio}]"
     if cmd == "!today":
         return assistant.my_day_text()
+    if cmd == "!ask":
+        if not rest.strip():
+            return "Usage: !ask <question>"
+        from jarvis.core.brain import Brain
+
+        # read-only: anything that would write or send still needs approval in the console
+        return Brain().ask([{"role": "user", "content": rest.strip()}], user="discord", allow_writes=False)
     if cmd == "!help":
         return HELP
     return None

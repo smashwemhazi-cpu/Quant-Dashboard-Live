@@ -18,11 +18,11 @@ echo "Press Enter to skip any question. Hidden answers show nothing while you pa
 ask DONNA_DISCORD_WEBHOOK_REPORTS "1/8 Company reports webhook URL - #track-a-brokerage (hidden)" 1
 ask DONNA_DISCORD_WEBHOOK_PERSONAL "2/8 Private webhook URL - #track-b-personal (hidden; Enter = reuse the old reports webhook)" 1
 ask DONNA_DISCORD_BOT_TOKEN "3/8 'DONNA Tasks' bot token for !tasks / !done (hidden)" 1
-ask DONNA_DISCORD_COMMAND_CHANNELS "4/8 Channel for commands (Enter = track-b-personal)" 0
+ask DONNA_DISCORD_COMMAND_CHANNELS "4/8 Channel for commands (Enter = track-b-personal) (hidden)" 1
 ask JARVIS_IMAP_USER "5/8 Work email address" 0
 ask JARVIS_IMAP_PASSWORD "6/8 Google app password - 16 letters (hidden)" 1
 ask JARVIS_GCAL_ICS_URL "7/8 Google Calendar secret address in iCal format (hidden)" 1
-ask JARVIS_PERSONAL_ACCOUNT "8/8 Your personal cTrader account number" 0
+ask JARVIS_PERSONAL_ACCOUNT "8/8 Your personal cTrader account number (hidden)" 1
 
 "$PY" - "$ENV" <<'EOF'
 import os, re, sys
@@ -51,6 +51,10 @@ for k, v in list(new.items()):
         new.pop(k)
 current = {l.split("=", 1)[0]: l.split("=", 1)[1].strip('"') for l in lines if "=" in l and not l.lstrip().startswith("#")}
 present = set(current)
+for k, (rx, why) in CHECKS.items():  # a bad value saved by an older version is cleared, not kept
+    if k not in new and current.get(k) and not re.fullmatch(rx, current[k]):
+        new[k] = ""
+        print(f"CLEARED {k}: the saved value was {why}")
 # the first reports webhook was made in the personal channel: reuse it for personal posts
 if "DONNA_DISCORD_WEBHOOK_PERSONAL" not in new and not current.get("DONNA_DISCORD_WEBHOOK_PERSONAL") \
         and current.get("DONNA_DISCORD_WEBHOOK_REPORTS"):
@@ -61,7 +65,7 @@ for k, v in {"JARVIS_IMAP_HOST": "imap.gmail.com", "JARVIS_LOCAL_TZ": "Etc/GMT-4
              "DONNA_DISCORD_COMMAND_CHANNELS": "track-b-personal"}.items():
     if k not in present:
         new.setdefault(k, v)
-fmt = lambda v: f'"{v}"' if re.search(r"[^A-Za-z0-9_@./:%+=,-]", v) else v  # noqa: E731
+fmt = lambda v: f'"{v}"' if v and re.search(r"[^A-Za-z0-9_@./:%+=,-]", v) else v  # noqa: E731
 out, done = [], set()
 for l in lines:
     k = l.split("=", 1)[0]
@@ -92,6 +96,8 @@ if u and p:
             m.login(u, p); print(\"EMAIL     OK - read-only access works\")
     except Exception as e:
         print(\"EMAIL     FAILED -\", str(e)[:150])
+        if \"AUTHENTICATION\" in str(e):
+            print(\"          -> make the app password while signed in as\", u, \"and turn IMAP on: Gmail > Settings > See all settings > Forwarding and POP/IMAP\")
 else:
     print(\"EMAIL     not set\")
 c = a.calendar_events(days=7)
