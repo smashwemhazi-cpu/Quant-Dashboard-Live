@@ -17,6 +17,7 @@ Thinking partner (jarvis/agents/mind.py):
   !shutdown                      close the day; !week for the weekly review
   !morning  !evening  !risk      the two daily digests on demand, and live position risk
   !growth  /  !exp               growth review + next experiment / experiments; !exp start 3, !exp stop 3
+  !audit                         what DONNA did today, and whether the audit trail is intact
 
 Plain messages are only answered in DONNA_DISCORD_CHAT_CHANNELS (also private), and only from the
 user IDs in DONNA_DISCORD_ALLOWED_USERS - free chat reaches every agent, so it is never left open.
@@ -63,7 +64,8 @@ HELP = ("D.O.N.N.A commands:\n"
         "!remember <fact>  !memory  !forget <id>\n"
         "!shutdown  !week           close the day / weekly review\n"
         "!morning  !evening  !risk  today's digests / live position risk\n"
-        "!growth  !exp              growth review / experiments (!exp start 3)")
+        "!growth  !exp              growth review / experiments (!exp start 3)\n"
+        "!audit                     what DONNA did today; audit trail check")
 
 
 def _list(v: str) -> set[str]:
@@ -151,7 +153,31 @@ def mind_command(cmd: str, rest: str, channel: str) -> str | None:
         if sub:
             return "Usage: !exp | !exp start 3 | !exp stop 3 [why]"
         return copilot.experiments_text()
+    if cmd == "!audit":
+        return audit_text()
     return None
+
+
+def audit_text() -> str:
+    """What DONNA did today, and whether the audit trail is intact."""
+    from collections import Counter
+    from datetime import datetime, timezone
+
+    from jarvis.agents.mind import LOCAL_TZ
+    from jarvis.core import audit
+
+    start = datetime.now(LOCAL_TZ).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    rows = audit.since(start.isoformat())
+    v = audit.verify()
+    L = [f"AUDIT TRAIL: {'INTACT' if v['ok'] else 'BROKEN at entry #' + str(v['first_bad_id'])} "
+         f"({v['checked']} chained entries checked)", f"Today: {len(rows)} entries"]
+    for (actor, event), n in Counter((r["actor"], r["event"]) for r in rows).most_common(15):
+        L.append(f" {n:>4}  {actor}: {event}")
+    errors = [r for r in rows if "error" in r["event"]]
+    if errors:
+        L.append(f"Last error: {errors[-1]['ts'][11:16]} UTC {errors[-1]['actor']} {errors[-1]['event']} "
+                 f"{errors[-1]['payload'][:150]}")
+    return "\n".join(L)
 
 
 def tasks_text() -> str:

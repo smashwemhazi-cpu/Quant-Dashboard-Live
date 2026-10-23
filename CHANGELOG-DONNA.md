@@ -5,6 +5,23 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-24 · Security, audit trail and nightly backups (roadmap step 6, start of step 7)
+
+**What was done**
+- Client names, emails, phone numbers, addresses, dates of birth and ID or bank numbers are masked before tool results go to Claude. Client ids and figures still pass, so answers stay useful.
+- The audit log is now tamper-evident. Each entry is chained to the previous one with a SHA-256 fingerprint, so an edited or deleted entry shows up.
+- New `!audit` command: today's activity, the last error, and "AUDIT TRAIL: INTACT" or where it broke.
+- Nightly backups of all databases at 01:30 UTC, with 14 days kept on the server.
+
+**Why:** as a compliance officer you need to show what the assistant did, prove the record wasn't changed, and keep client data away from outside services. Before this, a lost server meant lost data.
+
+**What you'll notice:** nothing day to day. Try `!audit`.
+
+**Recommendations**
+- Backups currently live on the same server. For real safety, turn on DigitalOcean's droplet backups (paid, about 20% of the droplet price) or tell me where an off-site copy can go. I won't sign up for anything paid without your OK.
+- Make the GitHub repository private (still recommended).
+- Step 5 (trading guardrails and the personal-account-dealing check) needs your firm's PAD policy: the restricted list, the holding period and the pre-clearance rule. Paste or upload the policy when you have it.
+
 ## 2026-10-24 · Daytime heads-ups (roadmap step 4)
 
 **What was done**

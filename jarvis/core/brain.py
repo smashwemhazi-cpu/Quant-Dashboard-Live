@@ -12,7 +12,7 @@ from typing import Any, Callable
 import anthropic
 from anthropic import beta_tool
 
-from jarvis.core import audit
+from jarvis.core import audit, privacy
 from jarvis.core.config import settings
 from jarvis.core.registry import ToolSpec, all_tools, load_builtin_agents
 
@@ -35,7 +35,7 @@ def _wrap(spec: ToolSpec, allow_writes: bool) -> Any:
         try:
             result = spec.fn(**kwargs)
             audit.log("jarvis", "tool_call", {"tool": spec.name, "args": kwargs})
-            return json.dumps(result, default=str)[:60000]
+            return json.dumps(privacy.for_claude(result), default=str)[:60000]  # client PII masked
         except Exception as e:  # surface to the model instead of crashing the loop
             audit.log("jarvis", "tool_error", {"tool": spec.name, "args": kwargs, "error": str(e)})
             return json.dumps({"error": f"{type(e).__name__}: {e}"})

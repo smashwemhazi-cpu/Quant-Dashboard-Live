@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Nightly backup of every DONNA/JARVIS database under /var/lib/vertex1 (tasks, memory, ideas, compliance cases,
+# audit trail, position snapshots). Uses SQLite's online backup, so it is safe while the services are running.
+# Keeps VERTEX1_BACKUP_DAYS (default 14) days in /var/lib/vertex1/backups. Restore one file:
+#   systemctl stop vertex1-scheduler vertex1-discord vertex1-donna
+#   gunzip -c /var/lib/vertex1/backups/<day>/jarvis_state.db.gz > /var/lib/vertex1/jarvis_state.db
+#   chown vertex1:vertex1 /var/lib/vertex1/jarvis_state.db && systemctl start vertex1-scheduler vertex1-discord vertex1-donna
+set -euo pipefail
+DATA=/var/lib/vertex1
+DEST=$DATA/backups/$(date -u +%Y-%m-%d)
+KEEP=${VERTEX1_BACKUP_DAYS:-14}
+install -d -m 750 -o vertex1 -g vertex1 "$DATA/backups" "$DEST"
+find "$DATA" -path "$DATA/backups" -prune -o -name '*.db' -type f -print | while read -r db; do
+  out="$DEST/$(basename "$db")"
+  python3 -c "import sqlite3, sys; s = sqlite3.connect(sys.argv[1]); d = sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()" "$db" "$out"
+  gzip -f "$out"
+  echo "backed up $db"
+done
+chown -R vertex1:vertex1 "$DEST" && chmod -R o-rwx "$DEST"
+find "$DATA/backups" -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP" -exec rm -rf {} +
