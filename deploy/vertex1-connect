@@ -2,13 +2,21 @@
 # Guided setup for D.O.N.N.A's personal side: private Discord channel, work inbox, Google Calendar,
 # and the read-only cTrader feed for the position-risk view.
 # Run as root on the server:  vertex1-connect      (press Enter to skip any question; secrets are not shown)
+# Only one part:  vertex1-connect ctrader | email | calendar | discord
 set -euo pipefail
 ENV=/etc/vertex1/vertex1.env
 PY=/opt/vertex1/venv/bin/python
 [ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
+SECTION=${1:-all}
+case "$SECTION" in
+  all|discord|email|calendar|ctrader) ;;
+  *) echo "Usage: vertex1-connect [ctrader|email|calendar|discord]   (nothing = all questions)"; exit 1 ;;
+esac
 cp -p "$ENV" "$ENV.bak.$(date +%Y%m%d-%H%M%S)"
 
-ask() {  # ask NAME "question" hidden(0/1)
+ask() {  # ask SECTION NAME "question" hidden(0/1)
+  [ "$SECTION" = all ] || [ "$SECTION" = "$1" ] || return 0
+  shift
   local v
   if [ "$3" = 1 ]; then read -rsp "$2: " v; echo; else read -rp "$2: " v; fi
   v="$(printf '%s' "$v" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
@@ -16,25 +24,29 @@ ask() {  # ask NAME "question" hidden(0/1)
 }
 
 echo "Press Enter to skip any question. Hidden answers show nothing while you paste - that is normal."
-ask DONNA_DISCORD_WEBHOOK_REPORTS "1/12 Company reports webhook URL - #track-a-brokerage (hidden)" 1
-ask DONNA_DISCORD_WEBHOOK_PERSONAL "2/12 Private webhook URL - #track-b-personal (hidden; Enter = reuse the old reports webhook)" 1
-ask DONNA_DISCORD_BOT_TOKEN "3/12 'DONNA Tasks' bot token for !tasks / !done (hidden)" 1
-ask DONNA_DISCORD_COMMAND_CHANNELS "4/12 Channel for commands (Enter = track-b-personal) (hidden)" 1
-ask JARVIS_IMAP_USER "5/12 Work email address" 0
-ask JARVIS_IMAP_PASSWORD "6/12 Google app password - 16 letters (hidden)" 1
-ask JARVIS_GCAL_ICS_URL "7/12 Google Calendar secret address in iCal format (hidden)" 1
-ask JARVIS_PERSONAL_ACCOUNT "8/12 Your personal cTrader account number (hidden)" 1
-echo "Questions 9-12 connect your live account READ-ONLY (see DONNA.md). Skip them if you haven't made the cTrader app yet."
-ask DONNA_CTRADER_CLIENT_ID "9/12 cTrader Open API app Client ID (hidden)" 1
-ask DONNA_CTRADER_CLIENT_SECRET "10/12 cTrader Open API app Secret (hidden)" 1
-ask DONNA_CTRADER_ACCESS_TOKEN "11/12 Access token issued with the ACCOUNT INFO scope - not trading (hidden)" 1
-ask DONNA_CTRADER_REFRESH_TOKEN "12/12 Refresh token from the same screen (hidden)" 1
+ask discord DONNA_DISCORD_WEBHOOK_REPORTS "1/12 Company reports webhook URL - #track-a-brokerage (hidden)" 1
+ask discord DONNA_DISCORD_WEBHOOK_PERSONAL "2/12 Private webhook URL - #track-b-personal (hidden; Enter = reuse the old reports webhook)" 1
+ask discord DONNA_DISCORD_BOT_TOKEN "3/12 'DONNA Tasks' bot token for !tasks / !done (hidden)" 1
+ask discord DONNA_DISCORD_COMMAND_CHANNELS "4/12 Channel for commands (Enter = track-b-personal) (hidden)" 1
+ask email JARVIS_IMAP_USER "5/12 Work email address" 0
+ask email JARVIS_IMAP_PASSWORD "6/12 Google app password - 16 letters (hidden)" 1
+ask calendar JARVIS_GCAL_ICS_URL "7/12 Google Calendar secret address in iCal format (hidden)" 1
+ask ctrader JARVIS_PERSONAL_ACCOUNT "8/12 Your personal cTrader account number (hidden)" 1
+[ "$SECTION" = all ] && echo "Questions 9-12 connect your live account READ-ONLY (see DONNA.md). Skip them if you haven't made the cTrader app yet."
+ask ctrader DONNA_CTRADER_CLIENT_ID "9/12 cTrader Open API app Client ID (hidden)" 1
+ask ctrader DONNA_CTRADER_CLIENT_SECRET "10/12 cTrader Open API app Secret (hidden)" 1
+ask ctrader DONNA_CTRADER_ACCESS_TOKEN "11/12 Access token issued with the ACCOUNT INFO scope - not trading (hidden)" 1
+ask ctrader DONNA_CTRADER_REFRESH_TOKEN "12/12 Refresh token from the same screen (hidden)" 1
 
 "$PY" - "$ENV" <<'EOF'
 import os, re, sys
 
 path = sys.argv[1]
 lines = open(path).read().splitlines()
+junk = [l for l in lines if l.strip() and not l.lstrip().startswith("#") and not re.match(r"\s*[A-Za-z_][A-Za-z0-9_]*=", l)]
+if junk:
+    lines = [l for l in lines if l not in junk]
+    print(f"REMOVED {len(junk)} line(s) that weren't settings (they stopped the settings file loading)")
 new = {k[4:]: v for k, v in os.environ.items() if k.startswith("SET_")}
 if "JARVIS_IMAP_PASSWORD" in new:
     new["JARVIS_IMAP_PASSWORD"] = new["JARVIS_IMAP_PASSWORD"].replace(" ", "")  # Google shows it in groups of 4
@@ -96,7 +108,8 @@ if grep -q '^DONNA_DISCORD_BOT_TOKEN=.\+' "$ENV"; then
 fi
 echo
 echo "Checking connections..."
-sudo -u vertex1 bash -c 'set -a; . /etc/vertex1/vertex1.env; cd /opt/vertex1/app; /opt/vertex1/venv/bin/python -c "
+SEND_MYDAY=$([ "$SECTION" = all ] && echo 1 || echo 0)
+sudo -u vertex1 bash -c 'export SEND_MYDAY='"$SEND_MYDAY"'; set -a; . /etc/vertex1/vertex1.env; cd /opt/vertex1/app; /opt/vertex1/venv/bin/python -c "
 import imaplib, os
 from jarvis.agents import assistant as a
 u, p = os.getenv(\"JARVIS_IMAP_USER\"), os.getenv(\"JARVIS_IMAP_PASSWORD\")
@@ -120,8 +133,8 @@ if ct.configured():
           (\"OK - read-only, %d open position(s), equity %.2f\" % (t[\"positions\"], t[\"equity\"])))
 else:
     print(\"CTRADER   not set\")
-r = a.AssistantAgent().my_day(send=True).get(\"delivery\")
-print(\"DISCORD  \", r)
+if os.getenv(\"SEND_MYDAY\") == \"1\":
+    print(\"DISCORD  \", a.AssistantAgent().my_day(send=True).get(\"delivery\"))
 "'
 echo
-echo "Done. Your my-day brief should now be in the private Discord channel."
+if [ "$SECTION" = all ]; then echo "Done. Your my-day brief should now be in the private Discord channel."; else echo "Done."; fi

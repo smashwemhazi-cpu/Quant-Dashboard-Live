@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Hands-off updates. Installs the newest commit on main once its tests have passed on GitHub, checks
+# the services come back up, and goes back to the previous version by itself if they don't.
+# Runs every 30 minutes from vertex1-update.timer. By hand, as root:
+#   vertex1-update            install if there is something new
+#   vertex1-update --force    reinstall the newest version even if it is already installed
+#   vertex1-update --status   show what is installed and what is waiting
+# First time on a server that doesn't have it yet:
+#   bash <(curl -fsSL https://raw.githubusercontent.com/smashwemhazi-cpu/Quant-Dashboard-Live/main/deploy/vertex1-update)
+# If the repository is made private, put a read-only GitHub token in /etc/vertex1/vertex1.env as
+# VERTEX1_UPDATE_TOKEN=... (fine-grained token, this repository only, Contents: read).
+set -euo pipefail
+REPO=${VERTEX1_REPO:-smashwemhazi-cpu/Quant-Dashboard-Live}
+BRANCH=${VERTEX1_BRANCH:-main}
+ENV=/etc/vertex1/vertex1.env
+APP=/opt/vertex1/app
+WORK=/var/lib/vertex1-update
+MODE=${1:-}
+[ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
+install -d -m 700 "$WORK"
+exec 9>"$WORK/lock"
+flock -n 9 || { echo "An update is already running."; exit 0; }
+
+TOKEN=$(grep -E '^VERTEX1_UPDATE_TOKEN=' "$ENV" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || true)
+AUTH=()
+[ -n "$TOKEN" ] && AUTH=(-H "Authorization: Bearer $TOKEN")
+api() { curl -fsSL --retry 3 --max-time 120 -H "Accept: application/vnd.github+json" "${AUTH[@]}" "https://api.github.com/repos/$REPO/$1"; }
+field() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
+
+notify() {  # best effort: tell SH in the private Discord channel; never fails the update
+  [ -f "$ENV" ] && [ -x /opt/vertex1/venv/bin/python ] || return 0
+  sudo -u vertex1 bash -c 'set -a; . /etc/vertex1/vertex1.env; cd /opt/vertex1/app; /opt/vertex1/venv/bin/python -c "
+import os, sys
+from donna.channels import broadcast
+broadcast(sys.argv[1], os.getenv(\"JARVIS_PERSONAL_TARGETS\", \"discord:personal\").split(\",\"), title=\"DONNA update\")
+" "$1"' _ "$1" >/dev/null 2>&1 || true
+}
+
+COMMIT=$(api "commits/$BRANCH") || { echo "Can't reach GitHub - will try again next run."; exit 0; }
+SHA=$(printf '%s' "$COMMIT" | field 'd["sha"]')
+SHORT=${SHA:0:7}
+TITLE=$(printf '%s' "$COMMIT" | field 'd["commit"]["message"].splitlines()[0][:120]')
+CURRENT=$(cat "$APP/RELEASE" 2>/dev/null || echo none)
+
+# tests must have passed on GitHub for this exact commit
+TESTS=$(api "commits/$SHA/check-runs?per_page=100" | field '
+"pending" if any(r["status"] != "completed" for r in d["check_runs"]) else
+"failed" if any(r["conclusion"] not in ("success", "skipped", "neutral") for r in d["check_runs"]) else
+"passed" if any(r["name"] == "pytest" and r["conclusion"] == "success" for r in d["check_runs"]) else "missing"')
+
+if [ "$MODE" = --status ]; then
+  echo "Installed: $CURRENT"
+  echo "Newest:    $SHORT  $TITLE  (tests: $TESTS)"
+  exit 0
+fi
+if [ "$MODE" != --force ] && [[ "$SHA" == "$CURRENT"* ]]; then
+  echo "Up to date ($CURRENT)."; exit 0
+fi
+case "$TESTS" in
+  passed) ;;
+  pending|missing) echo "$SHORT: tests haven't finished on GitHub yet - will try again next run."; exit 0 ;;
+  *)
+    if [ "$(cat "$WORK/failed_tests" 2>/dev/null)" != "$SHA" ]; then
+      echo "$SHA" > "$WORK/failed_tests"
+      notify "Update $SHORT was NOT installed: its tests failed on GitHub. Still running $CURRENT."
+    fi
+    echo "$SHORT: tests failed on GitHub - not installing."; exit 0 ;;
+esac
+
+echo "Installing $SHORT: $TITLE"
+SRC="$WORK/src"
+rm -rf "$SRC" "$WORK/release.tar.gz" && mkdir -p "$SRC"
+api "tarball/$SHA" > "$WORK/release.tar.gz"
+tar -xzf "$WORK/release.tar.gz" -C "$SRC" --strip-components=1
+rm -rf "$SRC/tests" "$SRC/scripts" "$SRC/.github" "$SRC/.gitignore" "$SRC/requirements.txt" "$SRC/donna/requirements.txt"
+if grep -rlEI '(sk-[A-Za-z0-9]{20,}|xox[bp]-[0-9A-Za-z-]{10,}|discord(app)?\.com/api/webhooks/[0-9]{5,}|[0-9]{8,10}:AA[0-9A-Za-z_-]{30,}|BEGIN [A-Z ]*PRIVATE KEY)' "$SRC" >/dev/null; then
+  notify "Update $SHORT was NOT installed: it contains something that looks like a password or key."
+  echo "Secret-like string found - not installing."; exit 1
+fi
+echo "$SHORT" > "$SRC/RELEASE"
+
+# services running now are the ones that must be running afterwards
+mapfile -t RUNNING < <(systemctl list-units --type=service --state=active --no-legend --plain 'vertex1-*' \
+  | awk '{print $1}' | grep -v '^vertex1-update' || true)
+
+healthy() {
+  sleep 20
+  local s
+  for s in "${RUNNING[@]}"; do
+    systemctl is-active -q "$s" || { echo "$s is not running"; return 1; }
+  done
+  if printf '%s\n' "${RUNNING[@]}" | grep -qx 'vertex1-donna.service'; then
+    curl -fsS --max-time 10 http://127.0.0.1:8080/health >/dev/null || { echo "DONNA health check failed"; return 1; }
+  fi
+}
+
+if VERTEX1_SKIP_APT=1 bash "$SRC/deploy/install.sh" && { [ ${#RUNNING[@]} -eq 0 ] || systemctl restart "${RUNNING[@]}"; } && healthy; then
+  rm -rf "$SRC" "$WORK/release.tar.gz"
+  notify "Updated to $SHORT: $TITLE"
+  echo "Updated to $SHORT."
+  exit 0
+fi
+
+echo "Update failed - going back to $CURRENT."
+if [ -d "$APP.prev" ]; then
+  rm -rf "$APP.bad"
+  mv "$APP" "$APP.bad"
+  mv "$APP.prev" "$APP"
+  [ ${#RUNNING[@]} -eq 0 ] || systemctl restart "${RUNNING[@]}" || true
+fi
+echo "$SHA" > "$WORK/failed_tests"  # don't retry the same broken commit every 30 minutes
+notify "Update $SHORT failed to start, so I went back to $CURRENT. Nothing for you to do; Claude will look at it. Details: journalctl -u vertex1-update -n 50"
+exit 1
