@@ -52,6 +52,29 @@ def job_backoffice_ingest() -> None:
     r = agents()["backoffice"].ingest()
     if r.get("files"):
         notify("backoffice_ingest", r)
+        # new data -> run the compliance rules and turn lead backlogs into tasks straight away
+        notify("compliance_scan", agents()["compliance"].run_scan())
+        from jarvis.agents import growth
+
+        s = growth.leads_summary()
+        if "error" not in s:
+            notify("lead_tasks", growth.lead_tasks(s))
+
+
+def job_compliance_report() -> None:
+    notify("compliance_report", agents()["compliance"].daily_report(send=True).get("delivery"))
+
+
+def job_marketing_drafts() -> None:
+    from jarvis.agents import growth
+    from jarvis.agents.personal import PERSONAL_TARGETS
+
+    if not os.getenv("ANTHROPIC_API_KEY") or not PERSONAL_TARGETS:
+        return
+    from donna.channels import broadcast
+
+    notify("marketing_drafts", broadcast(growth.drafts_text(growth.draft_posts()), PERSONAL_TARGETS,
+                                         title="D.O.N.N.A marketing drafts"))
 
 
 def job_inbox_triage() -> None:
@@ -106,6 +129,8 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("morning_brief", 60 * 24, 7, job_morning_brief),
     ("inbox_triage", 15, None, job_inbox_triage),
     ("my_day", 60 * 24, int(os.getenv("JARVIS_MYDAY_UTC_HOUR", "4")), job_my_day),
+    ("compliance_report", 60 * 24, int(os.getenv("JARVIS_COMPLIANCE_UTC_HOUR", "5")), job_compliance_report),
+    ("marketing_drafts", 60 * 24, int(os.getenv("JARVIS_CONTENT_UTC_HOUR", "6")), job_marketing_drafts),
 ]
 
 

@@ -182,6 +182,12 @@ def ingest_file(path: Path) -> dict[str, Any]:
         return {"file": path.name, "status": "STORED", "kind": "statement", "account": acc, "rows": n}
     kind = detect(d)
     if kind is None:
+        from jarvis.agents import growth  # Syntellicore leads / customers list
+
+        m = growth.lead_columns(d)
+        if m:
+            return {"file": path.name, "status": "STORED", "kind": "leads", "asof": _asof(path),
+                    "rows": growth.store_leads(d, m, _asof(path))}
         return {"file": path.name, "status": "UNRECOGNISED", "columns": list(d.columns)[:12]}
     asof = _asof(path)
     with _db() as c:
