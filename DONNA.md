@@ -19,9 +19,9 @@ Nothing is rewritten. Every new piece is one more agent file in `jarvis/agents/`
 | Step back weekly | Wins, what slipped, one trading habit to keep and one to stop (from the journal), and next week's three outcomes. | `!week` |
 | Daily market and business analysis | Already built: morning dispatch, daily wrap, desk report, back office. Important alerts now reach Discord instead of only the log. | Automatic |
 
-## Phases
+## Phase 1 (this PR): her mind
 
-**Phase 1 (this PR): her mind.** Memory, conversation, brain dump, ideas board, `!think`, shutdown, `!week`, alerts to Discord, and the trade-plan sizing fix for pairs not quoted in USD (USDJPY was sized about 150 times too small; crosses like EURGBP now ask for the conversion rate instead of guessing).
+Memory, conversation, brain dump, ideas board, `!think`, shutdown, `!week`, alerts to Discord, and the trade-plan sizing fix for pairs not quoted in USD (USDJPY was sized about 150 times too small; crosses like EURGBP now ask for the conversion rate instead of guessing).
 
 Also in phase 1, after a second review:
 - Free chat in `#donna` only answers the Discord user IDs you list. A private channel alone isn't enough, because chat can reach every agent.
@@ -29,17 +29,20 @@ Also in phase 1, after a second review:
 - "Today" in the shutdown is your local day, not the UTC day.
 - An outage reply ("rate limited", "can't reach Claude") is no longer saved into the conversation.
 
-**Phase 2: fewer, better messages.** One morning message and one evening message instead of up to five reports. Each one is ranked by what needs you, with everything else one command away. Includes the live position-risk view: open trades, risk at stop, distance to the daily-loss limit.
+## Roadmap, ranked
 
-**Phase 2b: stronger trading guardrails.** Weekly and monthly drawdown limits, a daily trade cap, a cool-off after a loss streak, and a news blackout window. All are settings you can change.
+Ranked by how much each step moves DONNA toward "runs my day, thinks with me, grows the business", against the effort. Each step is its own PR, and nothing is merged without your go-ahead.
 
-**Phase 3: growth co-pilot.** Builds on the compliance and growth agents in PR #2: a weekly growth review (leads, funnel, IB performance, retention), with DONNA proposing the one experiment to run next and tracking whether it worked.
-
-**Phase 4: personal-account-dealing guard.** Before any trade plan, DONNA checks the instrument against your restricted list and holding-period rules, and logs the pre-clearance. It needs your firm's PAD policy to set up.
-
-**Phase 5: reach.** Voice notes in Telegram, and a phone-friendly page. Only if you want them.
-
-**Phase 6: hardening.** Mask client names and numbers in tool results before they reach Claude, make the audit log tamper-evident, add nightly database backups, and add a health check that pings you if a service stops.
+| # | Step | Why it's ranked here | What it needs from you |
+|---|---|---|---|
+| 1 | **Connect your calendar and email** | Already built (read-only email triage into tasks, Google Calendar in the my-day brief and the meeting reminders). Switching it on is what makes her run your day rather than only your task list. | About 10 minutes with `vertex1-connect`: a Google app password and your calendar's private iCal link. No cost. |
+| 2 | **One morning and one evening message, with live position risk** | Up to five reports a day is noise. One morning message and one evening message, ranked by what needs you. The morning one includes your open trades, risk at stop and distance to the daily-loss limit. | Nothing. |
+| 3 | **Growth co-pilot** | Uses the growth and compliance agents from PR #2 (now merged). A weekly growth review covering leads, funnel, IB performance and retention, plus one experiment to run next, and DONNA tracks whether it worked. | Nothing beyond the Syntellicore exports you already upload. |
+| 4 | **Proactive nudges, round 2** | Meeting reminders and the midday check are done. Next is to speak up when it matters: a watchlist move beyond its normal range, a compliance case or obligation about to go overdue, a hot lead left untouched, a bot that stopped. | Nothing. |
+| 5 | **Trading guardrails and the personal-account-dealing check** | Weekly and monthly drawdown limits, a daily trade cap, a cool-off after a loss streak, and a news blackout. Before any trade plan she checks your restricted list and holding period, and logs the pre-clearance. | Your firm's PAD policy: restricted list, holding period, pre-clearance rule. |
+| 6 | **Security and audit hardening** | You'd expect this as a compliance officer. Client names and numbers are masked in tool results before they reach Claude. The audit log becomes tamper-evident (each entry chained to the last), and `!audit` shows what DONNA did today. | Nothing. |
+| 7 | **Reliable hosting** | Services already restart on a crash, and as of this PR the scheduler survives a restart without repeating reports and tells you when a job fails. Still to add: nightly database backups, and an outside health check that messages you if a service is down. | Possibly a free uptime monitor account. I'll ask before adding anything. |
+| 8 | **Voice** | Talking to her on your phone like Tony and Jarvis. Telegram voice notes go to speech-to-text, she answers as text and optionally voice. Ranked last because it needs a paid speech service and steps 1–4 deliver more day-to-day value. | Your OK on a speech service and its cost (I'll price the options first). |
 
 ## Switching phase 1 on
 
