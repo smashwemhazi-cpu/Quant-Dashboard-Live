@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn
+aiohttp
+requests
+telethon
+psutil
+crewai

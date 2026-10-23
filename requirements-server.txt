@@ -1,0 +1,21 @@
+# Pinned versions the test suite passed with (Python 3.11+; tested on 3.13).
+anthropic==2.1.0
+fastapi==0.159.1
+uvicorn==0.54.0
+pydantic==2.13.5
+aiohttp==3.14.5
+requests==2.34.2
+pandas==3.0.5
+numpy==2.5.3
+plotly==7.1.0
+streamlit==1.66.1
+yfinance==1.7.0
+psycopg2-binary==2.9.13
+psutil==7.2.2
+openpyxl==3.1.5
+icalendar==7.3.0
+recurring-ical-events==3.8.2
+discord.py==2.7.1
+Telethon==1.45.0
+# Optional - only for /api/strategy/generate (not installed by default, pulls many packages):
+# crewai

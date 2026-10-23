@@ -1,6 +1,14 @@
-streamlit
+streamlit>=1.50
 pandas
+numpy
 plotly
 psycopg2-binary
 requests
 yfinance
+anthropic>=2.1
+pytest
+psutil
+openpyxl
+icalendar
+recurring-ical-events
+discord.py

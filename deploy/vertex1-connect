@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Guided setup for D.O.N.N.A's personal side: private Discord channel, work inbox, Google Calendar.
+# Run as root on the server:  vertex1-connect      (press Enter to skip any question; secrets are not shown)
+set -euo pipefail
+ENV=/etc/vertex1/vertex1.env
+PY=/opt/vertex1/venv/bin/python
+[ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
+cp -p "$ENV" "$ENV.bak.$(date +%Y%m%d-%H%M%S)"
+
+ask() {  # ask NAME "question" hidden(0/1)
+  local v
+  if [ "$3" = 1 ]; then read -rsp "$2: " v; echo; else read -rp "$2: " v; fi
+  v="$(printf '%s' "$v" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  if [ -n "$v" ]; then export "SET_$1=$v"; fi
+}
+
+echo "Press Enter to skip any question. Hidden answers show nothing while you paste - that is normal."
+ask DONNA_DISCORD_WEBHOOK_REPORTS "1/8 Company reports webhook URL - #track-a-brokerage (hidden)" 1
+ask DONNA_DISCORD_WEBHOOK_PERSONAL "2/8 Private webhook URL - #track-b-personal (hidden; Enter = reuse the old reports webhook)" 1
+ask DONNA_DISCORD_BOT_TOKEN "3/8 'DONNA Tasks' bot token for !tasks / !done (hidden)" 1
+ask DONNA_DISCORD_COMMAND_CHANNELS "4/8 Channel for commands (Enter = track-b-personal) (hidden)" 1
+ask JARVIS_IMAP_USER "5/8 Work email address" 0
+ask JARVIS_IMAP_PASSWORD "6/8 Google app password - 16 letters (hidden)" 1
+ask JARVIS_GCAL_ICS_URL "7/8 Google Calendar secret address in iCal format (hidden)" 1
+ask JARVIS_PERSONAL_ACCOUNT "8/8 Your personal cTrader account number (hidden)" 1
+
+"$PY" - "$ENV" <<'EOF'
+import os, re, sys
+
+path = sys.argv[1]
+lines = open(path).read().splitlines()
+new = {k[4:]: v for k, v in os.environ.items() if k.startswith("SET_")}
+if "JARVIS_IMAP_PASSWORD" in new:
+    new["JARVIS_IMAP_PASSWORD"] = new["JARVIS_IMAP_PASSWORD"].replace(" ", "")  # Google shows it in groups of 4
+# check each answer's shape; never print the value itself
+CHECKS = {
+    "DONNA_DISCORD_WEBHOOK_REPORTS": (r"https://(discord|discordapp)\.com/api/webhooks/\S+", "not a Discord webhook link"),
+    "DONNA_DISCORD_WEBHOOK_PERSONAL": (r"https://(discord|discordapp)\.com/api/webhooks/\S+", "not a Discord webhook link"),
+    "DONNA_DISCORD_BOT_TOKEN": (r"[A-Za-z0-9._-]{50,100}", "not a Discord bot token"),
+    "DONNA_DISCORD_COMMAND_CHANNELS": (r"[a-z0-9_,# -]+", "not a channel name"),
+    "JARVIS_IMAP_USER": (r"[^@\s]+@[^@\s]+\.[^@\s]+", "not an email address"),
+    "JARVIS_IMAP_PASSWORD": (r"[a-z]{16}", "not an app password. An app password is 16 lowercase letters made at "
+                             "myaccount.google.com/apppasswords - never type your normal Google password here"),
+    "JARVIS_GCAL_ICS_URL": (r"https://calendar\.google\.com/calendar/ical/\S+\.ics", "not the 'Secret address in iCal format' link"),
+    "JARVIS_PERSONAL_ACCOUNT": (r"\d{4,12}", "not an account number (digits only)"),
+}
+for k, v in list(new.items()):
+    rx, why = CHECKS.get(k, (r"[^\"`$\\]+", "contains characters that are not allowed"))
+    if not re.fullmatch(rx, v) or re.search(r'["`$\\]', v):
+        print(f"SKIPPED {k}: {why}")
+        new.pop(k)
+current = {l.split("=", 1)[0]: l.split("=", 1)[1].strip('"') for l in lines if "=" in l and not l.lstrip().startswith("#")}
+present = set(current)
+for k, (rx, why) in CHECKS.items():  # a bad value saved by an older version is cleared, not kept
+    if k not in new and current.get(k) and not re.fullmatch(rx, current[k]):
+        new[k] = ""
+        print(f"CLEARED {k}: the saved value was {why}")
+# the first reports webhook was made in the personal channel: reuse it for personal posts
+if "DONNA_DISCORD_WEBHOOK_PERSONAL" not in new and not current.get("DONNA_DISCORD_WEBHOOK_PERSONAL") \
+        and current.get("DONNA_DISCORD_WEBHOOK_REPORTS"):
+    new["DONNA_DISCORD_WEBHOOK_PERSONAL"] = current["DONNA_DISCORD_WEBHOOK_REPORTS"]
+    print("Personal posts will use the existing webhook (#track-b-personal)")
+for k, v in {"JARVIS_IMAP_HOST": "imap.gmail.com", "JARVIS_LOCAL_TZ": "Etc/GMT-4", "JARVIS_CTRADER_UTC_OFFSET": "4",
+             "JARVIS_PERSONAL_TARGETS": "discord:personal", "JARVIS_INBOX_DIR": "/var/lib/vertex1/inbox",
+             "DONNA_DISCORD_COMMAND_CHANNELS": "track-b-personal"}.items():
+    if k not in present:
+        new.setdefault(k, v)
+fmt = lambda v: f'"{v}"' if v and re.search(r"[^A-Za-z0-9_@./:%+=,-]", v) else v  # noqa: E731
+out, done = [], set()
+for l in lines:
+    k = l.split("=", 1)[0]
+    if k in new and not l.lstrip().startswith("#"):
+        out.append(f"{k}={fmt(new[k])}")
+        done.add(k)
+    else:
+        out.append(l)
+out += [f"{k}={fmt(v)}" for k, v in new.items() if k not in done]
+open(path, "w").write("\n".join(out) + "\n")
+print("Saved:", ", ".join(sorted(new)) or "nothing changed")
+EOF
+
+systemctl restart vertex1-scheduler
+if grep -q '^DONNA_DISCORD_BOT_TOKEN=.\+' "$ENV"; then
+  systemctl enable -q vertex1-discord 2>/dev/null; systemctl restart vertex1-discord; sleep 4
+  echo "COMMANDS  $(systemctl is-active vertex1-discord) - type !help in your command channel"
+fi
+echo
+echo "Checking connections..."
+sudo -u vertex1 bash -c 'set -a; . /etc/vertex1/vertex1.env; cd /opt/vertex1/app; /opt/vertex1/venv/bin/python -c "
+import imaplib, os
+from jarvis.agents import assistant as a
+u, p = os.getenv(\"JARVIS_IMAP_USER\"), os.getenv(\"JARVIS_IMAP_PASSWORD\")
+if u and p:
+    try:
+        with imaplib.IMAP4_SSL(os.getenv(\"JARVIS_IMAP_HOST\", \"imap.gmail.com\")) as m:
+            m.login(u, p); print(\"EMAIL     OK - read-only access works\")
+    except Exception as e:
+        print(\"EMAIL     FAILED -\", str(e)[:150])
+        if \"AUTHENTICATION\" in str(e):
+            print(\"          -> make the app password while signed in as\", u, \"and turn IMAP on: Gmail > Settings > See all settings > Forwarding and POP/IMAP\")
+else:
+    print(\"EMAIL     not set\")
+c = a.calendar_events(days=7)
+print(\"CALENDAR \", (\"FAILED - \" + c[\"error\"]) if \"error\" in c else (\"OK - %d events in the next 7 days\" % len(c[\"events\"])))
+print(\"API KEY  \", \"set\" if os.getenv(\"ANTHROPIC_API_KEY\") else \"MISSING - email analysis needs it\")
+r = a.AssistantAgent().my_day(send=True).get(\"delivery\")
+print(\"DISCORD  \", r)
+"'
+echo
+echo "Done. Your my-day brief should now be in the private Discord channel."

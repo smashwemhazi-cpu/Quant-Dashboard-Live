@@ -1,0 +1,21 @@
+[Unit]
+Description=JARVIS / Quant dashboard (Streamlit)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vertex1
+Group=vertex1
+WorkingDirectory=/opt/vertex1/app
+EnvironmentFile=/etc/vertex1/vertex1.env
+ExecStart=/opt/vertex1/venv/bin/streamlit run dashboard.py --server.address 127.0.0.1 --server.port 8501 --server.headless true
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/vertex1
+
+[Install]
+WantedBy=multi-user.target
