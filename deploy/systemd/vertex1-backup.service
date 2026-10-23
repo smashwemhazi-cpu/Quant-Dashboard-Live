@@ -1,0 +1,6 @@
+[Unit]
+Description=Vertex 1 nightly database backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vertex1-backup

@@ -40,7 +40,7 @@ Ranked by how much each step moves DONNA toward "runs my day, thinks with me, gr
 | 3 | ✅ **Growth co-pilot** | Uses the growth and compliance agents from PR #2 (now merged). A weekly growth review covering leads, funnel, IB performance and retention, plus one experiment to run next, and DONNA tracks whether it worked. | Nothing beyond the Syntellicore exports you already upload. |
 | 4 | ✅ **Proactive nudges, round 2** | Meeting reminders and the midday check are done. Next is to speak up when it matters: a watchlist move beyond its normal range, a compliance case or obligation about to go overdue, a hot lead left untouched, a bot that stopped. | Nothing. |
 | 5 | **Trading guardrails and the personal-account-dealing check** | Weekly and monthly drawdown limits, a daily trade cap, a cool-off after a loss streak, and a news blackout. Before any trade plan she checks your restricted list and holding period, and logs the pre-clearance. | Your firm's PAD policy: restricted list, holding period, pre-clearance rule. |
-| 6 | **Security and audit hardening** | You'd expect this as a compliance officer. Client names and numbers are masked in tool results before they reach Claude. The audit log becomes tamper-evident (each entry chained to the last), and `!audit` shows what DONNA did today. | Nothing. |
+| 6 | ✅ **Security and audit hardening** | You'd expect this as a compliance officer. Client names and numbers are masked in tool results before they reach Claude. The audit log becomes tamper-evident (each entry chained to the last), and `!audit` shows what DONNA did today. | Nothing. |
 | 7 | **Reliable hosting** | Services already restart on a crash, and as of this PR the scheduler survives a restart without repeating reports and tells you when a job fails. Still to add: nightly database backups, and an outside health check that messages you if a service is down. | Possibly a free uptime monitor account. I'll ask before adding anything. |
 | 8 | **Voice** | Talking to her on your phone like Tony and Jarvis. Telegram voice notes go to speech-to-text, she answers as text and optionally voice. Ranked last because it needs a paid speech service and steps 1–4 deliver more day-to-day value. | Your OK on a speech service and its cost (I'll price the options first). |
 
@@ -88,6 +88,13 @@ Every 15 minutes DONNA checks for things that shouldn't wait for the evening mes
 - **Positions:** a live position without a stop, or the daily-loss limit hit.
 
 Each heads-up is remembered, so a restart never repeats it. If one source is down, the others still run.
+
+## Step 6: security and audit
+
+- **Client data masked before Claude sees it.** When DONNA uses a tool in chat, client names in the result become initials, emails become `j***@domain`, and phone numbers, addresses, dates of birth and ID or bank numbers become `***`. Client ids, account numbers and figures pass through, so answers still point at the right record. Turn it off with `DONNA_MASK_PII=0` (not recommended).
+- **Tamper-evident audit trail.** Every audit entry carries a fingerprint (SHA-256) of itself and of the entry before it. Changing or deleting an entry breaks the chain from that point. Entries written before this release stay as they were, and the chain starts after them.
+- **`!audit`** in Discord shows what DONNA did today, the last error, and whether the trail is intact.
+- **Nightly backups** (step 7, started here): at 01:30 UTC every database is copied to `/var/lib/vertex1/backups/<date>/`, and 14 days are kept (`VERTEX1_BACKUP_DAYS`). The restore steps are at the top of `deploy/vertex1-backup`.
 
 ## Connecting your live cTrader account (read-only)
 

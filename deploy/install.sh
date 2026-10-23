@@ -36,8 +36,10 @@ cp "$SRC"/deploy/systemd/*.service "$SRC"/deploy/systemd/*.timer /etc/systemd/sy
 [[ -f /etc/nginx/sites-available/vertex1 ]] || cp "$SRC/deploy/nginx/vertex1.conf" /etc/nginx/sites-available/vertex1
 install -m 755 "$SRC/deploy/vertex1-connect" /usr/local/bin/vertex1-connect
 install -m 755 "$SRC/deploy/vertex1-update" /usr/local/bin/vertex1-update
+install -m 755 "$SRC/deploy/vertex1-backup" /usr/local/bin/vertex1-backup
 systemctl daemon-reload
 systemctl enable -q --now vertex1-update.timer  # hands-off updates from now on
+systemctl enable -q --now vertex1-backup.timer  # nightly database backups, 14 days kept
 
 echo
 echo "Installed to /opt/vertex1/app (previous release kept in /opt/vertex1/app.prev)."
