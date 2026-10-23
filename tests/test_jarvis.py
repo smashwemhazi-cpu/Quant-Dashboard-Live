@@ -454,3 +454,12 @@ def test_leads_export_detected_and_tasks(tmp_path, monkeypatch):
     review = {"verdict": "approve", "issues": [], "compliant_version": ""}
     drafts = growth.draft_posts(_fake_client([posts, review]), brief="Gold -1.9%")
     assert drafts[0]["verdict"] == "approve" and "compliance OK" in growth.drafts_text(drafts)
+
+
+def test_lead_columns_do_not_misread_similar_names():
+    from jarvis.agents import growth
+
+    m = growth.lead_columns(pd.DataFrame(columns=["customer_no", "sales_status", "date_of_birth", "registration_date"]))
+    assert m["owner"] is None and m["status"] == "sales_status" and m["created"] == "registration_date"
+    m = growth.lead_columns(pd.DataFrame(columns=["customer_no", "lead_status", "date_of_birth", "tribe", "IB"]))
+    assert m["source"] == "IB" and m["created"] is None
