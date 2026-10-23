@@ -5,6 +5,22 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-24 · Growth co-pilot (roadmap step 3)
+
+**What was done**
+- A weekly growth review every Monday at 05:00 UTC (09:00 your time) in your private channel, and on demand with `!growth`. It covers leads, conversion, sources and IBs, and the daily KPI trend, from the Syntellicore exports.
+- Each review proposes one experiment, with a target on a number DONNA measures herself. `!exp start <n>` starts it and records the baseline. When it ends, DONNA marks it won or lost from the newest export.
+- New commands: `!growth`, `!exp`, `!exp start <n>`, `!exp stop <n>`.
+
+**Why:** roadmap step 3. Growth ideas get judged on numbers instead of memory, one at a time.
+
+**What you'll notice:** a "GROWTH REVIEW" message on Mondays. Until a leads export is uploaded it says NO DATA, and it costs nothing because Claude isn't called.
+
+**Recommendations**
+- Upload the Syntellicore leads/customers export at least weekly (daily is better). Every number here comes from it.
+- Start at most one experiment at a time, so you know what caused a change.
+- Client names and ids never go to Claude from this feature, only counts and source names.
+
 ## 2026-10-23 · Hands-off updates and shorter setup
 
 **What was done**

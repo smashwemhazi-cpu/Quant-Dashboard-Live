@@ -16,6 +16,7 @@ Thinking partner (jarvis/agents/mind.py):
   !remember <fact>  !memory  !forget <id>   what D.O.N.N.A knows about you
   !shutdown                      close the day; !week for the weekly review
   !morning  !evening  !risk      the two daily digests on demand, and live position risk
+  !growth  /  !exp               growth review + next experiment / experiments; !exp start 3, !exp stop 3
 
 Plain messages are only answered in DONNA_DISCORD_CHAT_CHANNELS (also private), and only from the
 user IDs in DONNA_DISCORD_ALLOWED_USERS - free chat reaches every agent, so it is never left open.
@@ -61,7 +62,8 @@ HELP = ("D.O.N.N.A commands:\n"
         "!park #id  !doing #id  !drop #id\n"
         "!remember <fact>  !memory  !forget <id>\n"
         "!shutdown  !week           close the day / weekly review\n"
-        "!morning  !evening  !risk  today's digests / live position risk")
+        "!morning  !evening  !risk  today's digests / live position risk\n"
+        "!growth  !exp              growth review / experiments (!exp start 3)")
 
 
 def _list(v: str) -> set[str]:
@@ -137,6 +139,18 @@ def mind_command(cmd: str, rest: str, channel: str) -> str | None:
                 "!risk": lambda: "\n".join(rhythm.risk_lines())}[cmd]()
     if cmd == "!week":
         return mind.week_review()
+    if cmd in ("!growth", "!exp"):
+        from jarvis.agents import copilot
+
+        if cmd == "!growth":
+            return copilot.review()
+        sub, _, arg = rest.strip().partition(" ")
+        eid, note = mind.parse_idea_ref(arg)
+        if sub.lower() in ("start", "stop") and eid is not None:
+            return copilot.start(eid) if sub.lower() == "start" else copilot.stop(eid, note)
+        if sub:
+            return "Usage: !exp | !exp start 3 | !exp stop 3 [why]"
+        return copilot.experiments_text()
     return None
 
 
