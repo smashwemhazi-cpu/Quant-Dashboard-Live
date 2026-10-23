@@ -32,6 +32,10 @@ from jarvis.core.registry import Agent, register, tool
 LOCAL_TZ = ZoneInfo(os.getenv("JARVIS_LOCAL_TZ", "UTC"))
 OWNER = os.getenv("DONNA_OWNER_NAME", "SH")
 HISTORY_TURNS = int(os.getenv("DONNA_HISTORY_TURNS", "20"))       # messages kept per chat channel
+KEEP_TURNS = 200                                                  # stored per channel; older turns are deleted
+FAILED_REPLIES = ("Claude API key missing", "Rate limited by the Claude API", "Cannot reach the Claude API",
+                  "Claude API error", "No response.", "The request was declined")  # Brain.ask's error answers
+NUDGE_MINUTES = int(os.getenv("DONNA_NUDGE_MINUTES", "15"))       # meeting reminder lead time
 IDEA_STATUSES = ["new", "exploring", "doing", "parked", "dropped"]
 MEMORY_KINDS = ["goal", "preference", "context", "person", "rule"]
 
@@ -127,6 +131,7 @@ def _db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS conversation (id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT NOT NULL,
             role TEXT NOT NULL, content TEXT NOT NULL, ts TEXT);
         CREATE TABLE IF NOT EXISTS dumps (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, day TEXT, result TEXT);
+        CREATE TABLE IF NOT EXISTS nudges (key TEXT PRIMARY KEY, ts TEXT);
     """)
     return c
 
@@ -137,6 +142,14 @@ def _now() -> str:
 
 def _today() -> str:
     return datetime.now(LOCAL_TZ).date().isoformat()
+
+
+def _local_day(ts: str | None) -> str:
+    """UTC ISO timestamp from the DB -> the owner's local date, so 'today' means their day, not UTC's."""
+    if not ts:
+        return ""
+    t = datetime.fromisoformat(ts)
+    return (t if t.tzinfo else t.replace(tzinfo=timezone.utc)).astimezone(LOCAL_TZ).date().isoformat()
 
 
 # ------------------------------------------------------------------ memory
@@ -237,9 +250,13 @@ def chat(text: str, channel: str = "default", brain: Any = None, allow_writes: b
         brain = Brain()
     msgs = history(channel) + [{"role": "user", "content": text}]
     reply = brain.ask(msgs, user=f"donna:{channel}", allow_writes=allow_writes, system=persona())
+    if reply.startswith(FAILED_REPLIES):  # an outage message isn't conversation - don't make it context
+        return reply
     with _db() as c:
         c.executemany("INSERT INTO conversation (channel, role, content, ts) VALUES (?,?,?,?)",
                       [(channel, "user", text[:8000], _now()), (channel, "assistant", reply[:8000], _now())])
+        c.execute("DELETE FROM conversation WHERE channel = ? AND id NOT IN (SELECT id FROM conversation "
+                  "WHERE channel = ? ORDER BY id DESC LIMIT ?)", (channel, channel, KEEP_TURNS))
     return reply
 
 
@@ -315,12 +332,12 @@ def shutdown_text(day: str | None = None) -> str:
 
     day = day or _today()
     with assistant._db() as c:
-        done = [dict(r) for r in c.execute("SELECT id, title FROM tasks WHERE status = 'done' AND substr(done_at,1,10) = ?",
-                                           (day,))]
+        done = [dict(r) for r in c.execute("SELECT id, title, done_at FROM tasks WHERE status = 'done'")
+                if _local_day(r["done_at"]) == day]
     open_ = assistant.list_tasks()
     overdue = [t for t in open_ if t["due"] and t["due"] < day]
     with _db() as c:
-        new_ideas = [dict(r) for r in c.execute("SELECT id, text FROM ideas WHERE substr(created,1,10) = ?", (day,))]
+        new_ideas = [dict(r) for r in c.execute("SELECT id, text, created FROM ideas") if _local_day(r["created"]) == day]
     rank = {"high": 0, "medium": 1, "low": 2}
     tomorrow = sorted(open_, key=lambda t: (t["due"] is None, t["due"] or "", rank.get(t["priority"], 3), t["id"]))[:3]
     L = [f"D.O.N.N.A | SHUTDOWN | {day}", "-" * 34, f"DONE TODAY ({len(done)})"]
@@ -333,6 +350,50 @@ def shutdown_text(day: str | None = None) -> str:
     L += [f" {n}. #{t['id']} {t['title']}" + (f" (due {t['due']})" if t["due"] else "") for n, t in enumerate(tomorrow, 1)] \
         or [" Nothing open. Use the space for the business."]
     L += ["", "Anything still in your head? Dump it now so it's out of your head tonight: !dump <text>"]
+    return "\n".join(L)
+
+
+# ------------------------------------------------------------------ proactive nudges
+def _once(key: str) -> bool:
+    """True the first time a nudge key is seen, so a restart or a 5-minute loop never repeats a nudge."""
+    with _db() as c:
+        return c.execute("INSERT OR IGNORE INTO nudges (key, ts) VALUES (?,?)", (key, _now())).rowcount == 1
+
+
+def meeting_nudges(now: datetime | None = None, events: list[dict[str, Any]] | None = None) -> list[str]:
+    """Reminders for meetings starting in the next NUDGE_MINUTES, each sent once."""
+    from jarvis.agents import assistant
+
+    now = now or datetime.now(LOCAL_TZ)
+    if events is None:
+        cal = assistant.calendar_events(now.date())
+        events = cal.get("events", [])
+    out = []
+    for e in events:
+        if e["all_day"]:
+            continue
+        start = datetime.strptime(e["start"], "%Y-%m-%d %H:%M").replace(tzinfo=LOCAL_TZ)
+        mins = (start - now).total_seconds() / 60
+        if 0 <= mins <= NUDGE_MINUTES and _once(f"meeting:{e['start']}:{e['title']}"):
+            where = f" ({e['location']})" if e["location"] else ""
+            out.append(f"In {mins:.0f} min: {e['title']}{where}, {e['start'][11:]}-{e['end']}")
+    return out
+
+
+def midday_check(day: str | None = None) -> str | None:
+    """One midday nudge when high-priority work due today (or overdue) is still open; None when all clear."""
+    from jarvis.agents import assistant
+
+    day = day or _today()
+    late = [t for t in assistant.list_tasks() if t["priority"] == "high" and t["due"] and t["due"] <= day]
+    if not late or not _once(f"midday:{day}"):
+        return None
+    L = [f"Halfway through the day. {len(late)} high-priority item(s) still open:"]
+    L += [f" #{t['id']} {t['title']}" + (" (overdue)" if t["due"] < day else "") for t in late[:5]]
+    focus = latest_focus(day)
+    if focus:
+        L.append(f"Your focus today was: {focus[0]}")
+    L.append("Block 45 minutes for the first one, or !done it if it's handled.")
     return "\n".join(L)
 
 
@@ -376,6 +437,20 @@ class MindAgent(Agent):
     def update_idea(self, idea_id: int, status: str = "", note: str = "") -> dict[str, Any]:
         """Change an idea's status (new, exploring, doing, parked, dropped) and/or append a note."""
         return {"updated": set_idea(idea_id, status, note)}
+
+    def nudge(self, midday: bool = False) -> dict[str, Any]:
+        """Scheduler hook (not a Brain tool): meeting reminders, plus the midday check when midday=True.
+        Delivers to JARVIS_PERSONAL_TARGETS."""
+        msgs = meeting_nudges() + ([m] if midday and (m := midday_check()) else [])
+        res: dict[str, Any] = {"nudges": msgs}
+        if msgs:
+            from jarvis.agents.personal import PERSONAL_TARGETS
+
+            if PERSONAL_TARGETS:
+                from donna.channels import broadcast
+
+                res["delivery"] = broadcast("\n\n".join(msgs), PERSONAL_TARGETS, title="D.O.N.N.A heads-up")
+        return res
 
     @tool()
     def shutdown(self, send: bool = False) -> dict[str, Any]:

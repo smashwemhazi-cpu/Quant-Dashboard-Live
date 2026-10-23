@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from jarvis.core import audit
+from jarvis.core.config import settings
 from jarvis.core.registry import agents, load_builtin_agents
 
 log = logging.getLogger("jarvis.scheduler")
@@ -100,6 +102,18 @@ def job_my_day() -> None:
     notify("my_day", agents()["assistant"].my_day(send=True).get("delivery"))
 
 
+def job_nudges() -> None:
+    r = agents()["mind"].nudge()
+    if r["nudges"]:
+        notify("nudges", r)
+
+
+def job_midday() -> None:
+    r = agents()["mind"].nudge(midday=True)
+    if r["nudges"]:
+        notify("midday_check", r)
+
+
 def job_shutdown() -> None:
     notify("shutdown", agents()["mind"].shutdown(send=True).get("delivery"))
 
@@ -136,13 +150,43 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("inbox_triage", 15, None, job_inbox_triage),
     ("my_day", 60 * 24, int(os.getenv("JARVIS_MYDAY_UTC_HOUR", "4")), job_my_day),
     ("shutdown", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_shutdown),  # evening close-out
+    ("nudges", 5, None, job_nudges),                                                       # meeting reminders
+    ("midday", 60 * 24, int(os.getenv("JARVIS_MIDDAY_UTC_HOUR", "9")), job_midday),         # open high-priority work
 ]
+
+
+def _state() -> sqlite3.Connection:
+    path = os.getenv("JARVIS_STATE_DB", settings.state_db)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE IF NOT EXISTS scheduler_runs (job TEXT PRIMARY KEY, last REAL)")
+    return c
+
+
+def load_last() -> dict[str, float]:
+    """Last run times survive a restart, so a crash-and-restart doesn't send the daily reports twice."""
+    with _state() as c:
+        return dict(c.execute("SELECT job, last FROM scheduler_runs").fetchall())
+
+
+def save_last(job: str, ts: float) -> None:
+    with _state() as c:
+        c.execute("INSERT OR REPLACE INTO scheduler_runs (job, last) VALUES (?,?)", (job, ts))
+
+
+def job_failed(name: str, e: Exception) -> None:
+    audit.log("scheduler", "job_error", {"job": name, "error": str(e)})
+    if ALERT_TARGETS:  # a silent failure is how a missing report goes unnoticed for a week
+        from donna.channels import broadcast
+
+        broadcast(f"The {name} job failed: {type(e).__name__}: {str(e)[:300]}\nIt will retry on its next run.",
+                  ALERT_TARGETS, title="D.O.N.N.A job failed")
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     load_builtin_agents()
-    last: dict[str, float] = {}
+    last: dict[str, float] = load_last()
     while True:
         now = time.time()
         hour = datetime.now(timezone.utc)  # all schedules are UTC
@@ -153,9 +197,13 @@ def main() -> None:
                 continue
             last[name] = now
             try:
+                save_last(name, now)
                 fn()
             except Exception as e:  # a failing job must never kill the loop
-                audit.log("scheduler", "job_error", {"job": name, "error": str(e)})
+                try:
+                    job_failed(name, e)
+                except Exception:
+                    log.exception("could not report the failure of %s", name)
         time.sleep(30)
 
 

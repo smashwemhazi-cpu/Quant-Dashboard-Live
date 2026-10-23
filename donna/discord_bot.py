@@ -16,7 +16,8 @@ Thinking partner (jarvis/agents/mind.py):
   !remember <fact>  !memory  !forget <id>   what D.O.N.N.A knows about you
   !shutdown                      close the day; !week for the weekly review
 
-Plain messages are only answered in DONNA_DISCORD_CHAT_CHANNELS (also private).
+Plain messages are only answered in DONNA_DISCORD_CHAT_CHANNELS (also private), and only from the
+user IDs in DONNA_DISCORD_ALLOWED_USERS - free chat reaches every agent, so it is never left open.
 
 Answers only in the channels named in DONNA_DISCORD_COMMAND_CHANNELS (keep them private - the
 channel is the access control) and, if DONNA_DISCORD_ALLOWED_USERS is set, only to those user IDs.
@@ -62,6 +63,12 @@ def allowed(author_id: int, channel_name: str) -> bool:
 
 def chat_channels() -> set[str]:
     return _list(os.getenv("DONNA_DISCORD_CHAT_CHANNELS", ""))
+
+
+def chat_allowed(author_id: int, channel_name: str) -> bool:
+    """Free chat reaches every agent, so it needs a named user list, not just a private channel."""
+    users = _list(os.getenv("DONNA_DISCORD_ALLOWED_USERS", ""))
+    return channel_name.lower() in chat_channels() and str(author_id) in users
 
 
 def mind_command(cmd: str, rest: str, channel: str) -> str | None:
@@ -189,7 +196,7 @@ def main() -> None:
         if message.author.bot or message.webhook_id or not message.content.strip():
             return
         channel = getattr(message.channel, "name", "")
-        if not message.content.startswith("!") and channel.lower() not in chat_channels():
+        if not message.content.startswith("!") and not chat_allowed(message.author.id, channel):
             return
         if not allowed(message.author.id, channel):
             return

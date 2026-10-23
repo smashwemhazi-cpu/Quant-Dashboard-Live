@@ -157,3 +157,73 @@ def test_alert_delivery_only_for_chosen_events(monkeypatch):
     scheduler.notify("retention_scan", [{"client": "x"}])   # not in the default alert list
     scheduler.notify("morning_brief", "Good morning")
     assert sent == [("D.O.N.N.A execution alert", "fill_rate_pct: 95.1"), ("D.O.N.N.A morning brief", "Good morning")]
+
+
+def test_free_chat_needs_named_users(monkeypatch):
+    from donna import discord_bot as b
+
+    monkeypatch.setenv("DONNA_DISCORD_CHAT_CHANNELS", "donna")
+    monkeypatch.delenv("DONNA_DISCORD_ALLOWED_USERS", raising=False)
+    assert not b.chat_allowed(42, "donna")                 # private channel alone is not enough
+    monkeypatch.setenv("DONNA_DISCORD_ALLOWED_USERS", "42")
+    assert b.chat_allowed(42, "donna") and not b.chat_allowed(7, "donna") and not b.chat_allowed(42, "general")
+
+
+def test_failed_answers_are_not_remembered(mind):
+    class Down:
+        def ask(self, *a, **k):
+            return "Rate limited by the Claude API - try again in a minute."
+
+    mind.chat("hello", "x", Down())
+    assert mind.history("x") == []
+
+
+def test_shutdown_counts_the_local_day(mind, monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    from jarvis.agents import assistant
+
+    monkeypatch.setattr(mind, "LOCAL_TZ", ZoneInfo("Etc/GMT-4"))  # UTC+4
+    assert mind._local_day("2026-10-22T21:30:00+00:00") == "2026-10-23"  # 01:30 local, next day
+    tid = assistant.add_task("Late-night fix")
+    assistant.complete_task(tid)
+    with assistant._db() as c:
+        c.execute("UPDATE tasks SET done_at = '2026-10-22T21:30:00+00:00' WHERE id = ?", (tid,))
+    assert "DONE TODAY (1)" in mind.shutdown_text("2026-10-23")
+
+
+def test_meeting_nudges_fire_once(mind):
+    from datetime import datetime
+
+    now = datetime(2026, 10, 23, 9, 50, tzinfo=mind.LOCAL_TZ)
+    ev = [{"title": "LP call", "all_day": False, "start": "2026-10-23 10:00", "end": "10:30", "location": ""},
+          {"title": "Later", "all_day": False, "start": "2026-10-23 14:00", "end": "15:00", "location": ""},
+          {"title": "Holiday", "all_day": True, "start": "2026-10-23", "end": "", "location": ""}]
+    assert mind.meeting_nudges(now, ev) == ["In 10 min: LP call, 10:00-10:30"]
+    assert mind.meeting_nudges(now, ev) == []               # never twice, even after a restart
+
+
+def test_midday_check_only_when_something_is_late(mind):
+    from jarvis.agents import assistant
+
+    assert mind.midday_check("2026-10-23") is None
+    assistant.add_task("FSCA return", "2026-10-23", "high")
+    assistant.add_task("Someday", "2026-10-23", "low")
+    out = mind.midday_check("2026-10-23")
+    assert "1 high-priority" in out and "FSCA return" in out and "Someday" not in out
+    assert mind.midday_check("2026-10-23") is None           # once a day
+
+
+def test_scheduler_remembers_runs_and_reports_failures(tmp_path, monkeypatch):
+    from jarvis import scheduler
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    scheduler.save_last("daily_wrap", 123.0)
+    assert scheduler.load_last() == {"daily_wrap": 123.0}
+    sent = []
+    import donna.channels as ch
+    monkeypatch.setattr(ch, "broadcast", lambda text, targets, title: sent.append(title) or {})
+    monkeypatch.setattr(scheduler, "ALERT_TARGETS", ["discord:personal"])
+    monkeypatch.setattr(scheduler.audit, "log", lambda *a, **k: None)
+    scheduler.job_failed("daily_wrap", RuntimeError("feed down"))
+    assert sent == ["D.O.N.N.A job failed"]
