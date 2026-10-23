@@ -36,13 +36,60 @@ Ranked by how much each step moves DONNA toward "runs my day, thinks with me, gr
 | # | Step | Why it's ranked here | What it needs from you |
 |---|---|---|---|
 | 1 | **Connect your calendar and email** | Already built (read-only email triage into tasks, Google Calendar in the my-day brief and the meeting reminders). Switching it on is what makes her run your day rather than only your task list. | About 10 minutes with `vertex1-connect`: a Google app password and your calendar's private iCal link. No cost. |
-| 2 | **One morning and one evening message, with live position risk** | Up to five reports a day is noise. One morning message and one evening message, ranked by what needs you. The morning one includes your open trades, risk at stop and distance to the daily-loss limit. | Nothing. |
+| 2 | ✅ **One morning and one evening message, with live position risk** (step 2 PR) | Up to five reports a day is noise. One morning message and one evening message, ranked by what needs you. The morning one includes your open trades, risk at stop and distance to the daily-loss limit. | Nothing. |
 | 3 | **Growth co-pilot** | Uses the growth and compliance agents from PR #2 (now merged). A weekly growth review covering leads, funnel, IB performance and retention, plus one experiment to run next, and DONNA tracks whether it worked. | Nothing beyond the Syntellicore exports you already upload. |
 | 4 | **Proactive nudges, round 2** | Meeting reminders and the midday check are done. Next is to speak up when it matters: a watchlist move beyond its normal range, a compliance case or obligation about to go overdue, a hot lead left untouched, a bot that stopped. | Nothing. |
 | 5 | **Trading guardrails and the personal-account-dealing check** | Weekly and monthly drawdown limits, a daily trade cap, a cool-off after a loss streak, and a news blackout. Before any trade plan she checks your restricted list and holding period, and logs the pre-clearance. | Your firm's PAD policy: restricted list, holding period, pre-clearance rule. |
 | 6 | **Security and audit hardening** | You'd expect this as a compliance officer. Client names and numbers are masked in tool results before they reach Claude. The audit log becomes tamper-evident (each entry chained to the last), and `!audit` shows what DONNA did today. | Nothing. |
 | 7 | **Reliable hosting** | Services already restart on a crash, and as of this PR the scheduler survives a restart without repeating reports and tells you when a job fails. Still to add: nightly database backups, and an outside health check that messages you if a service is down. | Possibly a free uptime monitor account. I'll ask before adding anything. |
 | 8 | **Voice** | Talking to her on your phone like Tony and Jarvis. Telegram voice notes go to speech-to-text, she answers as text and optionally voice. Ranked last because it needs a paid speech service and steps 1–4 deliver more day-to-day value. | Your OK on a speech service and its cost (I'll price the options first). |
+
+## Step 2: one morning, one evening
+
+With `DONNA_DIGEST=1` (the default) your private channel gets two scheduled messages a day instead of five or six:
+
+- **Morning** (at `JARVIS_MYDAY_UTC_HOUR`):
+  - **Needs you:** a ranked list of overdue or due-today high-priority tasks, urgent emails, red compliance KRIs, overdue cases and due regulatory obligations, positions without a stop, the daily-loss limit if hit, and stopped bots.
+  - Your focus, today's calendar, position risk, and the three biggest market moves.
+- **Evening** (at `JARVIS_SHUTDOWN_UTC_HOUR`): the shutdown, your trading day, position risk, and markets at the close.
+- **Replaced:** the separate my-day brief, compliance report, marketing drafts, shutdown and the paid AI morning brief. Each is still one command away (`!today`, `!compliance`, `!drafts`, `!shutdown`, or just ask), and `!morning`, `!evening` and `!risk` show the digests on demand.
+- **Unchanged:** urgent emails, meeting reminders, the midday check and alerts still arrive straight away. The team's morning dispatch and daily wrap still go to the team channel.
+
+**Position risk** needs a live feed of your open positions. DONNA accepts them at `POST /api/positions`, with equity, start-of-day equity, and for each position the symbol, side, units, entry, stop and current price. From that she works out:
+- the risk at stop for each position, with the yen and other quote currencies converted;
+- total open risk against your limit;
+- how much room is left before the daily-loss stop;
+- any position without a hard stop.
+
+Until a feed is connected, the section says NO DATA.
+
+## Connecting your live cTrader account (read-only)
+
+DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.
+
+**On the cTrader side (about 10 minutes, then a wait for approval):**
+1. Go to **openapi.ctrader.com** and sign in with the cTrader ID you trade with.
+2. Open **Applications**, choose **Add new app**, name it `DONNA`, and describe it as "Personal read-only risk view". Submit it.
+3. Wait for the status to change to **Active**. Spotware reviews new apps, which can take a day or two.
+4. Open the app's **Credentials** and keep the **Client ID** and **Secret** ready (don't copy them anywhere else).
+5. Open the app's **Playground** and generate a token:
+   - Choose the **Account info** scope (read-only), **not Trading**.
+   - Sign in, and tick only your personal account when cTrader asks which accounts to grant.
+   - You'll get an **Access token** and a **Refresh token**.
+
+I couldn't open the portal from here, so the exact button names may differ slightly.
+
+**On your server:**
+6. Run `sudo vertex1-connect`. Questions 9–12 ask for the four values, and your typing stays hidden. Question 8 is your account number, if it isn't saved yet. The script then checks the connection and prints `CTRADER OK - read-only, N open position(s)`.
+7. In Discord, `!risk` shows the live view, and the morning and evening messages include it.
+
+**Never paste these four values into chat, Discord, email or a document.** They only go into the server's env file through `vertex1-connect`. If one ever leaks, delete the token in the Open API portal (or the whole app) and issue a new one.
+
+**What happens over time:**
+- Tokens last about a month. DONNA refreshes them herself and keeps the new pair in her database on the server.
+- If the connection fails, you get one Discord message, not one every 5 minutes. The risk view then marks the last snapshot as old.
+
+**Compliance:** this is your personal account at a brokerage you work for, so your personal-account-dealing policy applies to the data flow as well as the trading. DONNA keeps the data on your server. Position details are only sent to Claude when you ask her about them in chat.
 
 ## Switching phase 1 on
 

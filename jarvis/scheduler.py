@@ -159,6 +159,24 @@ def job_morning_brief() -> None:
     notify("morning_brief", brief)
 
 
+def job_ctrader_positions() -> None:
+    from jarvis.adapters import ctrader_feed
+
+    if not ctrader_feed.configured():
+        return
+    r = ctrader_feed.poll()
+    if "error" in r:
+        raise RuntimeError(r["error"])  # reported once per failing run by job_failed
+
+
+def job_morning() -> None:
+    notify("morning", agents()["rhythm"].morning(send=True).get("delivery"))
+
+
+def job_evening() -> None:
+    notify("evening", agents()["rhythm"].evening(send=True).get("delivery"))
+
+
 # (name, every_n_minutes, weekday_only_hour or None, fn)
 JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("execution", 15, None, job_execution),
@@ -177,7 +195,20 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("shutdown", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_shutdown),  # evening close-out
     ("nudges", 5, None, job_nudges),                                                       # meeting reminders
     ("midday", 60 * 24, int(os.getenv("JARVIS_MIDDAY_UTC_HOUR", "9")), job_midday),         # open high-priority work
+    ("ctrader_positions", int(os.getenv("DONNA_CTRADER_POLL_MINUTES", "5")), None, job_ctrader_positions),
+    # the two digests: same hours as the my-day brief and the shutdown they replace
+    ("morning", 60 * 24, int(os.getenv("JARVIS_MYDAY_UTC_HOUR", "4")), job_morning),
+    ("evening", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_evening),
 ]
+
+
+def active_jobs() -> list[tuple[str, int, int | None, Callable[[], None]]]:
+    """DONNA_DIGEST=1 (default): the morning/evening digests replace the separate personal reports.
+    DONNA_DIGEST=0: the old separate reports, no digests."""
+    from jarvis.agents.rhythm import DIGEST, REPLACED_JOBS
+
+    skip = REPLACED_JOBS if DIGEST else {"morning", "evening"}
+    return [j for j in JOBS if j[0] not in skip]
 
 
 def _state() -> sqlite3.Connection:
@@ -199,8 +230,16 @@ def save_last(job: str, ts: float) -> None:
         c.execute("INSERT OR REPLACE INTO scheduler_runs (job, last) VALUES (?,?)", (job, ts))
 
 
+_fail_alerted: dict[tuple[str, str], float] = {}
+FAIL_REPEAT_HOURS = 6   # a 5-minute job failing the same way is reported once, not every run
+
+
 def job_failed(name: str, e: Exception) -> None:
     audit.log("scheduler", "job_error", {"job": name, "error": str(e)})
+    key, now = (name, str(e)[:200]), time.time()
+    if now - _fail_alerted.get(key, 0) < FAIL_REPEAT_HOURS * 3600:
+        return
+    _fail_alerted[key] = now
     if ALERT_TARGETS:  # a silent failure is how a missing report goes unnoticed for a week
         from donna.channels import broadcast
 
@@ -215,7 +254,7 @@ def main() -> None:
     while True:
         now = time.time()
         hour = datetime.now(timezone.utc)  # all schedules are UTC
-        for name, every, at_hour, fn in JOBS:
+        for name, every, at_hour, fn in active_jobs():
             if at_hour is not None and (hour.hour != at_hour or hour.weekday() >= 5):
                 continue
             if now - last.get(name, 0) < every * 60:

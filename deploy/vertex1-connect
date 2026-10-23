@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Guided setup for D.O.N.N.A's personal side: private Discord channel, work inbox, Google Calendar.
+# Guided setup for D.O.N.N.A's personal side: private Discord channel, work inbox, Google Calendar,
+# and the read-only cTrader feed for the position-risk view.
 # Run as root on the server:  vertex1-connect      (press Enter to skip any question; secrets are not shown)
 set -euo pipefail
 ENV=/etc/vertex1/vertex1.env
@@ -15,14 +16,19 @@ ask() {  # ask NAME "question" hidden(0/1)
 }
 
 echo "Press Enter to skip any question. Hidden answers show nothing while you paste - that is normal."
-ask DONNA_DISCORD_WEBHOOK_REPORTS "1/8 Company reports webhook URL - #track-a-brokerage (hidden)" 1
-ask DONNA_DISCORD_WEBHOOK_PERSONAL "2/8 Private webhook URL - #track-b-personal (hidden; Enter = reuse the old reports webhook)" 1
-ask DONNA_DISCORD_BOT_TOKEN "3/8 'DONNA Tasks' bot token for !tasks / !done (hidden)" 1
-ask DONNA_DISCORD_COMMAND_CHANNELS "4/8 Channel for commands (Enter = track-b-personal) (hidden)" 1
-ask JARVIS_IMAP_USER "5/8 Work email address" 0
-ask JARVIS_IMAP_PASSWORD "6/8 Google app password - 16 letters (hidden)" 1
-ask JARVIS_GCAL_ICS_URL "7/8 Google Calendar secret address in iCal format (hidden)" 1
-ask JARVIS_PERSONAL_ACCOUNT "8/8 Your personal cTrader account number (hidden)" 1
+ask DONNA_DISCORD_WEBHOOK_REPORTS "1/12 Company reports webhook URL - #track-a-brokerage (hidden)" 1
+ask DONNA_DISCORD_WEBHOOK_PERSONAL "2/12 Private webhook URL - #track-b-personal (hidden; Enter = reuse the old reports webhook)" 1
+ask DONNA_DISCORD_BOT_TOKEN "3/12 'DONNA Tasks' bot token for !tasks / !done (hidden)" 1
+ask DONNA_DISCORD_COMMAND_CHANNELS "4/12 Channel for commands (Enter = track-b-personal) (hidden)" 1
+ask JARVIS_IMAP_USER "5/12 Work email address" 0
+ask JARVIS_IMAP_PASSWORD "6/12 Google app password - 16 letters (hidden)" 1
+ask JARVIS_GCAL_ICS_URL "7/12 Google Calendar secret address in iCal format (hidden)" 1
+ask JARVIS_PERSONAL_ACCOUNT "8/12 Your personal cTrader account number (hidden)" 1
+echo "Questions 9-12 connect your live account READ-ONLY (see DONNA.md). Skip them if you haven't made the cTrader app yet."
+ask DONNA_CTRADER_CLIENT_ID "9/12 cTrader Open API app Client ID (hidden)" 1
+ask DONNA_CTRADER_CLIENT_SECRET "10/12 cTrader Open API app Secret (hidden)" 1
+ask DONNA_CTRADER_ACCESS_TOKEN "11/12 Access token issued with the ACCOUNT INFO scope - not trading (hidden)" 1
+ask DONNA_CTRADER_REFRESH_TOKEN "12/12 Refresh token from the same screen (hidden)" 1
 
 "$PY" - "$ENV" <<'EOF'
 import os, re, sys
@@ -43,6 +49,10 @@ CHECKS = {
                              "myaccount.google.com/apppasswords - never type your normal Google password here"),
     "JARVIS_GCAL_ICS_URL": (r"https://calendar\.google\.com/calendar/ical/\S+\.ics", "not the 'Secret address in iCal format' link"),
     "JARVIS_PERSONAL_ACCOUNT": (r"\d{4,12}", "not an account number (digits only)"),
+    "DONNA_CTRADER_CLIENT_ID": (r"[A-Za-z0-9_-]{10,200}", "not an Open API Client ID"),
+    "DONNA_CTRADER_CLIENT_SECRET": (r"[A-Za-z0-9_-]{10,200}", "not an Open API Secret"),
+    "DONNA_CTRADER_ACCESS_TOKEN": (r"[A-Za-z0-9_.-]{10,500}", "not an access token"),
+    "DONNA_CTRADER_REFRESH_TOKEN": (r"[A-Za-z0-9_.-]{10,500}", "not a refresh token"),
 }
 for k, v in list(new.items()):
     rx, why = CHECKS.get(k, (r"[^\"`$\\]+", "contains characters that are not allowed"))
@@ -103,6 +113,13 @@ else:
 c = a.calendar_events(days=7)
 print(\"CALENDAR \", (\"FAILED - \" + c[\"error\"]) if \"error\" in c else (\"OK - %d events in the next 7 days\" % len(c[\"events\"])))
 print(\"API KEY  \", \"set\" if os.getenv(\"ANTHROPIC_API_KEY\") else \"MISSING - email analysis needs it\")
+from jarvis.adapters import ctrader_feed as ct
+if ct.configured():
+    t = ct.poll()
+    print(\"CTRADER  \", (\"FAILED - \" + t[\"error\"]) if \"error\" in t else
+          (\"OK - read-only, %d open position(s), equity %.2f\" % (t[\"positions\"], t[\"equity\"])))
+else:
+    print(\"CTRADER   not set\")
 r = a.AssistantAgent().my_day(send=True).get(\"delivery\")
 print(\"DISCORD  \", r)
 "'
