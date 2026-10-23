@@ -108,7 +108,9 @@ def test_discord_thinking_commands(tmp_path, monkeypatch):
 
     fb = FakeBrain()
     monkeypatch.setattr(brain, "Brain", lambda: fb)
-    assert b.allowed(1, "donna")                         # chat channel is enough to be answered
+    assert not b.allowed(1, "donna")                     # chat channel without a named user: silent
+    monkeypatch.setenv("DONNA_DISCORD_ALLOWED_USERS", "1")
+    assert b.allowed(1, "donna")
     assert b.handle("hello", "general") is None            # plain text outside chat channels: silent
     assert b.handle("hello", "donna") == "reply 1"
     assert b.handle("!idea Launch a Discord signals tier", "donna") == "Idea #1 on the board."

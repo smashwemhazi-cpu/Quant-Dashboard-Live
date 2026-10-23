@@ -41,6 +41,17 @@ HELP = ("D.O.N.N.A commands:\n"
         "!add <title> | YYYY-MM-DD | high/medium/low\n"
         "!today                     my-day brief\n"
         "!ask <question>            e.g. !ask which clients are at risk this week?\n"
+        "\nCOMPLIANCE & RISK\n"
+        "!compliance                full compliance & risk report\n"
+        "!cases   !case 12          case register / one case with history\n"
+        "!investigate 12 <note>     !escalate 12 <why>   !close 12 <what you did>\n"
+        "!kri                       key risk indicators (red/amber/green)\n"
+        "!mi 30                     management info for the last 30 days\n"
+        "!oblig                     regulatory calendar  (!oblig add <name> | YYYY-MM-DD | monthly, !oblig done 3)\n"
+        "!review <text>             check marketing copy before it goes out\n"
+        "\nGROWTH\n"
+        "!leads                     lead backlog, sources, conversion\n"
+        "!drafts                    today's compliant social-post drafts\n"
         "\nThinking partner:\n"
         "just talk                  in the chat channel; she remembers (!reset clears)\n"
         "!dump <whatever>           sort a messy head into focus, tasks, ideas\n"
@@ -56,9 +67,10 @@ def _list(v: str) -> set[str]:
 
 
 def allowed(author_id: int, channel_name: str) -> bool:
-    channels = _list(os.getenv("DONNA_DISCORD_COMMAND_CHANNELS", "")) | chat_channels()
+    channels = _list(os.getenv("DONNA_DISCORD_COMMAND_CHANNELS", ""))
     users = _list(os.getenv("DONNA_DISCORD_ALLOWED_USERS", ""))
-    return bool(channels) and channel_name.lower() in channels and (not users or str(author_id) in users)
+    return (bool(channels) and channel_name.lower() in channels and (not users or str(author_id) in users)) \
+        or chat_allowed(author_id, channel_name)
 
 
 def chat_channels() -> set[str]:
@@ -164,9 +176,77 @@ def handle(text: str, channel: str = "") -> str | None:
         # read-only: anything that would write or send still needs approval in the console.
         # Goes through mind.chat so a follow-up !ask remembers the previous one.
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
+    reply = compliance_commands(cmd, rest)
+    if reply is not None:
+        return reply
     if cmd in ("!help", "!commands"):
         return HELP
     return mind_command(cmd, rest, f"discord:{channel.lower()}")
+
+
+def compliance_commands(cmd: str, rest: str) -> str | None:
+    from jarvis.agents import compliance as co, growth
+
+    num = re.match(r"\s*(\d+)\s*(.*)", rest, re.S)
+    if cmd == "!compliance":
+        return co.report_text()
+    if cmd == "!cases":
+        rows = co.list_cases(rest.strip() or "active")
+        return "\n".join(f"#{c['id']:<4} {c['severity'][:1].upper()} {c['status'][:5]:<5} due {c['due']}  "
+                         f"{c['category']} {c['subject']}: {c['finding'][:90]}" for c in rows) or "No cases."
+    if cmd == "!case":
+        c = co.get_case(int(num.group(1))) if num else None
+        if not c:
+            return "Usage: !case 12"
+        hist = "\n".join(f" {h['ts'][:16]} {h['who']}: {h['action']} {h['note'] or ''}" for h in c["log"])
+        return (f"Case #{c['id']} [{c['severity']}] {c['category']} / {c['rule']} - {c['status']}\n"
+                f"Subject: {c['subject']}\nOpened: {c['opened'][:16]}  Due: {c['due']}  Owner: {c['owner']}\n"
+                f"Finding: {c['finding']}\n" + (f"Resolution: {c['resolution']}\n" if c["resolution"] else "")
+                + f"History:\n{hist}")
+    if cmd in ("!investigate", "!close", "!escalate", "!reopen"):
+        if not num:
+            return f"Usage: {cmd} 12 <note>"
+        if cmd == "!close" and not num.group(2).strip():
+            return "A case can only be closed with a note of what you found or did: !close 12 <note>"
+        status = {"!investigate": "investigating", "!close": "closed", "!escalate": "escalated", "!reopen": "open"}[cmd]
+        ok = co.update_case(int(num.group(1)), status, num.group(2).strip(), who="discord")
+        return f"Case #{num.group(1)} -> {status}" if ok else "No case with that number."
+    if cmd == "!kri":
+        return "\n".join(f"[{k['status']:<7}] {k['kri']}: {k['value']}" for k in co.kris())
+    if cmd == "!mi":
+        m = co.management_info(int(num.group(1)) if num else 30)
+        lines = [f"Last {m['days']} days: {m['cases']} cases"] + [
+            f" {cat}: opened {v['opened']}, closed {v['closed']}, open {v['open']}" for cat, v in m["by_category"].items()]
+        if m["avg_hours_to_close"] is not None:
+            lines.append(f" Average time to close: {m['avg_hours_to_close']:.1f} h")
+        return "\n".join(lines)
+    if cmd == "!oblig":
+        sub, _, arg = rest.strip().partition(" ")
+        if sub == "add":
+            p = [x.strip() for x in arg.split("|")]
+            try:
+                oid = co.add_obligation(p[0], p[1] if len(p) > 1 else "", p[2].lower() if len(p) > 2 else "")
+            except (ValueError, IndexError) as e:
+                return f"Usage: !oblig add <name> | YYYY-MM-DD | monthly/quarterly/yearly/weekly ({e})"
+            return f"Obligation #{oid} added"
+        if sub == "done" and arg.strip().isdigit():
+            return f"Obligation #{arg.strip()}: {co.complete_obligation(int(arg))}"
+        return "\n".join(f"#{o['id']:<3} {o['due']}  {o['name']}" + (f"  ({o['repeat']})" if o["repeat"] else "")
+                         for o in co.list_obligations()) or "No obligations yet - !oblig add <name> | YYYY-MM-DD | monthly"
+    if cmd == "!review":
+        if not rest.strip():
+            return "Usage: !review <paste the marketing text>"
+        r = co.review_promotion(rest.strip())
+        out = [f"Verdict: {r['verdict'].replace('_', ' ').upper()}"]
+        out += [f" - \"{i['phrase']}\": {i['problem']} -> {i['fix']}" for i in r["issues"]]
+        if r["compliant_version"]:
+            out += ["", "Compliant version:", r["compliant_version"]]
+        return "\n".join(out)
+    if cmd == "!leads":
+        return "\n".join(growth.report_lines())
+    if cmd == "!drafts":
+        return growth.drafts_text(growth.draft_posts())
+    return None
 
 
 def chunks(text: str) -> list[str]:

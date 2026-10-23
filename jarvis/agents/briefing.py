@@ -171,8 +171,10 @@ def business() -> list[str]:
     from jarvis.agents import backoffice
 
     try:
+        from jarvis.agents import growth
+
         backoffice.BackOfficeAgent().ingest()  # pick up anything dropped since the last run
-        return backoffice.report_lines()
+        return backoffice.report_lines() + [""] + growth.report_lines()
     except Exception as e:
         return [f"NO DATA - back office section failed ({type(e).__name__}: {e})"]
 
