@@ -19,9 +19,34 @@ from jarvis.core.registry import agents, load_builtin_agents
 log = logging.getLogger("jarvis.scheduler")
 
 
+# Alerts that used to reach only the audit log. Set JARVIS_ALERT_TARGETS (e.g. discord:personal) to receive
+# them; JARVIS_ALERT_EVENTS picks which (the full list: retention_scan, execution_alert, stale_deals,
+# desk_report, lp_slippage_alert, morning_brief). Reports that already deliver themselves are not repeated.
+ALERT_TARGETS = [t for t in os.getenv("JARVIS_ALERT_TARGETS", "").split(",") if t]
+ALERT_EVENTS = {e.strip() for e in os.getenv(
+    "JARVIS_ALERT_EVENTS", "execution_alert,lp_slippage_alert,morning_brief").split(",") if e.strip()}
+
+
+def alert_text(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload
+    rows = payload if isinstance(payload, list) else [payload]
+    return "\n".join(", ".join(f"{k}: {v}" for k, v in r.items()) if isinstance(r, dict) else str(r)
+                     for r in rows[:15])
+
+
 def notify(title: str, payload: Any) -> None:
     audit.log("scheduler", title, {"result": payload})
     log.info("%s: %s", title, str(payload)[:300])
+    if title in ALERT_EVENTS and ALERT_TARGETS and payload:
+        from donna.channels import broadcast
+
+        try:
+            audit.log("scheduler", "alert_delivery",
+                      {"event": title, "delivery": broadcast(alert_text(payload), ALERT_TARGETS,
+                                                             title=f"D.O.N.N.A {title.replace('_', ' ')}")})
+        except Exception as e:  # delivery problems must not stop the job loop
+            audit.log("scheduler", "alert_delivery_error", {"event": title, "error": str(e)})
 
 
 def job_retention() -> None:
@@ -75,6 +100,10 @@ def job_my_day() -> None:
     notify("my_day", agents()["assistant"].my_day(send=True).get("delivery"))
 
 
+def job_shutdown() -> None:
+    notify("shutdown", agents()["mind"].shutdown(send=True).get("delivery"))
+
+
 def job_morning_dispatch() -> None:
     notify("morning_dispatch", agents()["briefing"].morning_dispatch(send=True).get("delivery"))
 
@@ -106,6 +135,7 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("morning_brief", 60 * 24, 7, job_morning_brief),
     ("inbox_triage", 15, None, job_inbox_triage),
     ("my_day", 60 * 24, int(os.getenv("JARVIS_MYDAY_UTC_HOUR", "4")), job_my_day),
+    ("shutdown", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_shutdown),  # evening close-out
 ]
 
 

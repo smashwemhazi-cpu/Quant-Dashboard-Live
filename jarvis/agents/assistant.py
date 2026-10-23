@@ -266,6 +266,12 @@ def my_day_text() -> str:
     L += [f" Reply needed: {r['subject'][:80]} ({r['sender_domain']})" for r in ib["needs_reply"]
           if r not in ib["high"]][:5]
     L += [""] + personal.report_lines()
+    try:
+        from jarvis.agents import mind
+
+        L = L[:2] + mind.focus_lines() + [""] + L[2:]  # focus first, right under the header
+    except Exception as e:  # the brief must still go out if the mind DB is unreadable
+        L += ["", f"FOCUS: unavailable ({type(e).__name__})"]
     return "\n".join(L)
 
 
