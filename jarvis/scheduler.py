@@ -102,7 +102,7 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("retention", 60 * 6, None, job_retention),
     ("pipeline", 60 * 24, None, job_pipeline),
     ("morning_dispatch", 60 * 24, 6, job_morning_dispatch),   # 06:00 UTC, before London
-    ("daily_wrap", 60 * 24, 22, job_daily_wrap),              # 22:00 UTC, after the NY close
+    ("daily_wrap", 60 * 24, int(os.getenv("JARVIS_WRAP_UTC_HOUR", "22")), job_daily_wrap),  # default 22:00 UTC, after the NY close
     ("morning_brief", 60 * 24, 7, job_morning_brief),
     ("inbox_triage", 15, None, job_inbox_triage),
     ("my_day", 60 * 24, int(os.getenv("JARVIS_MYDAY_UTC_HOUR", "4")), job_my_day),

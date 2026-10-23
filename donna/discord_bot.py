@@ -5,7 +5,7 @@
   !add Call LP about XAU spreads | 2026-10-24 | high     (date and priority optional)
   !today                         the my-day brief (calendar, tasks, inbox, trading, bots)
   !ask <question>                ask D.O.N.N.A anything; she answers from the live agents (read-only)
-  !help
+  !help / !commands
 
 Answers only in the channels named in DONNA_DISCORD_COMMAND_CHANNELS (keep them private - the
 channel is the access control) and, if DONNA_DISCORD_ALLOWED_USERS is set, only to those user IDs.
@@ -77,7 +77,7 @@ def handle(text: str) -> str | None:
 
         # read-only: anything that would write or send still needs approval in the console
         return Brain().ask([{"role": "user", "content": rest.strip()}], user="discord", allow_writes=False)
-    if cmd == "!help":
+    if cmd in ("!help", "!commands"):
         return HELP
     return None
 
