@@ -140,8 +140,14 @@ def test_repeated_job_failures_alert_once(monkeypatch, tmp_path):
     scheduler.job_failed("execution", FileNotFoundError("no data for 'executions'"))   # nothing set up: no alert
     scheduler.job_failed("my_day", RuntimeError("NO DATA - calendar not connected"))
     assert len(sent) == 1
-    scheduler.job_failed("ctrader_positions", RuntimeError("CH_CLIENT_AUTH_FAILURE: wrong clientSecret"))
+    assert scheduler.job_failed("ctrader_positions", RuntimeError("CH_CLIENT_AUTH_FAILURE: wrong clientSecret"))
+    assert len(sent) == 2 and "paused" in sent[-1]
+    for _ in range(3):  # login refused again: no new alert, no new audit line
+        scheduler.job_failed("ctrader_positions", RuntimeError("CH_CLIENT_AUTH_FAILURE: wrong clientSecret"))
     assert len(sent) == 2
+    assert "Client ID" in scheduler.waiting_jobs()["ctrader_positions"][0]
+    scheduler.job_ok("ctrader_positions")
+    assert "ctrader_positions" not in scheduler.waiting_jobs()
 
 
 def test_new_env_tokens_replace_a_refreshed_pair(tmp_path, monkeypatch):
