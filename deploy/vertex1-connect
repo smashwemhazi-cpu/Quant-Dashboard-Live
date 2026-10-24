@@ -131,6 +131,12 @@ if ct.configured():
     t = ct.poll()
     print(\"CTRADER  \", (\"FAILED - \" + t[\"error\"]) if \"error\" in t else
           (\"OK - read-only, %d open position(s), equity %.2f\" % (t[\"positions\"], t[\"equity\"])))
+    if \"CLIENT_AUTH\" in t.get(\"error\", \"\"):
+        cid, sec = os.getenv(\"DONNA_CTRADER_CLIENT_ID\", \"\"), os.getenv(\"DONNA_CTRADER_CLIENT_SECRET\", \"\")
+        print(\"          -> the Client ID and Secret saved here are not a pair. Saved Client ID starts with\", cid[:8],
+              \"(%d characters); Secret is %d characters.\" % (len(cid), len(sec)))
+        print(\"          -> compare with Credentials on openapi.ctrader.com, then run: vertex1-connect ctrader\")
+        print(\"             and paste BOTH at 9 (Client ID) and 10 (Secret).\")
 else:
     print(\"CTRADER   not set\")
 if os.getenv(\"SEND_MYDAY\") == \"1\":

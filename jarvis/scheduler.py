@@ -244,20 +244,34 @@ def save_last(job: str, ts: float) -> None:
         c.execute("INSERT OR REPLACE INTO scheduler_runs (job, last) VALUES (?,?)", (job, ts))
 
 
-_fail_alerted: dict[tuple[str, str], float] = {}
-FAIL_REPEAT_HOURS = 6   # a 5-minute job failing the same way is reported once, not every run
+FAIL_REPEAT_HOURS = float(os.getenv("JARVIS_FAIL_REPEAT_HOURS", "24"))   # same failure: one alert per day at most
+# a job with nothing to read yet (feature not set up, no export uploaded) is logged, not alerted
+NO_DATA = ("no data", "not configured", "not connected", "not set")
+
+
+def _first_alert(key: str, now: float) -> bool:
+    """True if this failure hasn't been alerted within FAIL_REPEAT_HOURS. Stored in the DB, so a restart
+    (which every vertex1-connect run causes) doesn't re-send the same alert."""
+    with _state() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS fail_alerts (key TEXT PRIMARY KEY, ts REAL)")
+        row = c.execute("SELECT ts FROM fail_alerts WHERE key = ?", (key,)).fetchone()
+        if row and now - row[0] < FAIL_REPEAT_HOURS * 3600:
+            return False
+        c.execute("INSERT OR REPLACE INTO fail_alerts (key, ts) VALUES (?,?)", (key, now))
+    return True
 
 
 def job_failed(name: str, e: Exception) -> None:
     audit.log("scheduler", "job_error", {"job": name, "error": str(e)})
-    key, now = (name, str(e)[:200]), time.time()
-    if now - _fail_alerted.get(key, 0) < FAIL_REPEAT_HOURS * 3600:
+    if isinstance(e, FileNotFoundError) or any(x in str(e).lower() for x in NO_DATA):
         return
-    _fail_alerted[key] = now
+    if not _first_alert(f"{name}|{type(e).__name__}|{str(e)[:200]}", time.time()):
+        return
     if ALERT_TARGETS:  # a silent failure is how a missing report goes unnoticed for a week
         from donna.channels import broadcast
 
-        broadcast(f"The {name} job failed: {type(e).__name__}: {str(e)[:300]}\nIt will retry on its next run.",
+        broadcast(f"The {name} job failed: {type(e).__name__}: {str(e)[:300]}\nIt will retry; you'll hear about "
+                  f"this again in {FAIL_REPEAT_HOURS:g}h at most if it keeps failing.",
                   ALERT_TARGETS, title="D.O.N.N.A job failed")
 
 
