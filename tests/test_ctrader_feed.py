@@ -125,15 +125,20 @@ def test_poll_without_settings_is_a_clear_message(monkeypatch):
     assert "not configured" in f.poll()["error"]
 
 
-def test_repeated_job_failures_alert_once(monkeypatch):
+def test_repeated_job_failures_alert_once(monkeypatch, tmp_path):
     from jarvis import scheduler
 
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
     sent = []
     import donna.channels as ch
     monkeypatch.setattr(ch, "broadcast", lambda text, targets, title: sent.append(text) or {})
     monkeypatch.setattr(scheduler, "ALERT_TARGETS", ["discord:personal"])
     monkeypatch.setattr(scheduler.audit, "log", lambda *a, **k: None)
-    monkeypatch.setattr(scheduler, "_fail_alerted", {})
     for _ in range(3):
         scheduler.job_failed("ctrader_positions", RuntimeError("cTrader unreachable (ClientConnectorError)"))
     assert len(sent) == 1
+    scheduler.job_failed("execution", FileNotFoundError("no data for 'executions'"))   # nothing set up: no alert
+    scheduler.job_failed("my_day", RuntimeError("NO DATA - calendar not connected"))
+    assert len(sent) == 1
+    scheduler.job_failed("ctrader_positions", RuntimeError("CH_CLIENT_AUTH_FAILURE: wrong clientSecret"))
+    assert len(sent) == 2

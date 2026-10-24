@@ -5,6 +5,18 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-24 · Fewer "job failed" messages; clearer cTrader hint
+
+**What was done**
+- A failing job now alerts you at most once a day for the same error, and that holds across restarts. Before, every `vertex1-connect` run restarted DONNA, and she repeated every failure.
+- Jobs for things you haven't set up yet (no executions file, calendar not connected, and similar) no longer send alerts. They're still recorded in the audit log (`!audit`).
+- When cTrader says "wrong clientSecret", `vertex1-connect` now shows the first characters of the saved Client ID and the lengths of both values, so you can compare them with the Credentials page without showing the Secret.
+
+**Why:** SH was getting a flood of red messages for problems that were already known or simply not set up.
+
+**Recommendations**
+- Re-enter the cTrader Client ID **and** Secret together (`vertex1-connect ctrader`, questions 9 and 10).
+
 ## 2026-10-24 · Security, audit trail and nightly backups (roadmap step 6, start of step 7)
 
 **What was done**
