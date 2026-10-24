@@ -33,6 +33,7 @@ import asyncio
 import logging
 import os
 import re
+from typing import Any
 
 from jarvis.agents import assistant
 
@@ -65,7 +66,8 @@ HELP = ("D.O.N.N.A commands:\n"
         "!shutdown  !week           close the day / weekly review\n"
         "!morning  !evening  !risk  today's digests / live position risk\n"
         "!growth  !exp              growth review / experiments (!exp start 3)\n"
-        "!audit                     what DONNA did today; audit trail check")
+        "!audit                     what DONNA did today; audit trail check\n"
+        "!status                    running version and what is connected / broken")
 
 
 def _list(v: str) -> set[str]:
@@ -155,7 +157,58 @@ def mind_command(cmd: str, rest: str, channel: str) -> str | None:
         return copilot.experiments_text()
     if cmd == "!audit":
         return audit_text()
+    if cmd == "!status":
+        return status_text()
     return None
+
+
+def claude_check(client: Any = None) -> str:
+    """One tiny real request, so 'key set' can't hide an empty credit balance."""
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return "MISSING - run vertex1-connect"
+    try:
+        import anthropic
+
+        from jarvis.core.config import settings
+
+        client = client or anthropic.Anthropic()
+        client.messages.create(model=settings.model, max_tokens=1, messages=[{"role": "user", "content": "ok"}])
+        return "OK"
+    except Exception as e:
+        msg = str(e)
+        if "credit balance" in msg:
+            return "NO CREDIT - top up at console.anthropic.com > Plans & Billing (!ask and chat are off until then)"
+        if "authentication" in msg.lower() or "invalid x-api-key" in msg:
+            return "KEY REJECTED - make a new key and run vertex1-connect"
+        return f"ERROR - {type(e).__name__}: {msg[:120]}"
+
+
+def status_text(client: Any = None) -> str:
+    """Which version is running, and the last error of every job that failed in the last 24h."""
+    import json
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+
+    from jarvis.core import audit
+
+    rel = Path(__file__).resolve().parents[1] / "RELEASE"
+    version = rel.read_text().strip() if rel.exists() else "dev"
+    L = [f"DONNA version {version} - running", f"Claude:  {claude_check(client)}"]
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    last: dict[str, tuple[str, str]] = {}
+    for r in audit.since(since, limit=20000):
+        if r["actor"] == "scheduler" and r["event"] == "job_error":
+            try:
+                p = json.loads(r["payload"])
+            except (TypeError, ValueError):
+                continue
+            last[p.get("job", "?")] = (r["ts"][11:16], str(p.get("error", ""))[:140])
+    if last:
+        L.append("Failing in the last 24h:")
+        L += [f" {job}: {err} (last {ts} UTC)" for job, (ts, err) in sorted(last.items())]
+    else:
+        L.append("No job failures in the last 24h.")
+    return "\n".join(L)
 
 
 def audit_text() -> str:
@@ -189,6 +242,9 @@ def tasks_text() -> str:
 
 def handle(text: str, channel: str = "") -> str | None:
     """Turn one message into a reply; None means 'not a command - stay silent'."""
+    slip = re.match(r"#([a-z]+)\b", text.strip(), re.I)
+    if slip and (f"!{slip.group(1).lower()} " in HELP or slip.group(1).lower() == "help"):  # "#help" for "!help"
+        text = "!" + text.strip()[1:]
     if not text.strip().startswith("!"):
         if channel.lower() in chat_channels():
             from jarvis.agents import mind

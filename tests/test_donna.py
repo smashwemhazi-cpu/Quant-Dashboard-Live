@@ -242,3 +242,28 @@ def test_discord_ask_uses_read_only_brain_with_memory(tmp_path, monkeypatch):
     b.handle("!ask and the biggest one?", "desk")
     assert [m["content"] for m in seen[1]["msgs"]] == ["who is at risk?", "3 clients at risk", "and the biggest one?"]
     assert b.handle("!ask   ").startswith("Usage")
+
+
+def test_status_reports_version_credit_and_failures(tmp_path, monkeypatch):
+    from donna import discord_bot
+    from jarvis.core import audit
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    audit.log("scheduler", "job_error", {"job": "inbox_triage", "error": "AUTHENTICATIONFAILED"})
+
+    class Broke:
+        class messages:
+            @staticmethod
+            def create(**kw):
+                raise RuntimeError("Your credit balance is too low to access the Anthropic API.")
+
+    out = discord_bot.status_text(Broke())
+    assert "DONNA version" in out and "NO CREDIT" in out and "inbox_triage: AUTHENTICATIONFAILED" in out
+
+
+def test_hash_slip_runs_the_command(monkeypatch):
+    from donna import discord_bot
+
+    assert discord_bot.handle("#help") == discord_bot.HELP
+    assert discord_bot.handle("#nonsense") is None

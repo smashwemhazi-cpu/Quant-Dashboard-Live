@@ -5,6 +5,18 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-24 · `!status`: see the running version and what's broken
+
+**What was done**
+- New Discord command `!status`. It shows which version is running, tests the Claude key with one tiny real request (so an empty credit balance shows up), and lists every job that failed in the last 24 hours with its last error.
+- Typing `#help` (or `#` with any other command) now works like `!help`, instead of being sent to Claude as chat.
+
+**Why:** SH couldn't tell whether updates had landed. The only reply in #donna was an old "credit balance too low" error, from a `#help` sent to Claude as chat.
+
+**What you'll notice:** type `!status` in #donna any time. It works even with no Claude credit.
+
+**Recommendation:** top up Claude credit (console.anthropic.com > Plans & Billing). `!status` will say OK once it's done.
+
 ## 2026-10-24 · New cTrader tokens always take effect
 
 **What was done:** when you paste new cTrader tokens into `vertex1-connect`, DONNA now uses them, even if she had refreshed an older pair and saved it in her database. Before, an old refreshed pair could quietly win.
