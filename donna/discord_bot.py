@@ -30,6 +30,7 @@ with any other bot in the server.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import re
@@ -67,7 +68,8 @@ HELP = ("D.O.N.N.A commands:\n"
         "!morning  !evening  !risk  today's digests / live position risk\n"
         "!growth  !exp              growth review / experiments (!exp start 3)\n"
         "!audit                     what DONNA did today; audit trail check\n"
-        "!status                    running version and what is connected / broken")
+        "!status                    running version and what is connected / broken\n"
+        "!pack  !pack 30            management pack PDF (last 7 / 30 days) to forward to the directors")
 
 
 def _list(v: str) -> set[str]:
@@ -381,6 +383,18 @@ def main() -> None:
         if not message.content.startswith("!") and not chat_allowed(message.author.id, channel):
             return
         if not allowed(message.author.id, channel):
+            return
+        pack = re.fullmatch(r"!pack(?:\s+(\d{1,3}))?", message.content.strip().lower())
+        if pack:
+            try:
+                from jarvis.agents import pack as pk
+
+                async with message.channel.typing():
+                    pdf = await asyncio.to_thread(pk.build_pdf, int(pack.group(1) or 7))
+                await message.channel.send("Management pack:", file=discord.File(io.BytesIO(pdf), pk.filename()))
+            except Exception as e:
+                log.exception("pack failed")
+                await message.channel.send(f"Sorry - the pack failed ({type(e).__name__}).")
             return
         try:
             async with message.channel.typing():

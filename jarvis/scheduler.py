@@ -181,6 +181,12 @@ def job_growth_review() -> None:
         notify("growth_review", r.get("delivery"))
 
 
+def job_weekly_pack() -> None:
+    r = agents()["pack"].weekly(send=True)
+    if "skipped" not in r:
+        notify("weekly_pack", r.get("delivery"))
+
+
 def job_morning() -> None:
     notify("morning", agents()["rhythm"].morning(send=True).get("delivery"))
 
@@ -213,6 +219,7 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("morning", 60 * 24, int(os.getenv("JARVIS_MYDAY_UTC_HOUR", "4")), job_morning),
     ("evening", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_evening),
     ("growth_review", 60 * 24, int(os.getenv("JARVIS_GROWTH_UTC_HOUR", "5")), job_growth_review),  # on DONNA_GROWTH_WEEKDAY
+    ("weekly_pack", 60 * 24, int(os.getenv("JARVIS_PACK_UTC_HOUR", "5")), job_weekly_pack),  # PDF on DONNA_PACK_WEEKDAY
 ]
 
 
