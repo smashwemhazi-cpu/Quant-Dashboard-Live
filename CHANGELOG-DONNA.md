@@ -5,6 +5,12 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-24 · New cTrader tokens always take effect
+
+**What was done:** when you paste new cTrader tokens into `vertex1-connect`, DONNA now uses them, even if she had refreshed an older pair and saved it in her database. Before, an old refreshed pair could quietly win.
+
+**Why:** found while helping SH reconnect cTrader. A fresh token pair has to replace whatever was there.
+
 ## 2026-10-24 · Fewer "job failed" messages; clearer cTrader hint
 
 **What was done**

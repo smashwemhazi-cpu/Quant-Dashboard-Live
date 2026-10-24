@@ -19,6 +19,7 @@ Message numbers and fields are from Spotware's official definitions (github.com/
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sqlite3
@@ -73,19 +74,27 @@ def _db() -> sqlite3.Connection:
     c = sqlite3.connect(path)
     c.execute("CREATE TABLE IF NOT EXISTS ctrader_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), access TEXT, "
               "refresh TEXT, issued TEXT)")
+    if "origin" not in {r[1] for r in c.execute("PRAGMA table_info(ctrader_tokens)")}:
+        c.execute("ALTER TABLE ctrader_tokens ADD COLUMN origin TEXT")
     return c
+
+
+def _env_origin() -> str:
+    """Fingerprint of the env file's access token, so a refreshed pair is only used for the pair it came from."""
+    return hashlib.sha256(os.getenv("DONNA_CTRADER_ACCESS_TOKEN", "").strip().encode()).hexdigest()[:16]
 
 
 def _stored_tokens() -> tuple[str, str, str] | None:
     with _db() as c:
-        row = c.execute("SELECT access, refresh, issued FROM ctrader_tokens WHERE id = 1").fetchone()
-    return tuple(row) if row else None  # type: ignore[return-value]
+        row = c.execute("SELECT access, refresh, issued, origin FROM ctrader_tokens WHERE id = 1").fetchone()
+    # new tokens pasted into vertex1-connect replace a pair refreshed from older ones
+    return tuple(row[:3]) if row and row[3] == _env_origin() else None  # type: ignore[return-value]
 
 
 def _save_tokens(access: str, refresh: str) -> None:
     with _db() as c:
-        c.execute("INSERT OR REPLACE INTO ctrader_tokens (id, access, refresh, issued) VALUES (1,?,?,?)",
-                  (access, refresh, datetime.now(timezone.utc).isoformat(timespec="seconds")))
+        c.execute("INSERT OR REPLACE INTO ctrader_tokens (id, access, refresh, issued, origin) VALUES (1,?,?,?,?)",
+                  (access, refresh, datetime.now(timezone.utc).isoformat(timespec="seconds"), _env_origin()))
 
 
 def tokens() -> tuple[str, str, datetime | None]:
