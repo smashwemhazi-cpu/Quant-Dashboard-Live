@@ -5,6 +5,16 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-24 · Connections waiting for setup pause quietly
+
+**What was done**
+- When a connection refuses DONNA's login (email password refused, cTrader app not approved yet, cTrader token with trading permission, expired token), or there's nothing to read yet, the job now **pauses** instead of retrying every 5 to 15 minutes. One audit line, and at most one Discord message a day. It still tries every 6 hours (`JARVIS_WAIT_RETRY_HOURS`), and straight away after any `vertex1-connect` run.
+- `!audit` and `!status` now list these under "Waiting for setup (paused, not broken)" instead of counting them as errors.
+
+**Why:** SH's `!audit` showed 39 errors in under two hours, all from cTrader waiting for the new app's approval. That looked alarming and hid any real problem.
+
+**What you'll notice:** the error count stops growing. Today's earlier entries stay, because the audit trail can't be edited. Tomorrow's count will be clean.
+
 ## 2026-10-24 · `!status`: see the running version and what's broken
 
 **What was done**

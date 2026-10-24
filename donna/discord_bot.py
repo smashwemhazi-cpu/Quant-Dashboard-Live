@@ -194,6 +194,9 @@ def status_text(client: Any = None) -> str:
     rel = Path(__file__).resolve().parents[1] / "RELEASE"
     version = rel.read_text().strip() if rel.exists() else "dev"
     L = [f"DONNA version {version} - running", f"Claude:  {claude_check(client)}"]
+    from jarvis.scheduler import waiting_jobs
+
+    waiting = waiting_jobs()
     since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     last: dict[str, tuple[str, str]] = {}
     for r in audit.since(since, limit=20000):
@@ -203,12 +206,24 @@ def status_text(client: Any = None) -> str:
             except (TypeError, ValueError):
                 continue
             last[p.get("job", "?")] = (r["ts"][11:16], str(p.get("error", ""))[:140])
+    last = {j: v for j, v in last.items() if j not in waiting}
+    L += _waiting_lines()
     if last:
         L.append("Failing in the last 24h:")
         L += [f" {job}: {err} (last {ts} UTC)" for job, (ts, err) in sorted(last.items())]
     else:
         L.append("No job failures in the last 24h.")
     return "\n".join(L)
+
+
+def _waiting_lines() -> list[str]:
+    from jarvis.scheduler import waiting_jobs
+
+    w = waiting_jobs()
+    if not w:
+        return []
+    return ["Waiting for setup (paused, not broken - they start by themselves once connected):"] + [
+        f" {job}: {why}" for job, (why, _) in w.items()]
 
 
 def audit_text() -> str:
@@ -220,13 +235,17 @@ def audit_text() -> str:
     from jarvis.core import audit
 
     start = datetime.now(LOCAL_TZ).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-    rows = audit.since(start.isoformat())
+    rows = audit.since(start.isoformat(), limit=20000)
     v = audit.verify()
     L = [f"AUDIT TRAIL: {'INTACT' if v['ok'] else 'BROKEN at entry #' + str(v['first_bad_id'])} "
          f"({v['checked']} chained entries checked)", f"Today: {len(rows)} entries"]
     for (actor, event), n in Counter((r["actor"], r["event"]) for r in rows).most_common(15):
         L.append(f" {n:>4}  {actor}: {event}")
-    errors = [r for r in rows if "error" in r["event"]]
+    L += _waiting_lines()
+    from jarvis.scheduler import waiting_jobs
+
+    waiting = waiting_jobs()
+    errors = [r for r in rows if "error" in r["event"] and not any(f'"{j}"' in r["payload"] for j in waiting)]
     if errors:
         L.append(f"Last error: {errors[-1]['ts'][11:16]} UTC {errors[-1]['actor']} {errors[-1]['event']} "
                  f"{errors[-1]['payload'][:150]}")

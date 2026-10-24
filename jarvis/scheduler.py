@@ -261,39 +261,99 @@ def _first_alert(key: str, now: float) -> bool:
     return True
 
 
-def job_failed(name: str, e: Exception) -> None:
+# a connection that refuses DONNA's login: retrying every few minutes can't fix it, only a reconnect can
+SETUP_ERRORS = {
+    "authenticationfailed": "email: Google refused the app password",
+    "invalid credentials": "email: Google refused the app password",
+    "client_auth_failure": "cTrader: Client ID / Secret refused (new app not approved or not entered yet)",
+    "trading permission": "cTrader: token has trading permission - needs a read-only one",
+    "access_token_invalid": "cTrader: token expired or invalid - get a new one",
+}
+WAIT_RETRY_HOURS = float(os.getenv("JARVIS_WAIT_RETRY_HOURS", "6"))  # a waiting job still tries this often
+
+
+def setup_reason(e: Exception) -> str | None:
+    """Plain-words reason if this failure means 'not set up yet' rather than 'broken'."""
+    msg = str(e).lower()
+    if isinstance(e, FileNotFoundError) or any(x in msg for x in NO_DATA):
+        return "nothing to read yet (not set up)"
+    return next((why for k, why in SETUP_ERRORS.items() if k in msg), None)
+
+
+def _waiting_db() -> sqlite3.Connection:
+    c = _state()
+    c.execute("CREATE TABLE IF NOT EXISTS waiting_setup (job TEXT PRIMARY KEY, reason TEXT, since TEXT)")
+    return c
+
+
+def waiting_jobs() -> dict[str, tuple[str, str]]:
+    """{job: (reason, since)} for jobs paused until their connection is set up."""
+    with _waiting_db() as c:
+        return {j: (r, t) for j, r, t in c.execute("SELECT job, reason, since FROM waiting_setup ORDER BY job")}
+
+
+def job_ok(name: str) -> None:
+    with _waiting_db() as c:
+        was = c.execute("DELETE FROM waiting_setup WHERE job = ?", (name,)).rowcount
+    if was:
+        audit.log("scheduler", "job_connected", {"job": name})
+
+
+def job_failed(name: str, e: Exception) -> bool:
+    """Record a failure. Returns True if the job is now waiting for setup (and should pause)."""
+    why = setup_reason(e)
+    if why:
+        with _waiting_db() as c:
+            row = c.execute("SELECT reason FROM waiting_setup WHERE job = ?", (name,)).fetchone()
+            if not row or row[0] != why:  # one audit line when it starts waiting, not one per run
+                c.execute("INSERT OR REPLACE INTO waiting_setup (job, reason, since) VALUES (?,?,?)",
+                          (name, why, datetime.now(timezone.utc).isoformat(timespec="seconds")))
+        if not row or row[0] != why:
+            audit.log("scheduler", "job_waiting", {"job": name, "reason": why, "error": str(e)[:300]})
+        if why.startswith("nothing to read") or not _first_alert(f"{name}|waiting|{why}", time.time()):
+            return True
+        if ALERT_TARGETS:
+            from donna.channels import broadcast
+
+            broadcast(f"{why}.\nI've paused {name} until you reconnect (vertex1-connect), so it won't fill the log. "
+                      f"I'll still try every {WAIT_RETRY_HOURS:g}h in case it gets fixed elsewhere.",
+                      ALERT_TARGETS, title="D.O.N.N.A waiting for setup")
+        return True
     audit.log("scheduler", "job_error", {"job": name, "error": str(e)})
-    if isinstance(e, FileNotFoundError) or any(x in str(e).lower() for x in NO_DATA):
-        return
     if not _first_alert(f"{name}|{type(e).__name__}|{str(e)[:200]}", time.time()):
-        return
+        return False
     if ALERT_TARGETS:  # a silent failure is how a missing report goes unnoticed for a week
         from donna.channels import broadcast
 
         broadcast(f"The {name} job failed: {type(e).__name__}: {str(e)[:300]}\nIt will retry; you'll hear about "
                   f"this again in {FAIL_REPEAT_HOURS:g}h at most if it keeps failing.",
                   ALERT_TARGETS, title="D.O.N.N.A job failed")
+    return False
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     load_builtin_agents()
     last: dict[str, float] = load_last()
+    paused: dict[str, float] = {}  # in memory: a restart (every vertex1-connect run) retries everything at once
     while True:
         now = time.time()
         hour = datetime.now(timezone.utc)  # all schedules are UTC
         for name, every, at_hour, fn in active_jobs():
             if at_hour is not None and (hour.hour != at_hour or hour.weekday() >= 5):
                 continue
-            if now - last.get(name, 0) < every * 60:
+            if now - last.get(name, 0) < every * 60 or now - paused.get(name, 0) < WAIT_RETRY_HOURS * 3600:
                 continue
             last[name] = now
             try:
                 save_last(name, now)
                 fn()
+                paused.pop(name, None)
+                job_ok(name)
             except Exception as e:  # a failing job must never kill the loop
                 try:
-                    job_failed(name, e)
+                    if job_failed(name, e):
+                        paused[name] = now
                 except Exception:
                     log.exception("could not report the failure of %s", name)
         time.sleep(30)
