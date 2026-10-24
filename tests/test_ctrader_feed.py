@@ -142,3 +142,16 @@ def test_repeated_job_failures_alert_once(monkeypatch, tmp_path):
     assert len(sent) == 1
     scheduler.job_failed("ctrader_positions", RuntimeError("CH_CLIENT_AUTH_FAILURE: wrong clientSecret"))
     assert len(sent) == 2
+
+
+def test_new_env_tokens_replace_a_refreshed_pair(tmp_path, monkeypatch):
+    from jarvis.adapters import ctrader_feed as f
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("DONNA_CTRADER_ACCESS_TOKEN", "old-access")
+    monkeypatch.setenv("DONNA_CTRADER_REFRESH_TOKEN", "old-refresh")
+    f._save_tokens("refreshed-access", "refreshed-refresh")
+    assert f.tokens()[0] == "refreshed-access"          # the refreshed pair wins while the env pair is unchanged
+    monkeypatch.setenv("DONNA_CTRADER_ACCESS_TOKEN", "new-access")
+    monkeypatch.setenv("DONNA_CTRADER_REFRESH_TOKEN", "new-refresh")
+    assert f.tokens()[:2] == ("new-access", "new-refresh")
