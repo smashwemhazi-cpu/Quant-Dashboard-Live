@@ -102,3 +102,20 @@ def test_positions_endpoint(tmp_path, monkeypatch):
         assert r["no_stop"] == ["XAUUSD"]
         bad = {"equity": 10_000, "positions": [{**POS[0], "side": "long"}]}
         assert c.post("/api/positions", json=bad, headers={"X-API-Key": "svc"}).status_code == 422
+
+
+def test_health_lines_show_what_waits_on_the_owner(tmp_path, monkeypatch):
+    from jarvis import scheduler
+    from jarvis.agents import rhythm as r
+    from jarvis.core import brain
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "h.db"))
+    monkeypatch.setattr(scheduler.audit, "log", lambda *a, **k: None)
+    monkeypatch.setattr(brain, "claude_check", lambda client=None: "OK")
+    assert r.health_lines() == ["SYSTEM: all connections OK"]
+    scheduler.job_failed("execution", FileNotFoundError("no data"))  # not set up on purpose: not nagged
+    assert r.health_lines() == ["SYSTEM: all connections OK"]
+    scheduler.job_failed("inbox_triage", RuntimeError("b'[AUTHENTICATIONFAILED] Invalid credentials'"))
+    monkeypatch.setattr(brain, "claude_check", lambda client=None: "NO CREDIT - top up")
+    out = "\n".join(r.health_lines())
+    assert "Google refused" in out and "NO CREDIT" in out

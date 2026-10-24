@@ -34,7 +34,7 @@ OWNER = os.getenv("DONNA_OWNER_NAME", "SH")
 HISTORY_TURNS = int(os.getenv("DONNA_HISTORY_TURNS", "20"))       # messages kept per chat channel
 KEEP_TURNS = 200                                                  # stored per channel; older turns are deleted
 FAILED_REPLIES = ("Claude API key missing", "Rate limited by the Claude API", "Cannot reach the Claude API",
-                  "Claude API error", "No response.", "The request was declined")  # Brain.ask's error answers
+                  "Claude API error", "Claude credit is used up", "No response.", "The request was declined")  # Brain.ask's error answers
 NUDGE_MINUTES = int(os.getenv("DONNA_NUDGE_MINUTES", "15"))       # meeting reminder lead time
 IDEA_STATUSES = ["new", "exploring", "doing", "parked", "dropped"]
 MEMORY_KINDS = ["goal", "preference", "context", "person", "rule"]

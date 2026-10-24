@@ -268,6 +268,7 @@ SETUP_ERRORS = {
     "client_auth_failure": "cTrader: Client ID / Secret refused (new app not approved or not entered yet)",
     "trading permission": "cTrader: token has trading permission - needs a read-only one",
     "access_token_invalid": "cTrader: token expired or invalid - get a new one",
+    "credit balance": "Claude: credit used up - top up at console.anthropic.com > Plans & Billing",
 }
 WAIT_RETRY_HOURS = float(os.getenv("JARVIS_WAIT_RETRY_HOURS", "6"))  # a waiting job still tries this often
 
