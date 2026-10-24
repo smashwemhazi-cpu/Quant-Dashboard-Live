@@ -162,27 +162,6 @@ def mind_command(cmd: str, rest: str, channel: str) -> str | None:
     return None
 
 
-def claude_check(client: Any = None) -> str:
-    """One tiny real request, so 'key set' can't hide an empty credit balance."""
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        return "MISSING - run vertex1-connect"
-    try:
-        import anthropic
-
-        from jarvis.core.config import settings
-
-        client = client or anthropic.Anthropic()
-        client.messages.create(model=settings.model, max_tokens=1, messages=[{"role": "user", "content": "ok"}])
-        return "OK"
-    except Exception as e:
-        msg = str(e)
-        if "credit balance" in msg:
-            return "NO CREDIT - top up at console.anthropic.com > Plans & Billing (!ask and chat are off until then)"
-        if "authentication" in msg.lower() or "invalid x-api-key" in msg:
-            return "KEY REJECTED - make a new key and run vertex1-connect"
-        return f"ERROR - {type(e).__name__}: {msg[:120]}"
-
-
 def status_text(client: Any = None) -> str:
     """Which version is running, and the last error of every job that failed in the last 24h."""
     import json
@@ -190,6 +169,7 @@ def status_text(client: Any = None) -> str:
     from pathlib import Path
 
     from jarvis.core import audit
+    from jarvis.core.brain import claude_check
 
     rel = Path(__file__).resolve().parents[1] / "RELEASE"
     version = rel.read_text().strip() if rel.exists() else "dev"

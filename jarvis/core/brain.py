@@ -7,6 +7,7 @@ caller passes allow_writes=True (i.e. a human clicked "approve" in the UI).
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Callable
 
 import anthropic
@@ -82,7 +83,9 @@ class Brain:
         except anthropic.APIConnectionError:
             return "Cannot reach the Claude API (network)."
         except anthropic.APIStatusError as e:
-            return f"Claude API error {e.status_code}: {e.message}"
+            if "credit balance" in str(e.message):
+                return NO_CREDIT
+            return f"Claude API error {e.status_code}: {str(e.message)[:200]}"
 
         if final is None:
             return "No response."
@@ -93,3 +96,24 @@ class Brain:
             text += "\n\n_(answer truncated)_"
         audit.log("jarvis", "answer", {"text": text[:4000]})
         return text or "(no text answer)"
+
+
+NO_CREDIT = ("Claude credit is used up, so I can't chat or answer !ask right now. Top it up at "
+             "console.anthropic.com > Plans & Billing. Every ! command still works meanwhile - type !help.")
+
+
+def claude_check(client: Any = None) -> str:
+    """One tiny real request, so 'key set' can't hide an empty credit balance."""
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return "MISSING - run vertex1-connect"
+    try:
+        client = client or anthropic.Anthropic()
+        client.messages.create(model=settings.model, max_tokens=1, messages=[{"role": "user", "content": "ok"}])
+        return "OK"
+    except Exception as e:
+        msg = str(e)
+        if "credit balance" in msg:
+            return "NO CREDIT - top up at console.anthropic.com > Plans & Billing (!ask and chat are off until then)"
+        if "authentication" in msg.lower() or "invalid x-api-key" in msg:
+            return "KEY REJECTED - make a new key and run vertex1-connect"
+        return f"ERROR - {type(e).__name__}: {msg[:120]}"

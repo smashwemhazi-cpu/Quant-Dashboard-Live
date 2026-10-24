@@ -223,13 +223,29 @@ def trading_day_lines() -> list[str]:
 FOOTER = "More: !today  !tasks  !compliance  !cases  !leads  !drafts  !ideas  - or just ask me."
 
 
+def health_lines() -> list[str]:
+    """What's connected and what's waiting on the owner, so a silent gap can't hide in the digest."""
+    from jarvis.core.brain import claude_check
+    from jarvis.scheduler import waiting_jobs
+
+    claude = claude_check()
+    w = waiting_jobs()
+    if claude == "OK" and not w:
+        return ["SYSTEM: all connections OK"]
+    L = ["SYSTEM - waiting on you (paused, not broken):"]
+    if claude != "OK":
+        L.append(f" Claude: {claude}")
+    L += [f" {why}" for why in dict.fromkeys(why for why, _ in w.values()) if not why.startswith("nothing to read")]
+    return L if len(L) > 1 else ["SYSTEM: all connections OK"]
+
+
 def morning_text() -> str:
     from jarvis.agents import mind
 
     now = datetime.now(LOCAL_TZ)
     L = [f"D.O.N.N.A | GOOD MORNING | {now:%a %d %b %Y}", LINE]
     for fn, label in ((needs_you, "NEEDS YOU"), (mind.focus_lines, "FOCUS"), (calendar_lines, "CALENDAR"),
-                      (risk_lines, "POSITION RISK"), (market_lines, "MARKETS")):
+                      (risk_lines, "POSITION RISK"), (market_lines, "MARKETS"), (health_lines, "SYSTEM")):
         L += _safe(fn, label) + [""]
     return "\n".join(L + [FOOTER])
 

@@ -267,3 +267,10 @@ def test_hash_slip_runs_the_command(monkeypatch):
 
     assert discord_bot.handle("#help") == discord_bot.HELP
     assert discord_bot.handle("#nonsense") is None
+
+
+def test_no_credit_is_a_plain_message():
+    from jarvis.agents import mind
+    from jarvis.core import brain
+
+    assert brain.NO_CREDIT.startswith(mind.FAILED_REPLIES) and "!help" in brain.NO_CREDIT

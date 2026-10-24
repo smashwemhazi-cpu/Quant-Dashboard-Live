@@ -5,6 +5,17 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-24 · Plain "out of credit" reply; health check in the morning digest
+
+**What was done**
+- When Claude credit runs out, DONNA no longer pastes the raw API error into chat. She says in one line that credit is used up, where to top it up, and that every `!` command still works.
+- The morning digest ends with a **SYSTEM** line. It says "all connections OK", or lists exactly what's waiting on you (Claude credit, email password, cTrader). A gap can't go unnoticed for days.
+- A job that fails because credit is used up now pauses like the other "waiting for setup" jobs.
+
+**Why:** SH asked to remove the errors and blind spots. The only reply SH had seen in #donna was a raw credit error.
+
+**Recommendation:** top up Claude credit. Most of DONNA's thinking (chat, `!ask`, drafts, reviews) depends on it.
+
 ## 2026-10-24 · Connections waiting for setup pause quietly
 
 **What was done**
