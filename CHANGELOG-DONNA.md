@@ -5,6 +5,19 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-24 · Weekly management pack (PDF)
+
+**What was done**
+- New `!pack` command. DONNA replies with a PDF covering the last 7 days, or `!pack 30` for 30 days. It contains: key risk indicators, compliance cases (opened, closed, time to close), open cases, the regulatory calendar for the next 30 days, business growth numbers, and the audit-trail check.
+- The same pack arrives by itself every Monday morning (`DONNA_PACK_WEEKDAY`, `JARVIS_PACK_UTC_HOUR`) in your private Discord channel.
+- Case subjects and client details are left out, so the pack is safe to forward to the directors.
+- It doesn't use Claude, so it works without API credit.
+- New free library: fpdf2. The updater installs it automatically.
+
+**Why:** SH asked what reports DONNA can produce. A forwardable weekly pack was the top recommendation.
+
+**Recommendation:** add your regulatory deadlines with `!oblig add` and drop the back-office exports in. Sections without data say so plainly.
+
 ## 2026-10-24 · Plain "out of credit" reply; health check in the morning digest
 
 **What was done**

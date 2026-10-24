@@ -16,6 +16,7 @@ lead monitor's user session (donna/lead_monitor.py), never through here.
 """
 from __future__ import annotations
 
+import json
 import os
 import smtplib
 import sys
@@ -128,6 +129,22 @@ def send_discord(text: str, title: str = "DONNA", webhook: str = "", colour: str
         ids.append(_discord_post(url, {"username": os.getenv("DONNA_DISCORD_NAME", "D.O.N.N.A"), "embeds": [embed],
                                        "allowed_mentions": {"parse": []}}).get("id", "?"))
     return f"discord{':' + webhook if webhook else ''} msg {','.join(ids)}"
+
+
+def send_discord_file(data: bytes, filename: str, text: str = "", webhook: str = "") -> str:
+    """Upload one file (e.g. the weekly PDF) through a webhook. Returns a result string; never raises."""
+    name = f"DONNA_DISCORD_WEBHOOK_{webhook.upper()}" if webhook else "DONNA_DISCORD_WEBHOOK_URL"
+    url = os.getenv(name, "")
+    if not url.startswith(("https://discord.com/api/webhooks/", "https://discordapp.com/api/webhooks/")):
+        return f"ERROR {name} is not a Discord webhook URL"
+    payload = {"username": os.getenv("DONNA_DISCORD_NAME", "D.O.N.N.A"), "content": text[:2000],
+               "allowed_mentions": {"parse": []}}
+    try:
+        r = requests.post(url, params={"wait": "true"}, data={"payload_json": json.dumps(payload)},
+                          files={"files[0]": (filename, data)}, timeout=TIMEOUT)
+        return f"discord file {_check(r, 'discord').json().get('id', '?')}"
+    except (ChannelError, requests.RequestException) as e:
+        return f"ERROR {type(e).__name__}: {str(e)[:200]}"
 
 
 def send_teams(text: str, title: str = "DONNA") -> str:
