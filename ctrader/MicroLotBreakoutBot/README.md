@@ -372,3 +372,21 @@ The setup ranking is the same in two independent samples:
 Gold trended strongly through 2020–2026, and fading Bollinger-band extremes works against that trend. Turning fade off uses an existing switch and adds no new parameter. Fade is not split by side: Buy/Sell flips between the two samples, so choosing one side would be curve fitting.
 
 Next test: `breakout-16l-pullback-only-388.cbotset` on tick data, 03/06–26/10/2026, with starting capital set to the real balance ($388). Decision rule, fixed before the run: keep the bot only if PF ≥ 1.20, there are at least 60 trades and max drawdown is $58 or less (15%). Otherwise retire it.
+
+## 16l-NF tick run at $500 with fade on (03/06–26/10/2026)
+
+Result: 316 trades, PF 0.96, −$38.41, max drawdown $195 (39%). Slippage cost $59.37; with exact stop fills the net would have been +$20.96. Average win $9.95 and average loss $5.14 mean a 34.1% win rate is needed to break even; the bot won 33.2%.
+
+- Raising the balance from $210 to $500 increased trades from 194 to 316 but did not create an edge. The drawdown grew as well.
+- Fade lost again: PF 0.88, −$65.54, with both Buy and Sell losing. Fade has now lost in 2020, 2023, 2026 at $210, and 2026 at $500.
+- Orders with planned reward:risk of 2.5 or more had a lower PF than the other orders of the same setup in all three samples:
+
+| Sample | Pullback RR ≥ 2.5 | Pullback RR < 2.5 | Fade RR ≥ 2.5 | Fade RR < 2.5 |
+|---|---|---|---|---|
+| 2020–25 m1 CSV | PF 1.41 | PF 1.85 | PF 0.93 | PF 1.25 |
+| 2026 ticks, $210 | 1 trade | PF 1.01 | PF 0.58 | PF 1.01 |
+| 2026 ticks, $500 | PF 0.65 | PF 1.21 | PF 0.39 | PF 0.96 |
+
+  These orders are deep ladder rungs. They fill only when price runs hard against the signal, which is adverse selection. The existing `MaxOrderRewardRisk` = 2.5 cap removes them, but `BaselineFiltersOff` = True had been forcing that cap off.
+
+Verdict under the rule set before the run: pullback trades alone made PF 1.05, below the 1.20 threshold, so the breakout bot fails and stays off live. Pullback with the RR cap reached PF 1.21 on 125 trades. That rule was picked after looking at this data, so it counts only as a hypothesis. `breakout-16l-pullback-rrcap.cbotset` is for a demo forward test on new, unseen data, not for live trading.
