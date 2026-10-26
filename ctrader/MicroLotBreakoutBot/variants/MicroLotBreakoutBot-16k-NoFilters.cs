@@ -202,6 +202,12 @@ namespace cAlgo.Robots
         [Parameter("Breakeven At (R, 0=off)", Group = "Stops", DefaultValue = 1.0, MinValue = 0.0, MaxValue = 3.0, Step = 0.25)]
         public double BreakevenR { get; set; }
 
+        // Off = each order moves to breakeven on its own (16c behaviour). On = ladder legs move together
+        // to the ladder's average entry. CSV 2020-2025 test: on = +$1,531 PF 1.37 vs off (16c) +$1,609
+        // PF 1.42 - no consistent gain, so it is off by default.
+        [Parameter("Ladder Breakeven (average entry)", Group = "Stops", DefaultValue = false)]
+        public bool LadderBreakeven { get; set; }
+
         [Parameter("Flat Time (UTC hhmm)", Group = "Stops", DefaultValue = 2030, MinValue = 0, MaxValue = 2359)]
         public int FlatTimeUtc { get; set; }
 
@@ -410,7 +416,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-2026-10-16k-NF (baseline: 16k filters off = {0})", BaselineFiltersOff);
+            Print("BUILD MLB-2026-10-16l-NF (baseline: 16k filters off = {0})", BaselineFiltersOff);
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
@@ -435,6 +441,7 @@ namespace cAlgo.Robots
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
                 Session1Start, Session1End, Session2Start, Session2End, UseBreakout, UseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
             Print("CONFIG | max order reward:risk = {0} (0 = off) | max weekly loss = {1}% (0 = off)", EffMaxOrderRewardRisk, EffMaxWeeklyLossPercent);
+            Print("CONFIG | ladder breakeven (average entry) = {0} | breakeven at {1}R", LadderBreakeven, BreakevenR);
             Print("CONFIG | equity curve filter = {0} (average of last {1} trades{2})", EffUseEquityCurveFilter, EquityCurveTrades,
                 EntryMode == MicroEntryMode.LimitLadder ? "" : "; INACTIVE - needs LimitLadder entry mode");
             if (MaxSpreadPips > 20)
@@ -1075,7 +1082,7 @@ namespace cAlgo.Robots
             if (BreakevenR <= 0)
                 return;
 
-            foreach (var group in OurPositions().Where(p => p.StopLoss.HasValue).GroupBy(PositionSetupKey).ToList())
+            foreach (var group in OurPositions().Where(p => p.StopLoss.HasValue).GroupBy(BreakevenGroupKey).ToList())
             {
                 var legs = group.ToList();
                 if (legs.All(p => _breakevenDone.Contains(p.Id)))
@@ -1119,6 +1126,11 @@ namespace cAlgo.Robots
                         Print("Breakeven move failed for {0}: {1} (original stop remains).", pos.Id, r.Error);
                 }
             }
+        }
+
+        private string BreakevenGroupKey(Position p)
+        {
+            return LadderBreakeven ? PositionSetupKey(p) : "P" + p.Id.ToString(CultureInfo.InvariantCulture);
         }
 
         private static string PositionSetupKey(Position p)
@@ -1212,8 +1224,8 @@ namespace cAlgo.Robots
             if (!IsOurs(p))
                 return;
             _breakevenDone.Remove(p.Id);
-            string setupKey = PositionSetupKey(p);
-            if (!OurPositions().Any(x => PositionSetupKey(x) == setupKey))
+            string setupKey = BreakevenGroupKey(p);
+            if (!OurPositions().Any(x => BreakevenGroupKey(x) == setupKey))
                 _setupInitialStop.Remove(setupKey);
             if (_gapFilled.Remove(p.Id))
             {
@@ -1300,7 +1312,7 @@ namespace cAlgo.Robots
             // Same ladder-level breakeven as the real positions: judged on the average entry.
             if (BreakevenR > 0)
             {
-                foreach (var group in _vPos.GroupBy(v => v.Setup).ToList())
+                foreach (var group in _vPos.GroupBy(v => LadderBreakeven ? v.Setup : v.GetHashCode().ToString(CultureInfo.InvariantCulture)).ToList())
                 {
                     var legs = group.Where(v => !v.BeDone).ToList();
                     if (legs.Count == 0)
