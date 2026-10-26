@@ -352,3 +352,23 @@ The first tick-data test. On the same dates, the open-prices run made about +$1,
 - **Presets** (both from the 2020–2025 test settings):
   - `breakout-16k.cbotset`: all features on.
   - `breakout-16k-filters-off.cbotset`: only the breakeven fix differs from 16c.
+
+## Diagnosis: why the breakout bot does not make money on ticks (no new filters)
+
+Run: 16k-NF on tick data, 03/06–26/10/2026, $210, all filters off. 194 trades, PF 1.00, +$1.77.
+
+- Win rate 32%. The average win ($8.84) is 2.1x the average loss ($4.14), so the bot needs a 31.9% win rate just to break even. It gets 32.0%, which is about 0.003R per trade: no edge.
+- Stop slippage cost $33.92, which wiped out the +$35.69 the trades would have made with exact stop fills.
+- At $210 the 3% cap ($6.30) is barely above the minimum stop (1.5 ATR, which is 5.76 at the median ATR). 1,173 setups were skipped because one 0.01 lot was already over the cap. The bot therefore only traded on quiet, low-ATR days. This is a side effect of the account size, not a design choice.
+- 34 stop-outs at about 0R were trades that reached +1R and came back to breakeven. Partial profit-taking is impossible at 0.01 lots (the minimum size cannot be split).
+
+The setup ranking is the same in two independent samples:
+
+| Setup | 2020–25 m1 CSV (1,632 trades) | 2026 ticks (194 trades) |
+|---|---|---|
+| PULLBACK (with the trend) | PF 1.60, +$1,150 | PF 1.07, +$18.45 |
+| FADE (against the band) | PF 1.16, +$358 | PF 0.94, −$16.68 |
+
+Gold trended strongly through 2020–2026, and fading Bollinger-band extremes works against that trend. Turning fade off uses an existing switch and adds no new parameter. Fade is not split by side: Buy/Sell flips between the two samples, so choosing one side would be curve fitting.
+
+Next test: `breakout-16l-pullback-only-388.cbotset` on tick data, 03/06–26/10/2026, with starting capital set to the real balance ($388). Decision rule, fixed before the run: keep the bot only if PF ≥ 1.20, there are at least 60 trades and max drawdown is $58 or less (15%). Otherwise retire it.
