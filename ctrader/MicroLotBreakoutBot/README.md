@@ -335,3 +335,20 @@ The first tick-data test. On the same dates, the open-prices run made about +$1,
 - **The untuned window behaves like the tuned one.** That is the first evidence that the 16f–16j fixes are not only fitted to Jun–Oct.
 - **The bar-to-tick haircut on the same window is about PF −0.4** (1.90 to 1.49). Applying it to Jan–May gives an estimated PF of about 1.45 on tick data.
 - **The equity filter kept 225 trades to paper.** They lost $460 in total, so the filter avoided those losses. The two losing months left were March (−$30) and July (−$31).
+
+## MicroLotBreakoutBot build 16k (London/NY)
+- **2020–2025 CSV m1 backtest of build 16c**, $210:
+  - 1,594 trades, PF 1.42, +$1,609, max drawdown $158.
+  - By year, per 0.01 lot: 2020 PF 1.06, 2021 1.44, 2022 1.41, 2023 0.97, 2024 1.39, 2025 1.69.
+  - 35% of trades were gap fills from the m1 opening-price data (+$408).
+  - The bar-to-tick haircut for this bot has not been measured yet. Run a tick test on 3 Jun – 25 Oct 2026.
+- **Ported from Asian 16j:**
+  - `Max Order Reward:Risk` (2.5)
+  - `Max Weekly Loss %` (default **6**, sized for London/NY ladder risk)
+  - the equity-curve filter with paper trading
+  - shadow-curve seeding on restart
+  - the data-mode check
+- **New: ladder-level breakeven.** Breakeven is judged on the ladder's average entry, and the stop of every filled leg moves to that average together. Paper trades use the same rule. This fixes the live 23 Oct case: legs at 4017.46 and 4014.84, the upper one stopped at breakeven (−$0.06) and the lower one took the full stop (−$6.84).
+- **Presets** (both from the 2020–2025 test settings):
+  - `breakout-16k.cbotset`: all features on.
+  - `breakout-16k-filters-off.cbotset`: only the breakeven fix differs from 16c.
