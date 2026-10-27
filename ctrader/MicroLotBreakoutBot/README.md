@@ -390,3 +390,21 @@ Result: 316 trades, PF 0.96, −$38.41, max drawdown $195 (39%). Slippage cost $
   These orders are deep ladder rungs. They fill only when price runs hard against the signal, which is adverse selection. The existing `MaxOrderRewardRisk` = 2.5 cap removes them, but `BaselineFiltersOff` = True had been forcing that cap off.
 
 Verdict under the rule set before the run: pullback trades alone made PF 1.05, below the 1.20 threshold, so the breakout bot fails and stays off live. Pullback with the RR cap reached PF 1.21 on 125 trades. That rule was picked after looking at this data, so it counts only as a hypothesis. `breakout-16l-pullback-rrcap.cbotset` is for a demo forward test on new, unseen data, not for live trading.
+
+## Managing the gold bot (Asian 16j) at $388
+
+The Asian bot's tick result (16j: PF 1.49, 81 trades, Jun–Oct 2026) was measured after the weekly cap and the equity-curve filter were designed on that same tick period. Before those filters, 16f/16g on ticks made PF 1.04–1.11. Its edge is therefore not yet confirmed on unseen data.
+
+1. **Out-of-sample test (not yet run):** `asian-16j-test-2020-2025.cbotset`.
+   - Code: MicroLotAsianBot 16j.
+   - Data: "m1 bars from CSV file", 2020-04 → 2025-10.
+   - Starting capital $388. Equity floor off, so the whole history runs.
+   - Pass marks, set before the run:
+     - PF ≥ 1.40 on m1 bars (bar data overstates PF by about 0.4 against ticks);
+     - profitable in at least 4 of the 6 years;
+     - max drawdown ≤ 25%.
+2. **Live:** `asian-16j-live-388.cbotset`. It is identical to `asian-16j-live` except for the equity floor, which is $310 (20% below $388) instead of $180, so a bad run stops at −$78, not −$208.
+3. **Kill rule for live:** stop the bot and review if any of these happens:
+   - after 30 live trades, PF is below 1.0;
+   - live drawdown reaches 15% ($58);
+   - live fills and slippage differ materially from the tick backtest.
