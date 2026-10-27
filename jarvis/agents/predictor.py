@@ -105,6 +105,19 @@ def walk_forward(df: pd.DataFrame, min_train: int = 500, retrain_every: int = 20
             else "no demonstrated edge - informational only"}
 
 
+def completed(df: pd.DataFrame, now: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Drop today's (UTC) bar: it is still forming, so it is neither a valid input nor a valid outcome.
+    The model is trained on finished days; predicting from or scoring against a part-day bar skews both."""
+    now = pd.Timestamp.now(tz="UTC") if now is None else now
+    if now.tzinfo is not None:
+        now = now.tz_convert("UTC").tz_localize(None)
+    today = now.normalize()
+    idx = pd.to_datetime(df.index)
+    if idx.tz is not None:
+        idx = idx.tz_convert("UTC").tz_localize(None)
+    return df[idx.normalize() < today]
+
+
 def predict_next(df: pd.DataFrame) -> dict[str, Any]:
     f = features(df).dropna(subset=FEATURES)
     hist = f.dropna(subset=["y"])

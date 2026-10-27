@@ -463,3 +463,23 @@ def test_lead_columns_do_not_misread_similar_names():
     assert m["owner"] is None and m["status"] == "sales_status" and m["created"] == "registration_date"
     m = growth.lead_columns(pd.DataFrame(columns=["customer_no", "lead_status", "date_of_birth", "tribe", "IB"]))
     assert m["source"] == "IB" and m["created"] is None
+
+
+def test_no_duplicate_open_case_across_weeks(tmp_path, monkeypatch):
+    from jarvis.agents import compliance as co
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    first = co.open_case("MARKET_RISK", "RISK_STOPOUT", "high", "#3", "near stop-out", period="2026-10-22")
+    # next day / next week, same account still flagged while the first case is open -> no second case
+    assert co.open_case("MARKET_RISK", "RISK_STOPOUT", "high", "#3", "near stop-out", period="2026-10-23") is None
+    co.update_case(first, "closed", "client topped up")
+    assert co.open_case("MARKET_RISK", "RISK_STOPOUT", "high", "#3", "near stop-out", period="2026-10-30")
+
+
+def test_predictor_ignores_the_forming_bar():
+    from jarvis.agents import predictor
+
+    idx = pd.bdate_range("2026-10-19", periods=5)            # Mon..Fri, Fri = "today"
+    df = pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0, 3.5]}, index=idx)
+    done = predictor.completed(df, pd.Timestamp("2026-10-23 17:00", tz="UTC"))
+    assert list(done.index.day) == [19, 20, 21, 22]

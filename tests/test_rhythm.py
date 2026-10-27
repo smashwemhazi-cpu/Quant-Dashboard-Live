@@ -119,3 +119,12 @@ def test_health_lines_show_what_waits_on_the_owner(tmp_path, monkeypatch):
     monkeypatch.setattr(brain, "claude_check", lambda client=None: "NO CREDIT - top up")
     out = "\n".join(r.health_lines())
     assert "Google refused" in out and "NO CREDIT" in out
+
+
+def test_unconverted_position_is_not_added_to_dollar_totals(rhythm):
+    # the feed couldn't find a JPY->USD rate: 0.3 * 10,000 = 3,000 yen at stop must not count as $3,000
+    rhythm.store_positions([POS[0], {**POS[1], "quote_to_account": None}], equity=10_000)
+    r = rhythm.position_risk()
+    assert r["open_risk"] == pytest.approx(150.0) and r["unconverted"] == ["USDJPY"]
+    text = "\n".join(rhythm.risk_lines())
+    assert "USDJPY: no conversion rate" in text and "(quote currency)" in text
