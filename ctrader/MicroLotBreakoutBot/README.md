@@ -422,3 +422,14 @@ Because it is a new setting, it starts switched on even when an older `.cbotset`
 Preset: `breakout-16m-day-388.cbotset` (equity floor $300). Test on tick data, 03/06–26/10/2026, starting capital $388. Pass marks are unchanged: PF ≥ 1.20, at least 60 trades, max drawdown ≤ 15%. The rule was chosen after looking at the $500 tick run, so a pass there is only a hint; demo forward-testing decides.
 
 Leverage 1:200 sets margin, not risk. At 1:200, 0.01 lot of gold (about $4,000) needs about $20 of margin, so margin is never the limit at this size. The limit is the stop: 3% of $388 = $11.64 = 116 pips at 0.01 lot.
+
+## Luck check with TradingCalc (per-trade returns from the tick logs)
+
+| Strategy (tick data, 2026) | Trades | Per-trade Sharpe | PSR (Sharpe > 0) | Deflated (after the variants tried) |
+|---|---|---|---|---|
+| Asian 16j, 01:00–05:00 UTC | 81 | 0.19 | **0.96** | not computed; the filters were chosen on the same data |
+| Day-trade 16m (pullback, RR cap), $500 run | 125 | 0.08 | 0.82 | **0.24**, best of 9 subsets examined |
+
+PSR is the probabilistic Sharpe ratio: the estimated probability that the strategy's true Sharpe is above zero. The deflated version also accounts for how many variants were tried before picking this one.
+
+The day-trade rule is likely the luckiest of the nine slices examined, so it stays on demo only. Asian 16j has the strongest single-sample evidence, but it still needs out-of-sample data.
