@@ -254,6 +254,15 @@ namespace cAlgo.Robots
         [Parameter("Use Equity Curve Filter", Group = "Equity Curve Filter", DefaultValue = true)]
         public bool UseEquityCurveFilter { get; set; }
 
+        [Parameter("16m Day-Trade Profile (pullback only, RR cap 2.5, no weekly/equity filters)", Group = "Profile", DefaultValue = true)]
+        public bool DayTradeProfile { get; set; }
+
+        // The profile overrides saved values, so an old .cbotset cannot switch fade back on by accident.
+        private bool EffUseRangeFade { get { return !DayTradeProfile && UseRangeFade; } }
+        private double EffMaxOrderRewardRisk { get { return DayTradeProfile ? 2.5 : MaxOrderRewardRisk; } }
+        private double EffMaxWeeklyLossPercent { get { return DayTradeProfile ? 0 : MaxWeeklyLossPercent; } }
+        private bool EffUseEquityCurveFilter { get { return !DayTradeProfile && UseEquityCurveFilter; } }
+
         [Parameter("Equity Curve Average (trades)", Group = "Equity Curve Filter", DefaultValue = 10, MinValue = 2, MaxValue = 100, Step = 1)]
         public int EquityCurveTrades { get; set; }
 
@@ -406,7 +415,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-2026-10-16l");
+            Print("BUILD MLB-2026-10-16m (day-trade profile = {0})", DayTradeProfile);
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
@@ -429,10 +438,10 @@ namespace cAlgo.Robots
             Print("CONFIG | entry={0} ladder: {1} orders over {2} ATR, stop {3} ATR beyond, min order stop {4} ATR, expiry {5} bars, trend ladder {6}",
                 EntryMode, LadderOrders, LadderDepthAtr, LadderStopAtr, LadderMinStopAtr, LadderExpiryBars, UseTrendLadder);
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
-                Session1Start, Session1End, Session2Start, Session2End, UseBreakout, UseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
-            Print("CONFIG | max order reward:risk = {0} (0 = off) | max weekly loss = {1}% (0 = off)", MaxOrderRewardRisk, MaxWeeklyLossPercent);
+                Session1Start, Session1End, Session2Start, Session2End, UseBreakout, EffUseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
+            Print("CONFIG | max order reward:risk = {0} (0 = off) | max weekly loss = {1}% (0 = off)", EffMaxOrderRewardRisk, EffMaxWeeklyLossPercent);
             Print("CONFIG | ladder breakeven (average entry) = {0} | breakeven at {1}R", LadderBreakeven, BreakevenR);
-            Print("CONFIG | equity curve filter = {0} (average of last {1} trades{2})", UseEquityCurveFilter, EquityCurveTrades,
+            Print("CONFIG | equity curve filter = {0} (average of last {1} trades{2})", EffUseEquityCurveFilter, EquityCurveTrades,
                 EntryMode == MicroEntryMode.LimitLadder ? "" : "; INACTIVE - needs LimitLadder entry mode");
             if (MaxSpreadPips > 20)
                 Print("CONFIG WARNING: Max Spread {0} pips is very wide (on XAUUSD 1 pip = $0.10 at 0.01 lot). Recommended: 6.", MaxSpreadPips);
@@ -517,7 +526,7 @@ namespace cAlgo.Robots
 
                 if (regime == Regime.Flat)
                 {
-                    if (UseRangeFade)
+                    if (EffUseRangeFade)
                         TryRangeFade(i);
                     else
                         Reject("flat trend (fade engine off)");
@@ -725,7 +734,7 @@ namespace cAlgo.Robots
             bool fade;
             if (regime == Regime.Flat)
             {
-                if (!UseRangeFade) { Reject("LD: flat regime but fade engine off"); return; }
+                if (!EffUseRangeFade) { Reject("LD: flat regime but fade engine off"); return; }
                 fade = true;
                 // Fade whichever band price is closer to.
                 double close = Bars.ClosePrices[i];
@@ -778,10 +787,10 @@ namespace cAlgo.Robots
             double targetDist = side == TradeType.Buy ? tp - shallow : shallow - tp;
             if (targetDist <= 0) { Reject("LD: target not beyond entries"); return; }
 
-            if (MaxOrderRewardRisk > 0)
+            if (EffMaxOrderRewardRisk > 0)
             {
                 int before = levels.Count;
-                levels.RemoveAll(l => Math.Abs(tp - l) > MaxOrderRewardRisk * Math.Abs(l - stop));
+                levels.RemoveAll(l => Math.Abs(tp - l) > EffMaxOrderRewardRisk * Math.Abs(l - stop));
                 if (levels.Count < before)
                     Reject("LD: deep rung dropped (reward:risk above max)");
                 if (levels.Count == 0) return;
@@ -955,12 +964,12 @@ namespace cAlgo.Robots
             double dayPnl = closedToday.Sum(x => x.Net);
             if (dayPnl <= -Account.Balance * MaxDailyLossPercent / 100.0) { reason = "daily loss cap"; return false; }
 
-            if (MaxWeeklyLossPercent > 0)
+            if (EffMaxWeeklyLossPercent > 0)
             {
                 DateTime weekStart = dayStart.AddDays(-(((int)dayStart.DayOfWeek + 6) % 7));
                 double weekPnl = OurHistory().Where(t => t.ClosingTime >= weekStart).Sum(t => t.NetProfit);
                 double weekStartBalance = Account.Balance - weekPnl;
-                if (weekPnl <= -weekStartBalance * MaxWeeklyLossPercent / 100.0)
+                if (weekPnl <= -weekStartBalance * EffMaxWeeklyLossPercent / 100.0)
                 {
                     reason = "weekly loss cap";
                     return false;
@@ -1236,7 +1245,7 @@ namespace cAlgo.Robots
         {
             bool allowed = true;
             double avg = 0;
-            if (UseEquityCurveFilter)
+            if (EffUseEquityCurveFilter)
             {
                 int n = Math.Min(EquityCurveTrades, _shadowCurve.Count);
                 avg = _shadowCurve.Skip(_shadowCurve.Count - n).Average();
@@ -1256,7 +1265,7 @@ namespace cAlgo.Robots
         // trades; paper trades from before the restart are not recoverable and are left out.
         private void SeedShadowCurveFromHistory()
         {
-            if (!UseEquityCurveFilter)
+            if (!EffUseEquityCurveFilter)
                 return;
             var past = OurHistory().OrderBy(t => t.ClosingTime).ToList();
             foreach (var t in past.Skip(Math.Max(0, past.Count - 200)))

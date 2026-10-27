@@ -408,3 +408,17 @@ The Asian bot's tick result (16j: PF 1.49, 81 trades, Jun–Oct 2026) was measur
    - after 30 live trades, PF is below 1.0;
    - live drawdown reaches 15% ($58);
    - live fills and slippage differ materially from the tick backtest.
+
+## Build 16m: day-trade profile built into the code
+
+The new setting `16m Day-Trade Profile` (default **on**) forces:
+- fade off;
+- max order reward:risk 2.5;
+- weekly loss cap off;
+- equity-curve filter off.
+
+Because it is a new setting, it starts switched on even when an older `.cbotset` is loaded, which earlier let fade back on. The first log line reads `BUILD MLB-2026-10-16m (day-trade profile = True)`.
+
+Preset: `breakout-16m-day-388.cbotset` (equity floor $300). Test on tick data, 03/06–26/10/2026, starting capital $388. Pass marks are unchanged: PF ≥ 1.20, at least 60 trades, max drawdown ≤ 15%. The rule was chosen after looking at the $500 tick run, so a pass there is only a hint; demo forward-testing decides.
+
+Leverage 1:200 sets margin, not risk. At 1:200, 0.01 lot of gold (about $4,000) needs about $20 of margin, so margin is never the limit at this size. The limit is the stop: 3% of $388 = $11.64 = 116 pips at 0.01 lot.
