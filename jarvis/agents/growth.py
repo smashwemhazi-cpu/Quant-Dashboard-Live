@@ -208,7 +208,7 @@ def drafts_text(drafts: list[dict[str, Any]]) -> str:
 
 
 # ------------------------------------------------------------------ report
-def report_lines() -> list[str]:
+def report_lines(team: bool = False) -> list[str]:
     s = leads_summary()
     if "error" in s:
         return [f"LEADS: {s['error']} (export the leads/customers list from Syntellicore and upload it)"]
@@ -217,7 +217,7 @@ def report_lines() -> list[str]:
     L.append(f" Unassigned {s['unassigned']} (of them new today {s['unassigned_new']}) | untouched {s['untouched']} | "
              f"untouched > {STALE_DAYS}d: {s['stale']}")
     L.append(" Sources: " + ", ".join(f"{x['source']} {x['leads']} ({x['conv']:.0f}% FTD)" for x in s["by_source"][:6]))
-    if s["stale"]:
+    if s["stale"] and not team:  # customer ids stay out of the shared team channel
         L.append(f" !! Chase: {', '.join(s['stale_ids'][:10])}")
     return L
 

@@ -5,6 +5,21 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · What leaves the private channel, and cleaner messages
+
+**What was done**
+- **The team channel no longer carries client-level compliance detail.** The morning dispatch and daily wrap in #track-a-brokerage now show totals and counts only:
+  - Not shown there anymore: account numbers, customer numbers, AML flags ("deposited and withdrew – AML review"), turnover flags, bonus-heavy accounts and the KYC re-request lists.
+  - Instead, the team sees one line: "N client-level flags are with compliance".
+  - The full detail stays in your private channel and in `!compliance`, `!cases` and `!leads`.
+- **Empty sections collapse.** Calendar, live positions, trading journal or compliance with nothing connected yet no longer each print a NO DATA block with technical text like "POST /api/positions". The message ends with one line, "NOT SET UP YET: …", pointing to `!status`.
+- **Market moves say "today so far" when the day is still open.** A move at 20:00 your time is not a close.
+- **The evening message has a compliance block:** open cases, high, overdue, new today, and any red KRIs.
+
+**Why:** SH asked what data leaves the system and how it's presented. Account-level AML suspicions in a team channel go against need-to-know and carry a tipping-off risk. Empty, technical sections made the messages look broken when they weren't.
+
+**What you'll notice:** shorter messages with a clear "not set up yet" line, a compliance line every evening, and no client numbers in #track-a-brokerage.
+
 ## 2026-10-27 · Head-of-quant review: three accuracy fixes
 
 **What was done**

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -112,7 +113,8 @@ def _m(v: float) -> str:
 def risk_lines() -> list[str]:
     r = position_risk()
     if "error" in r:
-        return ["POSITION RISK", f" {r['error']}"]
+        return ["POSITION RISK", " NO DATA - live positions not connected (cTrader: vertex1-connect ctrader)"
+                if "not connected" in r["error"] else f" {r['error']}"]
     L = [f"POSITION RISK (as of {r['asof'][:16]} UTC" + (f", !! {r['age_hours']:.0f}h old" if r["stale"] else "") + ")"]
     if not r["positions"]:
         L.append(" Flat - no open positions")
@@ -210,7 +212,10 @@ def market_lines() -> list[str]:
     if not rows:
         return ["MARKETS", " NO DATA - market feeds unavailable"]
     rows.sort(key=lambda r: abs(r["chg_pct"]), reverse=True)
-    L = ["MARKETS (biggest moves, last close)"]
+    today = datetime.now(timezone.utc).date().isoformat()
+    # a bar dated today is still forming: say so, instead of calling an intraday move a close
+    live = any(r["date"] == today for r in rows[:3])
+    L = ["MARKETS (biggest moves, " + ("today so far" if live else "last close") + ")"]
     for r in rows[:3]:
         wide = " | wide range" if r["range_atr"] and r["range_atr"] > 1.5 else ""
         L.append(f" {r['inst'].key} {briefing.fmt(r['inst'], r['close'])} {r['chg_pct']:+.2f}% "
@@ -252,14 +257,53 @@ def health_lines() -> list[str]:
     return L if len(L) > 1 else ["SYSTEM: all connections OK"]
 
 
+NOT_CONNECTED = re.compile(r"NO DATA|not connected", re.I)
+SETUP_NAMES = {"CALENDAR": "calendar", "POSITION RISK": "live positions (cTrader)", "TRADING": "trading journal",
+               "COMPLIANCE": "compliance data"}
+
+
+def _sections(parts: tuple[tuple[Any, str], ...]) -> list[str]:
+    """Run each section; a section with nothing to show yet is left out and named once at the end, instead of
+    filling the message with empty NO DATA blocks."""
+    L: list[str] = []
+    waiting: list[str] = []
+    for fn, label in parts:
+        lines = _safe(fn, label)
+        body = [x for x in lines[1:] if x.strip()]
+        if label in SETUP_NAMES and body and all(NOT_CONNECTED.search(x) for x in body):
+            waiting.append(SETUP_NAMES[label])
+            continue
+        L += lines + [""]
+    if waiting:
+        L += [f"NOT SET UP YET: {', '.join(waiting)} - type !status to see how to connect", ""]
+    return L
+
+
+def compliance_lines() -> list[str]:
+    """Evening compliance status: what is open, what is overdue, what turned up today, and red KRIs."""
+    from jarvis.agents import compliance
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    active = compliance.list_cases(limit=500)
+    if not active and all(k["status"] == "NO DATA" for k in compliance.kris()[2:]):
+        return ["COMPLIANCE", " NO DATA - no back-office exports yet"]
+    high = sum(c["severity"] == "high" for c in active)
+    overdue = sum(bool(c["due"] and c["due"] < today) for c in active)
+    new = sum(c["opened"][:10] == today for c in active)
+    L = ["COMPLIANCE", f" {len(active)} open case(s): {high} high, {overdue} overdue, {new} new today"]
+    reds = [k["kri"] for k in compliance.kris() if k["status"] == "RED"]
+    if reds:
+        L.append(" Red KRIs: " + "; ".join(reds))
+    return L
+
+
 def morning_text() -> str:
     from jarvis.agents import mind
 
     now = datetime.now(LOCAL_TZ)
     L = [f"D.O.N.N.A | GOOD MORNING | {now:%a %d %b %Y}", LINE]
-    for fn, label in ((needs_you, "NEEDS YOU"), (mind.focus_lines, "FOCUS"), (calendar_lines, "CALENDAR"),
-                      (risk_lines, "POSITION RISK"), (market_lines, "MARKETS"), (health_lines, "SYSTEM")):
-        L += _safe(fn, label) + [""]
+    L += _sections(((needs_you, "NEEDS YOU"), (mind.focus_lines, "FOCUS"), (calendar_lines, "CALENDAR"),
+                    (risk_lines, "POSITION RISK"), (market_lines, "MARKETS"), (health_lines, "SYSTEM")))
     return "\n".join(L + [FOOTER])
 
 
@@ -267,8 +311,8 @@ def evening_text() -> str:
     from jarvis.agents import mind
 
     L = _safe(lambda: mind.shutdown_text().splitlines(), "SHUTDOWN") + [""]
-    for fn, label in ((trading_day_lines, "TRADING"), (risk_lines, "POSITION RISK"), (market_lines, "MARKETS")):
-        L += _safe(fn, label) + [""]
+    L += _sections(((compliance_lines, "COMPLIANCE"), (trading_day_lines, "TRADING"), (risk_lines, "POSITION RISK"),
+                    (market_lines, "MARKETS")))
     return "\n".join(L + [FOOTER])
 
 

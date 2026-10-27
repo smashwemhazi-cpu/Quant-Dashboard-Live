@@ -67,9 +67,10 @@ def test_digests_survive_dead_sources(rhythm, monkeypatch):
     monkeypatch.setenv("JARVIS_GCAL_ICS_URL", "")
     m = rhythm.morning_text()
     assert "GOOD MORNING" in m and "NEEDS YOU" in m and "MARKETS: unavailable (ConnectionError)" in m
-    assert "calendar not connected" in m and "!compliance" in m
+    # sections with nothing connected collapse into one line instead of empty NO DATA blocks
+    assert "NOT SET UP YET: calendar, live positions (cTrader)" in m and "CALENDAR\n" not in m and "!compliance" in m
     e = rhythm.evening_text()
-    assert "SHUTDOWN" in e and "TRADING" in e
+    assert "SHUTDOWN" in e and "NOT SET UP YET:" in e and "trading journal" in e and "POST /api" not in e
 
 
 def test_digest_replaces_the_separate_personal_reports(monkeypatch):
@@ -128,3 +129,24 @@ def test_unconverted_position_is_not_added_to_dollar_totals(rhythm):
     assert r["open_risk"] == pytest.approx(150.0) and r["unconverted"] == ["USDJPY"]
     text = "\n".join(rhythm.risk_lines())
     assert "USDJPY: no conversion rate" in text and "(quote currency)" in text
+
+
+def test_evening_compliance_block_and_market_label(rhythm, monkeypatch):
+    from datetime import date
+
+    import pandas as pd
+
+    from jarvis.agents import briefing, compliance
+
+    monkeypatch.setattr(compliance, "kris", lambda: [{"kri": "Largest client share of equity %", "value": "53",
+                                                      "status": "RED"}])
+    compliance.open_case("AML", "AML_TEST", "high", "#1", "test")
+    assert rhythm.compliance_lines()[1].startswith(" 1 open case(s): 1 high, 0 overdue, 1 new today")
+    assert "Red KRIs: Largest client share" in rhythm.compliance_lines()[2]
+    inst = briefing.WATCHLIST[0]
+    row = {"inst": inst, "close": 1.0, "chg_pct": 1.0, "chg_5d_pct": 1.0, "range_atr": 1.0, "stale": False,
+           "date": date.today().isoformat(), "df": pd.DataFrame()}
+    monkeypatch.setattr(briefing, "market_table", lambda: [row])
+    assert "today so far" in rhythm.market_lines()[0]
+    monkeypatch.setattr(briefing, "market_table", lambda: [{**row, "date": "2020-01-02"}])
+    assert "last close" in rhythm.market_lines()[0]
