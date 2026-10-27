@@ -174,7 +174,8 @@ def business() -> list[str]:
         from jarvis.agents import growth
 
         backoffice.BackOfficeAgent().ingest()  # pick up anything dropped since the last run
-        return backoffice.report_lines() + [""] + growth.report_lines()
+        # these reports go to the shared team channel: totals only, client-level detail stays private
+        return backoffice.report_lines(team=True) + [""] + growth.report_lines(team=True)
     except Exception as e:
         return [f"NO DATA - back office section failed ({type(e).__name__}: {e})"]
 

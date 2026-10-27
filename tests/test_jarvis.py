@@ -483,3 +483,34 @@ def test_predictor_ignores_the_forming_bar():
     df = pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0, 3.5]}, index=idx)
     done = predictor.completed(df, pd.Timestamp("2026-10-23 17:00", tz="UTC"))
     assert list(done.index.day) == [19, 20, 21, 22]
+
+
+def test_team_report_keeps_client_level_flags_private(monkeypatch):
+    from jarvis.agents import backoffice as bo, growth
+
+    monkeypatch.setattr(bo, "kpi_summary", lambda: {"error": "NO DATA"})
+    monkeypatch.setattr(bo, "streams_summary", lambda: {"error": "NO DATA"})
+    monkeypatch.setattr(bo, "book_summary", lambda: {
+        "asof": "2026-10-22", "funded": 17, "accounts": 87, "empty": 70, "equity": 35416, "credit": 742,
+        "open_accounts": 2, "floating_a": -79, "floating_b": 0, "by_group": [],
+        "top_account": {"account": "6000010", "share_pct": 53.0}, "top5_share_pct": 97.0,
+        "margin_alerts": [{"account": "6000003", "grp": "Std", "level": 111.0, "equity": 321}],
+        "credit_heavy": [{"account": "6000007", "grp": "Std", "balance": 30, "credit": 18}]})
+    monkeypatch.setattr(bo, "activity_summary", lambda: {
+        "asof": "2026-10-22", "trading": 5, "deals": 96, "volume": 1.4e6, "rejected": 0, "commission": 7,
+        "swaps": 3, "client_net_pnl": -235, "winners": 2, "losers": 3,
+        "top_volume": [{"account": "6000003", "volume": 781491.0, "net_pnl": -26.0}],
+        "high_turnover": [{"account": "6000003", "x": 2222.0}], "in_out_no_trading": ["6000079"], "rejections": []})
+    monkeypatch.setattr(bo, "kyc_summary", lambda: {
+        "pending_docs": 5, "pending_customers": 5, "oldest_pending_days": 34, "pending_over_2d": ["CU21", "CU33"],
+        "rejected_open": {"CU124": "Selfie"}, "expiring": [], "unassigned_pct": 92.0, "test_docs": 0, "test_pending": 0})
+    private, team = "\n".join(bo.report_lines()), "\n".join(bo.report_lines(team=True))
+    assert "#6000079" in private and "AML review" in private and "CU21" in private
+    for leak in ("#600", "CU21", "CU124", "AML review", "deposited and withdrew"):
+        assert leak not in team, leak
+    assert "1 account(s) near stop-out" in team and "Waiting > 2 days: 2" in team
+    assert "4 client-level flag(s) are with compliance" in team
+    monkeypatch.setattr(growth, "leads_summary", lambda: {
+        "asof": "2026-10-23", "leads": 4, "ftd": 1, "new_24h": 1, "new_7d": 2, "unassigned": 2, "unassigned_new": 1,
+        "untouched": 2, "stale": 1, "stale_ids": ["CU2"], "by_source": []})
+    assert "CU2" in "\n".join(growth.report_lines()) and "CU2" not in "\n".join(growth.report_lines(team=True))

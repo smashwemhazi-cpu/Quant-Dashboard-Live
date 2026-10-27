@@ -322,9 +322,13 @@ def _m(v: float) -> str:
     return f"-${-v:,.0f}" if v < 0 else f"${v:,.0f}"
 
 
-def report_lines() -> list[str]:
-    """Plain-text BUSINESS section for the daily reports. Missing inputs say NO DATA."""
+def report_lines(team: bool = False) -> list[str]:
+    """Plain-text BUSINESS section for the daily reports. Missing inputs say NO DATA.
+    team=True is the version for the shared team channel: totals and counts only. Account and customer numbers,
+    and anything that reads as an AML or KYC suspicion, stay in the private channel (need-to-know; a team-wide
+    AML flag also risks tipping off)."""
     L: list[str] = []
+    flags = 0  # client-level items withheld from the team version
     k = kpi_summary()
     if "error" in k:
         L.append(f"CRM KPIs: {k['error']}")
@@ -349,14 +353,23 @@ def report_lines() -> list[str]:
         L.append(f" Floating P&L A-book {_m(b['floating_a'])} | B-book {_m(b['floating_b'])}")
         L.append(" Groups: " + ", ".join(f"{g['grp']} {g['funded']}/{_m(g['equity'])}" for g in b["by_group"]))
         if b["top_account"]:
-            L.append(f" Concentration: #{b['top_account']['account']} holds {b['top_account']['share_pct']:.0f}% "
+            who = "the largest client" if team else f"#{b['top_account']['account']}"
+            L.append(f" Concentration: {who} holds {b['top_account']['share_pct']:.0f}% "
                      f"of equity, top 5 hold {b['top5_share_pct']:.0f}%")
-        for a in b["margin_alerts"]:
-            L.append(f" !! Margin level {a['level']:.0f}% on #{a['account']} ({a['grp']}) - near stop-out")
-        if b["credit_heavy"]:
-            L.append(" Bonus-heavy (credit >= {:.0f}% of balance): ".format(CREDIT_HEAVY_PCT)
-                     + ", ".join(f"#{a['account']}" for a in b["credit_heavy"]))
-        if "prev_asof" in b:
+        if team:
+            if b["margin_alerts"]:
+                L.append(f" !! {len(b['margin_alerts'])} account(s) near stop-out")
+            flags += len(b["margin_alerts"]) + len(b["credit_heavy"]) + len(b.get("drawdowns", []))
+        else:
+            for a in b["margin_alerts"]:
+                L.append(f" !! Margin level {a['level']:.0f}% on #{a['account']} ({a['grp']}) - near stop-out")
+            if b["credit_heavy"]:
+                L.append(" Bonus-heavy (credit >= {:.0f}% of balance): ".format(CREDIT_HEAVY_PCT)
+                         + ", ".join(f"#{a['account']}" for a in b["credit_heavy"]))
+        if "prev_asof" in b and team:
+            L.append(f" Since {b['prev_asof']}: equity {b['equity_change']:+,.0f} | newly funded "
+                     f"{len(b['newly_funded'])} | emptied {len(b['emptied'])}")
+        elif "prev_asof" in b:
             L.append(f" Since {b['prev_asof']}: equity {b['equity_change']:+,.0f} | newly funded "
                      f"{', '.join('#' + a for a in b['newly_funded']) or 'none'} | emptied "
                      f"{', '.join('#' + a for a in b['emptied']) or 'none'}")
@@ -373,11 +386,16 @@ def report_lines() -> list[str]:
                  f"| rejected deals {t['rejected']}")
         L.append(f" Commission {_m(t['commission'])} | swaps {_m(t['swaps'])} | client net P&L {_m(t['client_net_pnl'])} "
                  f"({t['winners']} up, {t['losers']} down)")
-        L.append(" Top volume: " + ", ".join(f"#{a['account']} {_m(a['volume'])} (P&L {_m(a['net_pnl'])})"
-                                            for a in t["top_volume"]))
-        L += [f" !! #{a['account']} traded {a['x']:,.0f}x its equity - leverage / risk review" for a in t["high_turnover"]]
-        L += [f" !! #{a} deposited and withdrew with no trading - AML review" for a in t["in_out_no_trading"]]
-        L += [f" !! #{a['account']} {a['rejected']} rejected of {a['deals']} deals - check execution" for a in t["rejections"]]
+        if team:
+            flags += len(t["high_turnover"]) + len(t["in_out_no_trading"])
+            if t["rejections"]:
+                L.append(f" !! {len(t['rejections'])} account(s) with rejected deals - check execution settings")
+        else:
+            L.append(" Top volume: " + ", ".join(f"#{a['account']} {_m(a['volume'])} (P&L {_m(a['net_pnl'])})"
+                                                for a in t["top_volume"]))
+            L += [f" !! #{a['account']} traded {a['x']:,.0f}x its equity - leverage / risk review" for a in t["high_turnover"]]
+            L += [f" !! #{a} deposited and withdrew with no trading - AML review" for a in t["in_out_no_trading"]]
+            L += [f" !! #{a['account']} {a['rejected']} rejected of {a['deals']} deals - check execution" for a in t["rejections"]]
     s = streams_summary()
     L.append("")
     if "error" in s:
@@ -401,17 +419,23 @@ def report_lines() -> list[str]:
     else:
         L.append(f"KYC QUEUE: {q['pending_docs']} docs pending for {q['pending_customers']} customers "
                  f"(oldest {q['oldest_pending_days']}d)")
-        if q["pending_over_2d"]:
-            L.append(" Waiting > 2 days: " + ", ".join(q["pending_over_2d"]))
-        if q["rejected_open"]:
-            L.append(" Re-request (latest upload rejected): "
-                     + "; ".join(f"{c} {t}" for c, t in q["rejected_open"].items()))
-        if q["expiring"]:
-            L.append(f" ID expiring <= {EXPIRY_WARN_DAYS}d: " + ", ".join(f"{e['customer']} {e['expires']}" for e in q["expiring"]))
+        if team:
+            L.append(f" Waiting > 2 days: {len(q['pending_over_2d'])} | re-request needed: {len(q['rejected_open'])} "
+                     f"| ID expiring <= {EXPIRY_WARN_DAYS}d: {len(q['expiring'])}")
+        else:
+            if q["pending_over_2d"]:
+                L.append(" Waiting > 2 days: " + ", ".join(q["pending_over_2d"]))
+            if q["rejected_open"]:
+                L.append(" Re-request (latest upload rejected): "
+                         + "; ".join(f"{c} {t}" for c, t in q["rejected_open"].items()))
+            if q["expiring"]:
+                L.append(f" ID expiring <= {EXPIRY_WARN_DAYS}d: " + ", ".join(f"{e['customer']} {e['expires']}" for e in q["expiring"]))
         if q["unassigned_pct"] > 50:
             L.append(f" {q['unassigned_pct']:.0f}% of documents have no assigned owner.")
         if q["test_pending"]:
             L.append(f" Excluded {q['test_docs']} test-account docs ({q['test_pending']} pending) - archive them in the CRM.")
+    if team and flags:
+        L += ["", f"RISK & COMPLIANCE: {flags} client-level flag(s) are with compliance (details kept out of the team channel)."]
     return L
 
 
