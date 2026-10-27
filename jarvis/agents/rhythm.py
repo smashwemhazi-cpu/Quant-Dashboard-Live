@@ -75,20 +75,27 @@ def position_risk(now: datetime | None = None) -> dict[str, Any]:
     out: list[dict[str, Any]] = []
     for p in json.loads(row["positions"]):
         sign = 1 if p["side"].lower() == "buy" else -1
-        fx = p.get("quote_to_account") or 1.0     # a feed that can't convert sends None; shown as unconverted
+        # quote_to_account defaults to 1 (quoted in the account currency). A feed that can't convert sends None:
+        # those amounts stay in the quote currency and are kept OUT of the account-currency totals, because
+        # adding yen or pounds as dollars would misstate the risk
+        rate = p.get("quote_to_account", 1.0)
+        fx = rate or 1.0
         floating = sign * (p["price"] - p["entry"]) * p["units"] * fx
         stop = p.get("stop")
         # loss from the current price to the stop; 0 once the stop is locked in profit
         at_stop = None if stop is None else max(0.0, sign * (p["price"] - stop) * p["units"] * fx)
         locked = stop is not None and sign * (stop - p["entry"]) >= 0
         out.append({"symbol": p["symbol"], "side": p["side"], "units": p["units"], "floating": floating,
-                    "risk_at_stop": at_stop, "no_stop": stop is None, "stop_in_profit": locked})
-    open_risk = sum(x["risk_at_stop"] or 0 for x in out)
+                    "risk_at_stop": at_stop, "no_stop": stop is None, "stop_in_profit": locked,
+                    "converted": rate is not None})
+    conv = [x for x in out if x["converted"]]
+    open_risk = sum(x["risk_at_stop"] or 0 for x in conv)
     res: dict[str, Any] = {
         "asof": row["ts"], "source": row["source"], "stale": age_h > POSITIONS_STALE_HOURS, "age_hours": age_h,
         "equity": eq, "positions": out, "open_risk": open_risk,
         "open_risk_pct": open_risk / eq * 100 if eq else None, "open_risk_limit_pct": settings.max_open_risk_pct,
-        "floating": sum(x["floating"] for x in out), "no_stop": [x["symbol"] for x in out if x["no_stop"]],
+        "floating": sum(x["floating"] for x in conv), "no_stop": [x["symbol"] for x in out if x["no_stop"]],
+        "unconverted": [x["symbol"] for x in out if not x["converted"]],
     }
     if sod:
         limit = sod * settings.max_daily_loss_pct / 100
@@ -111,11 +118,17 @@ def risk_lines() -> list[str]:
         L.append(" Flat - no open positions")
     for p in r["positions"]:
         risk = "NO STOP" if p["no_stop"] else "stop in profit" if p["stop_in_profit"] else f"risk {_m(p['risk_at_stop'])}"
-        L.append(f" {p['symbol']} {p['side']} {p['units']:,.0f} | floating {_m(p['floating'])} | {risk}")
+        if not p["converted"]:
+            risk = risk.replace("$", "") + " (quote currency)"
+        float_txt = _m(p["floating"]) if p["converted"] else f"{p['floating']:,.2f} (quote currency)"
+        L.append(f" {p['symbol']} {p['side']} {p['units']:,.0f} | floating {float_txt} | {risk}")
     if r["open_risk_pct"] is not None:
         flag = " !!" if r["open_risk_pct"] > r["open_risk_limit_pct"] else ""
         L.append(f"{flag} Open risk {_m(r['open_risk'])} = {r['open_risk_pct']:.2f}% of equity "
                  f"(limit {r['open_risk_limit_pct']:g}%)")
+    if r.get("unconverted"):
+        L.append(f" !! {', '.join(r['unconverted'])}: no conversion rate to the account currency - "
+                 "not included in the totals above")
     if r["no_stop"]:
         L.append(f" !! No hard stop on {', '.join(r['no_stop'])} - the risk is the whole position")
     if "daily_loss_room" in r:

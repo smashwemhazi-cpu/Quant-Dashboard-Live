@@ -5,6 +5,17 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-27 · Head-of-quant review: three accuracy fixes
+
+**What was done**
+- **Compliance cases are no longer duplicated.** While a case is open, the same rule doesn't open a second case for the same account or customer, however many days or weeks the finding repeats. Cumulative AML findings (deposit-withdraw with no trading, turnover, large deposits, rejected deals) are logged once per data month. Before this, an unresolved stop-out or KYC finding could open a fresh case every week, which inflated the case count and the MI pack.
+- **The predictor only uses finished days.** It now ignores today's still-forming price bar, both when it predicts and when it scores its track record. Since the daily wrap moved to 21:00 your time, while US markets are still open, it had been scoring some predictions against part-day prices. The track record now measures what it claims to.
+- **Position risk no longer mixes currencies.** If the cTrader feed can't find a conversion rate for a position (for example a yen or pound cross), that position's risk and P&L are shown in its own currency, marked "(quote currency)", and left out of the dollar totals and the open-risk %. Before this, 3,000 yen at the stop could be counted as $3,000.
+
+**Why:** SH asked for a head-of-quant review of everything in place, with the fixes applied before finalising.
+
+**What you'll notice:** fewer, cleaner compliance cases; predictor scores that update a day later than before (they wait for the day to close); a clear note under position risk if a pair can't be converted.
+
 ## 2026-10-24 · Weekly management pack (PDF)
 
 **What was done**

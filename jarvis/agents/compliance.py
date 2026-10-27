@@ -69,10 +69,14 @@ def _week() -> str:
 # ------------------------------------------------------------------ case register
 def open_case(category: str, rule: str, severity: str, subject: str, finding: str,
               evidence: dict[str, Any] | None = None, period: str | None = None) -> int | None:
-    """Open a case unless the same rule already fired for this subject in this period."""
+    """Open a case unless the same rule already fired for this subject in this period,
+    or a case for the same rule and subject is still being worked (no duplicate open cases)."""
     key = f"{rule}|{subject}|{period or _week()}"
     due = (date.today() + timedelta(days=SEVERITY_DAYS.get(severity, 7))).isoformat()
     with _db() as c:
+        if c.execute("SELECT 1 FROM cases WHERE rule = ? AND subject = ? AND status != 'closed'",
+                     (rule, subject)).fetchone():
+            return None
         cur = c.execute("INSERT OR IGNORE INTO cases (opened, category, rule, severity, subject, finding, evidence, "
                         "owner, due, dedupe) VALUES (?,?,?,?,?,?,?,?,?,?)",
                         (_now(), category, rule, severity, subject, finding, json.dumps(evidence or {}, default=str),
@@ -127,21 +131,26 @@ def scan() -> dict[str, Any]:
 
     t = bo.activity_summary()
     if "error" not in t:
+        # the Active Accounts export is cumulative over its period: one case per account per data month,
+        # so a closed case isn't reopened every week by the same figures
+        month = str(t["asof"])[:7]
         for a in t["in_out_no_trading"]:
             add("AML", "AML_IN_OUT_NO_TRADE", "high", f"#{a}", f"#{a} deposited and withdrew with no trading "
-                "in the period - check source of funds, purpose and whether a report to the FIU is required", t)
+                "in the period - check source of funds, purpose and whether a report to the FIU is required", t,
+                period=month)
         for a in t["high_turnover"]:
             add("AML", "AML_TURNOVER", "medium", f"#{a['account']}", f"#{a['account']} traded {a['x']:,.0f}x its "
-                "equity - check for churning, wash trading or leverage abuse", a)
+                "equity - check for churning, wash trading or leverage abuse", a, period=month)
         with bo._db() as c:
             big = c.execute("SELECT account, deposit FROM bo_activity WHERE asof = ? AND deposit >= ?",
                             (t["asof"], LARGE_DEPOSIT)).fetchall()
         for acc, dep in big:
             add("AML", "AML_LARGE_DEPOSIT", "medium", f"#{acc}", f"#{acc} deposited ${dep:,.0f} "
-                f"(threshold ${LARGE_DEPOSIT:,.0f}) - confirm source of funds is on file", {"deposit": dep})
+                f"(threshold ${LARGE_DEPOSIT:,.0f}) - confirm source of funds is on file", {"deposit": dep},
+                period=month)
         for a in t["rejections"]:
             add("EXECUTION", "EXEC_REJECTED_DEALS", "medium", f"#{a['account']}", f"#{a['account']}: "
-                f"{a['rejected']} of {a['deals']} deals rejected - check pricing / margin settings", a)
+                f"{a['rejected']} of {a['deals']} deals rejected - check pricing / margin settings", a, period=month)
 
     q = bo.kyc_summary()
     if "error" not in q:

@@ -185,8 +185,9 @@ def outlook(rows: list[dict[str, Any]], log: bool) -> list[dict[str, Any]]:
         if r.get("error") or len(r["df"]) < 800:
             res.append({"label": r["inst"].label, "text": "NO DATA - need 800+ daily bars"})
             continue
-        wf = predictor.walk_forward(r["df"])
-        nxt = predictor.predict_next(r["df"])
+        done = predictor.completed(r["df"])  # finished days only - today's bar is still forming
+        wf = predictor.walk_forward(done)
+        nxt = predictor.predict_next(done)
         if log and "error" not in wf:
             predictor.log_prediction(r["inst"].key, nxt, wf["edge"])
         tag = f"EDGE (BSS {wf['brier_skill']:+.3f})" if wf.get("edge") else "no proven edge, info only"
@@ -227,7 +228,7 @@ def render_wrap() -> tuple[str, dict[str, Any]]:
     rows = market_table()
     for r in rows:
         if not r.get("error"):
-            predictor.score_predictions(r["inst"].key, r["df"])
+            predictor.score_predictions(r["inst"].key, predictor.completed(r["df"]))
     nw, rec = news(hours=24, per_cat=5), predictor.track_record(60)
     L = [f"VERTEX 1 | DAILY WRAP | {now:%a %d %b %Y} (data to last close)", LINE, "CLOSES"]
     ok = [r for r in rows if not r.get("error")]
