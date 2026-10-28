@@ -176,6 +176,22 @@ Every client complaint gets a number, deadlines and an evidence trail: received,
 
 **Management information:** `!complaint mi 90` shows volumes by category, the upheld rate, average days to answer, top root causes and redress paid. The daily compliance report has a complaints section.
 
+## STR evidence pack (suspicious transaction reports)
+
+`!str 12` turns compliance case 12 into everything you need to decide on, and file, a suspicious transaction report. In Discord it comes as text plus a PDF for the file; in the Console, open `localhost:8765/console/str/12.pdf`. It contains:
+- the case and why it may be suspicious, in plain words;
+- the account's deposits, withdrawals, deals and volume from the reports on file, and its balances;
+- KYC documents on file, plus other cases and complaints on the same account;
+- the **reporting deadline**: 15 business days after the suspicion was formed, the FIC Act regulation 24(3) period. Change it with `JARVIS_STR_DEADLINE_DAYS` if your FIU's rule differs;
+- the goAML checklist of what the report needs (identity details come from the CRM, never from DONNA);
+- the tipping-off warning.
+
+**Record the decision either way.** "Why we did not report" is evidence too.
+- `!str 12 filed <FIC reference>` marks the case escalated.
+- `!str 12 nofile <why it is not reportable>`.
+
+Both are kept with the case history. The pack is built from DONNA's own records, so it works without Claude credit.
+
 ## Connecting your live cTrader account (read-only)
 
 DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.

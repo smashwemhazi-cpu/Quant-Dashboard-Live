@@ -302,4 +302,8 @@ def test_console_reply_routes_commands_and_chat(monkeypatch):
     monkeypatch.setattr(discord_bot, "handle", lambda text, channel="": f"cmd {text} in {channel}")
     monkeypatch.setattr(mind, "chat", lambda text, channel, allow_writes: f"chat {text} {channel} {allow_writes}")
     assert console.reply("!tasks") == "cmd !tasks in console"
-    assert console.reply("how is my day?") == "chat how is my day? console False"
+    assert console.reply("how is my day?") == "cmd !today in console"          # answered without Claude
+    assert console.reply("what tasks do I have") == "cmd !tasks in console"
+    assert console.reply("any complaints open?") == "cmd !complaints in console"
+    q = "should we widen gold spreads before the FOMC given our B-book exposure?"
+    assert console.reply(q) == f"chat {q} console False"

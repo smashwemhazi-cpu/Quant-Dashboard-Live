@@ -724,3 +724,29 @@ def test_emails_that_read_like_complaints_are_logged_once(tmp_path, monkeypatch)
     assert (r["category"], r["channel"], r["received"]) == ("withdrawal", "email - confirm", "2026-10-28")
     assert cp.from_email("Formal complaint", "again", "payments", "client.example", "<m7@x>") is None   # same email
     assert cp.from_email("Weekly newsletter", "markets update", "newsletter", "x.example", "<m8@x>") is None
+
+
+def test_str_pack_gathers_evidence_deadline_and_records_the_decision(tmp_path, monkeypatch):
+    from datetime import date
+
+    from jarvis.agents import backoffice as bo, complaints as cp, compliance as co, str_pack
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    with bo._db() as c:
+        c.execute("INSERT INTO bo_activity VALUES ('2026-10-20','6000013',10,5000,4990,0,1,0,1000,0,0,-10)")
+        c.execute("INSERT INTO bo_eod VALUES ('2026-10-21','6000013','B',10,0,10,0,0,0)")
+    cid = co.open_case("AML", "AML_IN_OUT_NO_TRADE", "high", "#6000013", "in and out, no trading", {"deposit": 5000})
+    cp.log_complaint("Withdrawal slow", "withdrawal", "6000013")
+    p = str_pack.build(cid, today=date(2026, 10, 28))
+    body = "\n".join(line for _, lines in p["sections"] for line in lines)
+    assert "Total deposits 5,000.00 | withdrawals 4,990.00" in body and "deposit 5,000.00" in body
+    assert "Complaint #1 withdrawal" in body and "tell the client" in body
+    opened = date.fromisoformat(co.get_case(cid)["opened"][:10])
+    assert p["deadline"] == str_pack._business_days_after(opened, 15).isoformat()
+    assert str_pack._business_days_after(date(2026, 10, 30), 1) == date(2026, 11, 2)   # Friday -> Monday
+    assert str_pack.build_pdf(cid)[:4] == b"%PDF"
+    assert "reason" in str_pack.command("!str", f"{cid} nofile")                       # a reason is required
+    assert "filed recorded" in str_pack.command("!str", f"{cid} filed FIC-2026-0042")
+    assert co.get_case(cid)["status"] == "escalated"
+    assert "STR filed on" in str_pack.text(cid) and str_pack.decision(cid)["detail"] == "FIC-2026-0042"
+    assert str_pack.command("!str", "999") == "no case #999"

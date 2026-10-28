@@ -68,13 +68,23 @@ def state() -> dict[str, Any]:
                 "reply": [{"subject": r["subject"][:90], "from": r["sender_domain"]} for r in ib["needs_reply"][:5]]}
 
     def kris() -> Any:
-        return [{"kri": k["kri"], "status": k["status"], "value": str(k["value"])[:80]}
-                for k in compliance.kris() if k["status"] not in ("GREEN", "OK")][:6]
+        ks = compliance.kris()
+        return {"alerts": [{"kri": k["kri"], "status": k["status"], "value": str(k["value"])[:80]}
+                           for k in ks if k["status"] not in ("GREEN", "OK", "NO DATA")][:8],
+                "no_data": [k["kri"] for k in ks if k["status"] == "NO DATA"], "green": sum(k["status"] == "GREEN" for k in ks)}
 
+    def attention() -> list[str]:
+        from jarvis.scheduler import waiting_jobs
+
+        return sorted({why for why, _ in waiting_jobs().values() if not why.startswith("nothing to read")})
+
+    today = datetime.now(assistant.LOCAL_TZ).date().isoformat()
     return {"now": datetime.now(assistant.LOCAL_TZ).strftime("%a %d %b %Y %H:%M"),
+            "attention": _section(attention),
             "calendar": _section(calendar),
             "tasks": _section(lambda: [{"id": t["id"], "title": t["title"][:90], "priority": t["priority"],
-                                        "due": t["due"]} for t in assistant.list_tasks()[:12]]),
+                                        "due": t["due"], "overdue": bool(t["due"] and t["due"] < today)}
+                                       for t in assistant.list_tasks()[:12]]),
             "mail": _section(mail), "kris": _section(kris), "risk": _section(rhythm.risk_lines)}
 
 
@@ -87,15 +97,52 @@ class Say(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
 
+# everyday spoken questions answered straight from DONNA's own data - they work without Claude credit
+INTENTS = [
+    (re.compile(r"\b(tasks?|to.?do|what (?:do i|should i) (?:need to )?do)\b", re.I), "!tasks"),
+    (re.compile(r"\b(my day|today|schedule|calendar|meetings?|agenda)\b", re.I), "!today"),
+    (re.compile(r"\bcomplaints?\b", re.I), "!complaints"),
+    (re.compile(r"\b(kris?|risk indicators?|how (?:is|are) (?:the )?risk)\b", re.I), "!kri"),
+    (re.compile(r"\b(open )?cases\b", re.I), "!cases"),
+    (re.compile(r"\b(positions?|exposure|my risk)\b", re.I), "!risk"),
+    (re.compile(r"\b(status|what(?:'s| is) (?:broken|not working|connected))\b", re.I), "!status"),
+]
+
+
+def intent(text: str) -> str | None:
+    """A short spoken question that maps to one command; None for anything that needs real conversation."""
+    if len(text.split()) > 8:  # longer questions are real conversation
+        return None
+    return next((cmd for rx, cmd in INTENTS if rx.search(text)), None)
+
+
 def reply(text: str) -> str:
-    """Commands work as in Discord (!tasks, !done 12, !kri ...); anything else is conversation."""
+    """Commands work as in Discord (!tasks, !done 12, !kri ...); everyday questions map to them;
+    anything else is conversation."""
     from donna import discord_bot
     from jarvis.agents import mind
 
     text = text.strip()
     if text.startswith(("!", "#")):
         return discord_bot.handle(text, channel="console") or "I don't know that command - try !help"
+    cmd = intent(text)
+    if cmd:
+        return discord_bot.handle(cmd, channel="console") or ""
     return mind.chat(text, channel="console", allow_writes=False)
+
+
+@router.get("/console/str/{case_id}.pdf", dependencies=[Depends(tunnel_only)])
+def console_str_pdf(case_id: int) -> Any:
+    from fastapi.responses import Response
+
+    from jarvis.agents import str_pack
+
+    try:
+        pdf = str_pack.build_pdf(case_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from e
+    return Response(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'inline; filename="{str_pack.filename(case_id)}"', "Cache-Control": "no-store"})
 
 
 @router.post("/api/console/say", dependencies=[Depends(console_api)])

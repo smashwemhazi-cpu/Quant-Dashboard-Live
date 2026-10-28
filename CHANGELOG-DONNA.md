@@ -5,6 +5,20 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · STR evidence pack and a better Console
+
+**What was done**
+- **STR evidence pack:** `!str 12` assembles the case, grounds for suspicion, account activity, balances, KYC, related cases and complaints, the 15-business-day deadline, the goAML checklist and the tipping-off warning, as text and PDF. The filed or not-filed decision is recorded with the FIU reference or the reason.
+- **Console improvements, from your screenshots:**
+  - It fits one screen: the bottom bar is always visible, and the panels and conversation scroll inside themselves. The window opens maximised.
+  - A "Needs you" strip at the top lists what is switched off and why (e.g. Claude credit, the bridge script update).
+  - Overdue tasks are marked in red.
+  - The inbox says "sorting paused" when Claude credit is out, instead of "nothing urgent".
+  - The risk panel shows only real alerts, with one line for indicators still waiting for data.
+  - **Everyday questions work without Claude credit:** "what are my tasks", "how's my day", "any complaints", "how is risk", "status".
+  - **Better listening:** pick the English she listens for (UK, South Africa, Kenya, Nigeria, US). If she isn't sure she heard right, she puts the words in the box for you to check instead of acting on them.
+- The "bridge script needs updating" message is now treated as "waiting for you" instead of a failure, so it no longer sends repeated job-failed alerts.
+
 ## 2026-10-28 · Complaints register
 
 **What was done:**
