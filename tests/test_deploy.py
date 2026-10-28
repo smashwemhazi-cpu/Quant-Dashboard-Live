@@ -91,3 +91,20 @@ def test_mail_provider_from_mx(mx, kind, host):
 def test_update_reinstalls_when_old_update_file_overwrote_code():
     text = (DEPLOY / "vertex1-update").read_text()
     assert 'tree_sum > "$WORK/installed_sum"' in text and "DRIFT=1" in text
+
+
+@pytest.mark.parametrize("url", ["https://script.google.com/macros/s/AKfy-c_1/exec",
+                                 "https://script.google.com/a/macros/vertex1brokers.com/s/AKfy-c_1/exec"])
+def test_google_bridge_link_and_key_are_saved(tmp_path, url):
+    import os
+    import sys
+
+    env = tmp_path / "vertex1.env"
+    env.write_text("")
+    out = subprocess.run([sys.executable, "-c", _settings_writer(), str(env)], capture_output=True, text=True,
+                         env={**os.environ, "SET_JARVIS_GOOGLE_BRIDGE_URL": url,
+                              "SET_JARVIS_GOOGLE_BRIDGE_KEY": "ab" * 32}, cwd=ROOT, check=True).stdout
+    assert "SKIPPED" not in out
+    saved = env.read_text()
+    assert "JARVIS_GOOGLE_BRIDGE_URL=" + url in saved
+    assert "JARVIS_GOOGLE_BRIDGE_KEY=" + "ab" * 32 in saved

@@ -5,6 +5,18 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · Email and calendar with no password: the Google bridge
+
+**What was done**
+- The setup proved two things: the mail is at Google (Workspace), and the right address is used. Google still refused a correctly saved app password. On company Google accounts this happens when the admin settings don't allow app passwords.
+- So DONNA no longer depends on a password. A small read-only script runs inside your own Google account (`deploy/google-bridge.gs`) and hands DONNA new unread emails and calendar events.
+  - DONNA holds only the link and a random key.
+  - When the bridge is set up, the inbox triage, the calendar in "My day" and `!status` all use it.
+  - The setup asks for it at questions 6a and 6b.
+- When Google refuses an app password, the setup now points to the bridge.
+
+**What you'll notice:** after the 5-minute set-up in DONNA.md, the connection check shows "EMAIL OK via Google bridge" and "My day" shows your calendar.
+
 ## 2026-10-28 · Email: find out who really holds the inbox; repair after old update files
 
 **What was done**

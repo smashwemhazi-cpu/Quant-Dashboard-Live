@@ -96,6 +96,33 @@ Each heads-up is remembered, so a restart never repeats it. If one source is dow
 - **`!audit`** in Discord shows what DONNA did today, the last error, and whether the trail is intact.
 - **Nightly backups** (step 7, started here): at 01:30 UTC every database is copied to `/var/lib/vertex1/backups/<date>/`, and 14 days are kept (`VERTEX1_BACKUP_DAYS`). The restore steps are at the top of `deploy/vertex1-backup`.
 
+## Email and calendar without a password (the Google bridge)
+
+Company Google accounts can have app passwords switched off by the admin, so Google refuses them however carefully they are pasted. The bridge avoids passwords altogether: a small script runs inside your own Google account and hands DONNA your new unread emails and your calendar.
+- It only reads. It never sends, deletes, labels or marks anything as read.
+- DONNA holds only the bridge link and a random key. You can switch it off at any time from script.google.com.
+- The script is `deploy/google-bridge.gs` in this repository.
+
+Set it up once, in the browser, signed in as **simba@vertex1brokers.com**:
+1. Open https://script.google.com and click **New project**. Name it "DONNA bridge".
+2. Delete what is in the editor. Paste the whole of `google-bridge.gs`, then click the **Save** icon.
+3. Pick **setup** in the function box at the top, then click **Run**.
+   - Click **Review permissions**, choose your work account, then **Allow**.
+   - If Google shows "Google hasn't verified this app", click **Advanced**, then **Go to DONNA bridge**. It is your own script.
+   - The log at the bottom shows `DONNA bridge key - ...`. Copy the 64-character key.
+4. Click **Deploy**, then **New deployment**. Click the cog, then **Web app**.
+   - **Execute as:** Me.
+   - **Who has access:** Anyone.
+   - Click **Deploy** and copy the **Web app URL**, which ends in `/exec`.
+5. Double-click **Vertex1-Update-Now.bat**.
+   - Press Enter at 5 and 6.
+   - Paste the URL at **6a** and the key at **6b**.
+   - It should say `EMAIL OK via Google bridge`.
+
+The calendar comes through the same bridge, so question 7 can be skipped.
+
+If step 4 offers only "Anyone within Vertex 1 Brokers", the company admin has blocked public web apps. Send Claude a screenshot.
+
 ## Connecting your live cTrader account (read-only)
 
 DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.
