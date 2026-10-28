@@ -41,6 +41,13 @@ SHA=$(printf '%s' "$COMMIT" | field 'd["sha"]')
 SHORT=${SHA:0:7}
 TITLE=$(printf '%s' "$COMMIT" | field 'd["commit"]["message"].splitlines()[0][:120]')
 CURRENT=$(cat "$APP/RELEASE" 2>/dev/null || echo none)
+# fingerprint of the installed code: an old hand-run update file overwrites it without touching RELEASE
+tree_sum() {
+  find "$APP/jarvis" "$APP/donna" "$APP/deploy" -type f ! -name '*.pyc' -print0 2>/dev/null | sort -z \
+    | xargs -0 sha256sum 2>/dev/null | sha256sum | cut -c1-16
+}
+DRIFT=0
+[ -f "$WORK/installed_sum" ] && [ "$(cat "$WORK/installed_sum")" != "$(tree_sum)" ] && DRIFT=1
 
 # tests must have passed on GitHub for this exact commit
 TESTS=$(api "commits/$SHA/check-runs?per_page=100" | field '
@@ -49,12 +56,14 @@ TESTS=$(api "commits/$SHA/check-runs?per_page=100" | field '
 "passed" if any(r["name"] == "pytest" and r["conclusion"] == "success" for r in d["check_runs"]) else "missing"')
 
 if [ "$MODE" = --status ]; then
-  echo "Installed: $CURRENT"
+  echo "Installed: $CURRENT$([ $DRIFT = 1 ] && echo '  (files changed since - will be reinstalled)')"
   echo "Newest:    $SHORT  $TITLE  (tests: $TESTS)"
   exit 0
 fi
 if [ "$MODE" != --force ] && [[ "$SHA" == "$CURRENT"* ]]; then
-  echo "Up to date ($CURRENT)."; exit 0
+  [ $DRIFT = 1 ] || { echo "Up to date ($CURRENT)."; exit 0; }
+  echo "The installed files were changed after $CURRENT was installed (an old update file?) - putting $SHORT back."
+  notify "An old update file replaced parts of DONNA with older code. I'm putting the current version ($SHORT) back - nothing for you to do. Please delete any vertex1-update*.sh files on your PC."
 fi
 case "$TESTS" in
   passed) ;;
@@ -96,6 +105,7 @@ healthy() {
 
 if VERTEX1_SKIP_APT=1 bash "$SRC/deploy/install.sh" && { [ ${#RUNNING[@]} -eq 0 ] || systemctl restart "${RUNNING[@]}"; } && healthy; then
   rm -rf "$SRC" "$WORK/release.tar.gz"
+  tree_sum > "$WORK/installed_sum"
   notify "Updated to $SHORT: $TITLE"
   echo "Updated to $SHORT."
   exit 0

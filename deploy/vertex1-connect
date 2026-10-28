@@ -49,7 +49,34 @@ if junk:
     print(f"REMOVED {len(junk)} line(s) that weren't settings (they stopped the settings file loading)")
 INVISIBLE = re.compile(r"[\u200b-\u200f\u2060\ufeff]")  # zero-width characters that ride along when pasting
 new = {k[4:]: INVISIBLE.sub("", v).strip() for k, v in os.environ.items() if k.startswith("SET_")}
-if "JARVIS_IMAP_PASSWORD" in new:
+# which company actually holds the inbox: a Google login can exist for an address whose mail lives elsewhere,
+# and then imap.gmail.com refuses every password
+user = new.get("JARVIS_IMAP_USER") or next((l.split("=", 1)[1].strip().strip('"') for l in lines
+                                            if l.startswith("JARVIS_IMAP_USER=")), "")
+mail = None
+if user and ("JARVIS_IMAP_USER" in new or "JARVIS_IMAP_PASSWORD" in new):
+    try:
+        sys.path.insert(0, "/opt/vertex1/app")
+        from jarvis.core import mailhost
+        mail = mailhost.lookup(user)
+    except Exception:
+        mail = None
+google = mail is None or mail["kind"] == "google"
+if mail:
+    print(f"Mail for {mail['domain']} is handled by {mail['provider']}")
+    if mail["imap_host"]:
+        new["JARVIS_IMAP_HOST"] = mail["imap_host"]
+    if mail["kind"] == "microsoft":
+        print("  Microsoft has switched off password sign-in for mail apps, so no password will work here.\n"
+              "  DONNA needs a Microsoft sign-in link instead - Claude is building it; nothing to do yet.")
+    elif mail["kind"] == "unknown":
+        print(f"  DONNA does not know this mail server yet. Tell Claude: 'mail is handled by {mail['mx']}'.")
+    elif mail["kind"] == "none":
+        print(f"  Nothing receives mail for {mail['domain']} - check the address at question 5 for a typo.")
+    elif not google:
+        print("  Use the password you log in to that webmail with (or an app password from that provider), "
+              "not a Google app password.")
+if "JARVIS_IMAP_PASSWORD" in new and google:
     # Google shows it as four groups of four; copying from the browser often brings non-breaking or thin spaces,
     # which made a correct password fail the check and left the old (wrong) one in place
     raw = new["JARVIS_IMAP_PASSWORD"]
@@ -77,6 +104,8 @@ CHECKS = {
     "DONNA_CTRADER_ACCESS_TOKEN": (r"[A-Za-z0-9_.-]{10,500}", "not an access token"),
     "DONNA_CTRADER_REFRESH_TOKEN": (r"[A-Za-z0-9_.-]{10,500}", "not a refresh token"),
 }
+if not google:
+    CHECKS["JARVIS_IMAP_PASSWORD"] = (r"\S{4,200}", "not a password")
 for k, v in list(new.items()):
     rx, why = CHECKS.get(k, (r"[^\"`$\\]+", "contains characters that are not allowed"))
     if not re.fullmatch(rx, v) or re.search(r'["`$\\]', v):
@@ -124,13 +153,23 @@ sudo -u vertex1 bash -c 'export SEND_MYDAY='"$SEND_MYDAY"'; set -a; . /etc/verte
 import imaplib, os
 from jarvis.agents import assistant as a
 u, p = os.getenv(\"JARVIS_IMAP_USER\"), os.getenv(\"JARVIS_IMAP_PASSWORD\")
+h = os.getenv(\"JARVIS_IMAP_HOST\", \"imap.gmail.com\")
 if u and p:
+    print(\"EMAIL     signing in as\", u, \"at\", h)
     try:
-        with imaplib.IMAP4_SSL(os.getenv(\"JARVIS_IMAP_HOST\", \"imap.gmail.com\")) as m:
+        with imaplib.IMAP4_SSL(h) as m:
             m.login(u, p); print(\"EMAIL     OK - read-only access works\")
     except Exception as e:
         print(\"EMAIL     FAILED -\", str(e)[:150])
-        if \"AUTHENTICATION\" in str(e):
+        from jarvis.core import mailhost
+        mail = mailhost.lookup(u)
+        if mail and mail[\"kind\"] != \"google\" and h == \"imap.gmail.com\":
+            print(\"          -> this is the real problem: mail for\", mail[\"domain\"], \"is handled by\", mail[\"provider\"] + \",\")
+            print(\"             not Gmail. A Google app password can never open it. Run  vertex1-connect email  again.\")
+        elif mail and mail[\"kind\"] == \"microsoft\":
+            print(\"          -> Microsoft 365 mailbox: password sign-in is switched off by Microsoft. Claude is adding Microsoft sign-in.\")
+        elif \"AUTHENTICATION\" in str(e):
+            print(\"          -> If\", u, \"is not the address you meant, run  vertex1-connect email  and type the right one at question 5\")
             print(\"          -> Google says the password does not belong to\", u)
             print(\"             1. At myaccount.google.com/apppasswords click the round picture top right: it must show\", u)
             print(\"                (an app password made under a personal Gmail account will never work for the work address)\")
