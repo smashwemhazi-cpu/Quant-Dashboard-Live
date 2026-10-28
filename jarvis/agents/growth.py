@@ -36,6 +36,7 @@ def _db() -> sqlite3.Connection:
     c.executescript("""
         CREATE TABLE IF NOT EXISTS bo_leads (asof TEXT, lead TEXT, created TEXT, source TEXT, status TEXT,
             owner TEXT, country TEXT, ftd INTEGER, PRIMARY KEY (asof, lead));
+        CREATE TABLE IF NOT EXISTS lead_accounts (lead TEXT, account TEXT, PRIMARY KEY (lead, account));
         CREATE TABLE IF NOT EXISTS content_drafts (id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT,
             channel TEXT, text TEXT, verdict TEXT, review TEXT);
     """)
@@ -68,6 +69,9 @@ def lead_columns(d: pd.DataFrame) -> dict[str, str | None] | None:
         "owner": _pick(cols, "assigned_to", "owner", "agent", "sales", "retention", exclude=("status",)),
         "country": _pick(cols, "country"),
         "ftd": _pick(cols, "ftd", "first deposit", "first_deposit"),
+        # the trading account, when the export has one: lets attribution follow a lead to its deposits and P&L
+        "account": _pick(cols, "trading account", "trading_account", "ctrader account", "account no", "account_no",
+                         "account number", "login"),
     }
     return m if m["lead"] and m["status"] and (m["source"] or m["created"]) else None
 
@@ -86,6 +90,10 @@ def store_leads(d: pd.DataFrame, m: dict[str, str | None], asof: str) -> int:
     with _db() as c:
         c.execute("DELETE FROM bo_leads WHERE asof = ?", (asof,))
         c.executemany("INSERT INTO bo_leads VALUES (?,?,?,?,?,?,?,?)", rows.fillna("").itertuples(index=False, name=None))
+        if m.get("account"):
+            acc = d[m["account"]].fillna("").astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+            pairs = {(str(lead), a) for lead, a in zip(get("lead"), acc) if a and a.lower() not in ("nan", "0")}
+            c.executemany("INSERT OR IGNORE INTO lead_accounts VALUES (?,?)", sorted(pairs))
     return len(rows)
 
 
