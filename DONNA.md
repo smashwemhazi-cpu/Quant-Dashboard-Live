@@ -123,6 +123,40 @@ The calendar comes through the same bridge, so question 7 can be skipped.
 
 If step 4 offers only "Anyone within Vertex 1 Brokers", the company admin has blocked public web apps. Send Claude a screenshot.
 
+### Updating the bridge script (when Claude ships a new version)
+The link and key stay the same, so no setup questions are asked again.
+1. Open script.google.com, then **DONNA bridge**.
+2. Select everything in the editor and delete it. Paste the new `google-bridge.gs`, then click **Save**.
+3. Click **Deploy**, then **Manage deployments**, then the ✏️ pencil. Set **Version** to **New version** and click **Deploy**.
+4. If Google asks for permission again (new abilities need it), click **Allow**.
+
+Version 2 adds two things:
+- **Reports from email:** cTrader and Syntellicore reports that arrive as attachments are loaded automatically.
+- **Draft replies:** `!draft 12` writes a reply to task 12's email and saves it in your Gmail **Drafts**. It is never sent; you review it and press send yourself.
+
+## Reports by email (no more uploading)
+
+Schedule the cTrader and Syntellicore reports to be emailed to simba@vertex1brokers.com. Every 30 minutes DONNA looks for new spreadsheet attachments (.csv, .xlsx, .xls) from the last 3 days.
+- Files she recognises by their columns (end-of-day, account activity, price streams, KPIs, documents, leads, statements) are loaded. The compliance checks then run straight away, and you get a "Picked up from your email" message.
+- Every other spreadsheet is deleted from the server at once, so a client's file never stays there.
+- To accept reports only from certain senders, set `JARVIS_REPORT_SENDERS=ctrader.com,syntellicore.com` in the settings file.
+
+## DONNA Console (her face and voice)
+
+Double-click **DONNA-Console.bat** on your PC and type your server password. A window opens with:
+- her animated orb;
+- your calendar, inbox highlights, tasks and risk panels, refreshed every minute.
+
+How to use it:
+- **Hold the button or the space bar** to talk, and let go when you are done. She answers on screen and out loud.
+- Type commands exactly as in Discord, e.g. `!tasks`, `!done 12`, `!draft 12`, `!kri`.
+- The 🔊 button mutes her. The menu next to it picks her voice; the choice is remembered.
+
+Privacy and limits:
+- The console is not on the internet. It travels inside the same private SSH link as your server login, and it closes when you close the black window.
+- Speech recognition in Edge and Chrome sends your voice to Microsoft or Google to turn into text. If that is not acceptable for a conversation, type instead.
+- She needs Claude API credit to talk. Commands like `!tasks` work without it.
+
 ## Connecting your live cTrader account (read-only)
 
 DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.

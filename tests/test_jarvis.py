@@ -606,3 +606,79 @@ def test_kri_from_an_old_export_is_marked_stale(tmp_path, monkeypatch):
     with bo._db() as c:
         c.execute("INSERT OR REPLACE INTO bo_meta VALUES ('last_docs', ?)", (__import__("datetime").date.today().isoformat(),))
     assert {x["kri"]: x for x in co.kris()}["Oldest pending KYC (days)"]["status"] == "RED"
+
+
+def test_reports_are_picked_up_from_email_and_strays_deleted(tmp_path, monkeypatch):
+    import base64
+
+    from jarvis.adapters import google_bridge
+    from jarvis.agents import backoffice as bo
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("JARVIS_INBOX_DIR", str(tmp_path / "inbox"))
+    monkeypatch.setenv("JARVIS_GOOGLE_BRIDGE_URL", "https://script.google.com/macros/s/abc/exec")
+    monkeypatch.setenv("JARVIS_GOOGLE_BRIDGE_KEY", "k" * 64)
+    files = {"m1:0": ("Customer Documents.csv", "date,customer_no,first_name,last_name,type,document_status\n"
+                                                 "2026-10-27,CU1,A,B,POI,pending\n"),
+             "m2:0": ("party list.csv", "name,dish\nAnn,cake\n")}
+    listing = {"version": 2, "attachments": [
+        {"id": i, "name": n, "size": len(b), "from": "Reports <noreply@syntellicore.example>",
+         "subject": "Scheduled report", "date": "2026-10-28T05:00:00.000Z"} for i, (n, b) in files.items()]}
+    fetched = []
+
+    def fake_call(action="ping", **p):
+        if action == "reports":
+            return listing
+        fetched.append(p["id"])
+        name, body = files[p["id"]]
+        return {"name": name, "data": base64.b64encode(body.encode()).decode()}
+
+    monkeypatch.setattr(google_bridge, "call", fake_call)
+    r = bo.fetch_mail_reports()
+    assert r["files"] == [{"file": "2026-10-28_Customer Documents.csv", "status": "SAVED", "kind": "docs"}]
+    assert sorted(p.name for p in (tmp_path / "inbox").iterdir()) == ["2026-10-28_Customer Documents.csv"]
+    assert bo.fetch_mail_reports()["files"] == [] and len(fetched) == 2      # never fetched twice
+    assert bo.BackOfficeAgent().ingest()["files"][0]["kind"] == "docs"
+
+    monkeypatch.setenv("JARVIS_REPORT_SENDERS", "ctrader.example")             # only listed senders
+    listing["attachments"][0]["id"] = "m3:0"
+    files["m3:0"] = files["m1:0"]
+    assert bo.fetch_mail_reports()["files"] == [] and "m3:0" not in fetched
+
+    monkeypatch.setattr(google_bridge, "call", lambda action="ping", **p: {"ok": True})  # old script copy
+    assert "older copy" in bo.fetch_mail_reports()["error"]
+
+
+def test_draft_reply_is_saved_as_a_gmail_draft_never_sent(tmp_path, monkeypatch):
+    from jarvis.adapters import google_bridge
+    from jarvis.agents import assistant as a
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("JARVIS_GOOGLE_BRIDGE_URL", "https://script.google.com/macros/s/abc/exec")
+    monkeypatch.setenv("JARVIS_GOOGLE_BRIDGE_KEY", "k" * 64)
+    tid = a.add_task("Answer the withdrawal query", source="email", source_ref="<m1@x>")
+    manual = a.add_task("Gym")
+    calls, seen = [], {}
+
+    def fake_call(action="ping", body=None, **p):
+        calls.append((action, body, p))
+        if action == "message":
+            return {"from": "Client <c@client.example>", "subject": "Where is my money",
+                    "body": "Card 4111 1111 1111 1111, please refund today", "date": "2026-10-28T06:00:00Z"}
+        return {"ok": True, "draft": "r-1"}
+
+    class FakeClient:
+        class beta:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    seen.update(kw)
+                    blk = type("B", (), {"type": "text", "text": "Dear client,\nWe are checking.\nKind regards,\nSH"})
+                    return type("R", (), {"stop_reason": "end_turn", "content": [blk]})
+
+    monkeypatch.setattr(google_bridge, "call", fake_call)
+    r = a.draft_reply(tid, "say 2 days", client=FakeClient())
+    assert r["saved"] and calls[-1] == ("draft", {"id": "<m1@x>", "text": r["draft"]}, {})
+    assert "4111" not in seen["messages"][0]["content"] and "say 2 days" in seen["messages"][0]["content"]
+    assert "didn't come from an email" in a.draft_reply(manual, client=FakeClient())["error"]
+    assert "no task" in a.draft_reply(999, client=FakeClient())["error"]

@@ -274,3 +274,32 @@ def test_no_credit_is_a_plain_message():
     from jarvis.core import brain
 
     assert brain.NO_CREDIT.startswith(mind.FAILED_REPLIES) and "!help" in brain.NO_CREDIT
+
+
+def test_console_only_answers_through_the_tunnel(client, monkeypatch):
+    from donna import console
+
+    monkeypatch.setattr(console, "LOCAL_CLIENTS", {"testclient"})   # TestClient's address stands in for 127.0.0.1
+    monkeypatch.setattr(console, "state", lambda: {"now": "x", "tasks": []})
+    monkeypatch.setattr(console, "reply", lambda text: f"echo {text}")
+    local, api = {"host": "localhost:8765"}, {"host": "localhost:8765", "X-Donna": "console"}
+    page = client.get("/console", headers=local)
+    assert page.status_code == 200 and "D.O.N.N.A" in page.text and page.headers["x-frame-options"] == "DENY"
+    assert client.get("/api/console/state", headers=api).json() == {"now": "x", "tasks": []}
+    assert client.post("/api/console/say", headers=api, json={"text": "hi"}).json() == {"reply": "echo hi"}
+    # through nginx, a DNS-rebinding host, or a cross-site page without the header: as if it didn't exist
+    assert client.get("/console", headers={**local, "X-Forwarded-For": "1.2.3.4"}).status_code == 404
+    assert client.get("/console", headers={"host": "evil.example:8765"}).status_code == 404
+    assert client.post("/api/console/say", headers=local, json={"text": "!done 1"}).status_code == 404
+    monkeypatch.setattr(console, "LOCAL_CLIENTS", {"127.0.0.1"})
+    assert client.get("/console", headers=local).status_code == 404     # not from the server itself
+
+
+def test_console_reply_routes_commands_and_chat(monkeypatch):
+    from donna import console, discord_bot
+    from jarvis.agents import mind
+
+    monkeypatch.setattr(discord_bot, "handle", lambda text, channel="": f"cmd {text} in {channel}")
+    monkeypatch.setattr(mind, "chat", lambda text, channel, allow_writes: f"chat {text} {channel} {allow_writes}")
+    assert console.reply("!tasks") == "cmd !tasks in console"
+    assert console.reply("how is my day?") == "chat how is my day? console False"

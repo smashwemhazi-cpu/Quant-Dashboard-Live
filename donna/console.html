@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D.O.N.N.A Console</title>
+<style>
+  :root {
+    --bg: #060b16; --panel: rgba(18, 30, 54, 0.72); --line: rgba(120, 170, 255, 0.16);
+    --text: #e6eefc; --muted: #8ea3c4; --accent: #2de2c4; --warn: #f5b942; --bad: #ff6b7d; --ok: #38d996;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: radial-gradient(ellipse at 50% 30%, #0d1b33 0%, var(--bg) 70%);
+    color: var(--text); font: 15px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  body { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(360px, 1.4fr) minmax(240px, 1fr);
+    grid-template-rows: auto 1fr auto; gap: 16px; padding: 16px; min-height: 100vh; }
+  header { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: baseline; }
+  header h1 { margin: 0; font-size: 18px; letter-spacing: .35em; font-weight: 600; color: var(--accent); }
+  header .clock { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px;
+    backdrop-filter: blur(6px); min-width: 0; }
+  .panel h2 { margin: 0 0 8px; font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted);
+    font-weight: 600; }
+  .panel ul { list-style: none; margin: 0; padding: 0; }
+  .panel li { padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+  .panel li:first-child { border-top: 0; }
+  .when { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; margin-right: 6px; border: 1px solid currentColor; }
+  .high, .RED { color: var(--bad); } .medium, .AMBER, .STALE { color: var(--warn); } .low { color: var(--muted); }
+  .empty { color: var(--muted); font-style: italic; }
+  .centre { display: flex; flex-direction: column; align-items: center; gap: 12px; min-width: 0; }
+  #orb { width: min(46vh, 100%); aspect-ratio: 1; cursor: pointer; }
+  #mode { color: var(--muted); letter-spacing: .25em; text-transform: uppercase; font-size: 12px; min-height: 18px; }
+  #log { width: 100%; max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .msg { padding: 9px 12px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 92%; }
+  .me { align-self: flex-end; background: rgba(74, 168, 255, .16); border: 1px solid rgba(74, 168, 255, .3); }
+  .her { align-self: flex-start; background: rgba(45, 226, 196, .09); border: 1px solid rgba(45, 226, 196, .25); }
+  .bar { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; }
+  .bar input { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    border-radius: 12px; padding: 12px 14px; font: inherit; }
+  .bar input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 12px;
+    padding: 11px 14px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.live { background: rgba(74, 168, 255, .25); border-color: #4aa8ff; }
+  #mic { min-width: 130px; }
+  select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px; font: inherit; max-width: 220px; }
+  .hint { color: var(--muted); font-size: 12px; }
+  @media (max-width: 900px) {
+    body { grid-template-columns: minmax(0, 1fr); }
+    header { order: -2; }
+    .centre { order: -1; }
+    .bar { flex-wrap: wrap; }
+    .bar input { flex-basis: 100%; order: -1; }
+    #orb { width: min(70vw, 340px); }
+  }
+</style>
+</head>
+<body>
+<header><h1>D.O.N.N.A</h1><span class="clock" id="clock"></span></header>
+
+<section class="col">
+  <div class="panel"><h2>Today</h2><ul id="calendar"><li class="empty">Loading…</li></ul></div>
+  <div class="panel"><h2>Inbox</h2><ul id="mail"><li class="empty">Loading…</li></ul></div>
+</section>
+
+<section class="centre">
+  <canvas id="orb" title="Click to talk"></canvas>
+  <div id="mode">connecting</div>
+  <div id="log"></div>
+</section>
+
+<section class="col">
+  <div class="panel"><h2>Tasks</h2><ul id="tasks"><li class="empty">Loading…</li></ul></div>
+  <div class="panel"><h2>Risk &amp; compliance</h2><ul id="risk"><li class="empty">Loading…</li></ul></div>
+</section>
+
+<div class="bar">
+  <button id="mic" type="button">🎙 Hold to talk</button>
+  <input id="text" placeholder="Type to DONNA, or a command like !tasks, !done 12, !kri …" autocomplete="off">
+  <button id="send" type="button">Send</button>
+  <button id="mute" type="button" title="Voice on/off">🔊</button>
+  <select id="voice" title="DONNA's voice" hidden></select>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k, d) { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private window */ } },
+  };
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // ------------------------------------------------------------ server
+  async function api(path, body) {
+    const r = await fetch(path, {
+      method: body ? "POST" : "GET",
+      headers: Object.assign({ "X-Donna": "console" }, body ? { "Content-Type": "application/json" } : {}),
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!r.ok) throw new Error("DONNA answered " + r.status);
+    return r.json();
+  }
+
+  function list(el, items, row, emptyText) {
+    if (items && items.error) { el.innerHTML = `<li class="empty">${esc(items.error)}</li>`; return; }
+    el.innerHTML = items && items.length ? items.map(row).join("") : `<li class="empty">${esc(emptyText)}</li>`;
+  }
+
+  async function refresh() {
+    try {
+      const s = await api("/api/console/state");
+      $("clock").textContent = s.now;
+      list($("calendar"), s.calendar, (e) => `<li><span class="when">${esc(e.all_day ? "all day" : e.start.slice(11) + "–" + e.end)}</span>${esc(e.title)}</li>`, "Nothing scheduled");
+      list($("tasks"), s.tasks, (t) => `<li><span class="tag ${esc(t.priority)}">#${t.id}</span>${esc(t.title)}${t.due ? ` <span class="hint">due ${esc(t.due)}</span>` : ""}</li>`, "No open tasks");
+      const m = s.mail || {};
+      const mail = m.error ? m : [].concat(
+        (m.urgent || []).map((x) => ({ cls: "high", t: x.subject, d: x.summary })),
+        (m.reply || []).map((x) => ({ cls: "medium", t: x.subject, d: "reply needed · " + x.from })));
+      list($("mail"), mail, (x) => `<li><span class="tag ${x.cls}">${x.cls === "high" ? "urgent" : "reply"}</span>${esc(x.t)}<div class="hint">${esc(x.d)}</div></li>`,
+        m.connected === false ? "Inbox not connected" : `Nothing urgent (${m.analysed_24h || 0} analysed in 24h)`);
+      const risk = [].concat(
+        Array.isArray(s.kris) ? s.kris.map((k) => `<li><span class="tag ${esc(k.status)}">${esc(k.status)}</span>${esc(k.kri)}: ${esc(k.value)}</li>`) : [`<li class="empty">${esc(s.kris && s.kris.error)}</li>`],
+        Array.isArray(s.risk) ? s.risk.slice(1, 5).map((l) => `<li>${esc(l.trim())}</li>`) : []);
+      $("risk").innerHTML = risk.join("") || `<li class="empty">All indicators green</li>`;
+      if (orb.mode === "connecting") setMode("idle");
+    } catch (e) {
+      setMode("connecting");
+      $("mode").textContent = "can't reach DONNA - is the black window still open?";
+    }
+  }
+
+  // ------------------------------------------------------------ conversation
+  function add(cls, text) {
+    const d = document.createElement("div");
+    d.className = "msg " + cls;
+    d.textContent = text;
+    $("log").appendChild(d);
+    $("log").scrollTop = $("log").scrollHeight;
+  }
+
+  async function say(text) {
+    text = text.trim();
+    if (!text) return;
+    add("me", text);
+    setMode("thinking");
+    try {
+      const r = await api("/api/console/say", { text });
+      add("her", r.reply);
+      speak(r.reply);
+      if (/^[!#](done|add|tasks)/i.test(text)) refresh();
+    } catch (e) {
+      add("her", "I couldn't reach the server: " + e.message);
+      setMode("idle");
+    }
+  }
+
+  // ------------------------------------------------------------ voice out
+  let muted = store.get("donna.muted", "0") === "1";
+  const PREFERRED = /(Sonia|Libby|Jenny|Aria|Natasha|Michelle|Emma|Google UK English Female|Zira|Female)/i;
+  function voices() { return window.speechSynthesis ? speechSynthesis.getVoices().filter((v) => /^en/i.test(v.lang)) : []; }
+  function fillVoices() {
+    const vs = voices(), saved = store.get("donna.voice", "");
+    if (!vs.length) return;
+    $("voice").hidden = false;
+    const pick = vs.find((v) => v.name === saved) || vs.find((v) => PREFERRED.test(v.name)) || vs[0];
+    $("voice").innerHTML = vs.map((v) => `<option ${v === pick ? "selected" : ""}>${esc(v.name)}</option>`).join("");
+  }
+  if (window.speechSynthesis) { fillVoices(); speechSynthesis.onvoiceschanged = fillVoices; }
+  else { $("voice").hidden = true; $("mute").hidden = true; }
+  $("voice").onchange = () => store.set("donna.voice", $("voice").value);
+  const paintMute = () => { $("mute").textContent = muted ? "🔇" : "🔊"; };
+  paintMute();
+  $("mute").onclick = () => { muted = !muted; store.set("donna.muted", muted ? "1" : "0"); paintMute(); if (muted && window.speechSynthesis) speechSynthesis.cancel(); };
+
+  function speakable(text) {
+    return text.replace(/[*_`#>|]/g, " ").replace(/https?:\/\/\S+/g, "link").replace(/\s+/g, " ").slice(0, 900);
+  }
+  function speak(text) {
+    if (muted || !window.speechSynthesis) { setMode("idle"); return; }
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(speakable(text));
+    const v = voices().find((x) => x.name === $("voice").value);
+    if (v) { u.voice = v; u.lang = v.lang; }
+    u.rate = 1.02;
+    u.onstart = () => setMode("speaking");
+    u.onboundary = () => { orb.kick = 1; };
+    u.onend = u.onerror = () => setMode("idle");
+    speechSynthesis.speak(u);
+  }
+
+  // ------------------------------------------------------------ voice in
+  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, heard = "", micStream = null, analyser = null;
+  async function listenLevel() {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      ctx.createMediaStreamSource(micStream).connect(analyser);
+      analyser.ctx = ctx;
+    } catch (e) { analyser = null; }
+  }
+  function stopLevel() {
+    if (micStream) micStream.getTracks().forEach((t) => t.stop());
+    if (analyser) analyser.ctx.close();
+    micStream = null; analyser = null;
+  }
+  function startListening() {
+    if (!Rec) { add("her", "This browser can't hear you - open the console in Microsoft Edge or Google Chrome, or type instead."); return; }
+    if (rec) return;
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    heard = "";
+    rec = new Rec();
+    rec.lang = navigator.language || "en-GB";
+    rec.interimResults = true;
+    rec.continuous = true;
+    rec.onresult = (ev) => {
+      heard = Array.from(ev.results).map((r) => r[0].transcript).join(" ");
+      $("text").value = heard;
+    };
+    rec.onerror = (ev) => { if (ev.error === "not-allowed") add("her", "I need the microphone - click the lock icon by the address and allow it."); };
+    rec.onend = () => { rec = null; stopLevel(); $("mic").classList.remove("live"); const t = heard; $("text").value = ""; if (t.trim()) say(t); else setMode("idle"); };
+    rec.start();
+    listenLevel();
+    $("mic").classList.add("live");
+    setMode("listening");
+  }
+  function stopListening() { if (rec) rec.stop(); }
+
+  const mic = $("mic");
+  mic.addEventListener("pointerdown", (e) => { e.preventDefault(); startListening(); });
+  ["pointerup", "pointerleave"].forEach((ev) => mic.addEventListener(ev, stopListening));
+  $("orb").addEventListener("click", () => (rec ? stopListening() : startListening()));
+  let spaceDown = false;
+  document.addEventListener("keydown", (e) => {
+    if (e.code === "Space" && document.activeElement !== $("text") && !spaceDown) { spaceDown = true; e.preventDefault(); startListening(); }
+  });
+  document.addEventListener("keyup", (e) => { if (e.code === "Space" && spaceDown) { spaceDown = false; stopListening(); } });
+  $("send").onclick = () => { const t = $("text").value; $("text").value = ""; say(t); };
+  $("text").addEventListener("keydown", (e) => { if (e.key === "Enter") $("send").click(); });
+
+  // ------------------------------------------------------------ the orb
+  const COLORS = { connecting: [110, 130, 160], idle: [45, 226, 196], listening: [74, 168, 255],
+                   thinking: [245, 185, 66], speaking: [255, 120, 190] };
+  const orb = { mode: "connecting", level: 0, kick: 0, col: COLORS.connecting.slice() };
+  const LABEL = { connecting: "connecting", idle: "online · click or hold space to talk", listening: "listening",
+                  thinking: "thinking", speaking: "speaking" };
+  function setMode(m) { orb.mode = m; $("mode").textContent = LABEL[m]; }
+  const calm = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const cv = $("orb"), g = cv.getContext("2d");
+  function size() {
+    const r = cv.getBoundingClientRect(), dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  }
+  window.addEventListener("resize", size);
+  size();
+  function micLevel() {
+    if (!analyser) return 0;
+    const a = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(a);
+    return Math.min(1, a.reduce((s, x) => s + x, 0) / a.length / 90);
+  }
+  function frame(ms) {
+    const t = ms / 1000 * (calm ? 0.35 : 1), W = cv.width, H = cv.height, cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.26;
+    const target = { connecting: 0.05, idle: 0.12 + 0.06 * Math.sin(t * 1.3), listening: 0.25 + micLevel() * 0.9,
+                     thinking: 0.35, speaking: 0.35 + orb.kick * 0.6 }[orb.mode];
+    orb.kick *= 0.9;
+    orb.level += (target - orb.level) * 0.12;
+    const want = COLORS[orb.mode];
+    for (let i = 0; i < 3; i++) orb.col[i] += (want[i] - orb.col[i]) * 0.06;
+    const [r, gc, b] = orb.col.map(Math.round), rgba = (a) => `rgba(${r},${gc},${b},${a})`;
+    g.clearRect(0, 0, W, H);
+    // glow
+    let grd = g.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 2.1);
+    grd.addColorStop(0, rgba(0.35 + orb.level * 0.3)); grd.addColorStop(1, rgba(0));
+    g.fillStyle = grd; g.fillRect(0, 0, W, H);
+    // rings
+    g.lineCap = "round";
+    [[1.45, 0.4, 0.9], [1.62, -0.25, 0.55], [1.8, 0.15, 0.3]].forEach(([k, speed, a], i) => {
+      const spin = t * speed * (orb.mode === "thinking" ? 4 : 1);
+      g.strokeStyle = rgba(a * (0.5 + orb.level)); g.lineWidth = Math.max(1, R * 0.018);
+      for (let s = 0; s < 3 + i; s++) {
+        const a0 = spin + s * (Math.PI * 2 / (3 + i));
+        g.beginPath(); g.arc(cx, cy, R * k, a0, a0 + Math.PI / (4 + i)); g.stroke();
+      }
+    });
+    // living blob
+    g.beginPath();
+    const N = 120;
+    for (let i = 0; i <= N; i++) {
+      const th = i / N * Math.PI * 2;
+      const wob = Math.sin(th * 3 + t * 1.7) * 0.5 + Math.sin(th * 5 - t * 2.3) * 0.3 + Math.sin(th * 8 + t * 3.1) * 0.2;
+      const rad = R * (1 + wob * (0.03 + orb.level * 0.22));
+      const x = cx + Math.cos(th) * rad, y = cy + Math.sin(th) * rad;
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    }
+    grd = g.createRadialGradient(cx - R * 0.3, cy - R * 0.35, R * 0.1, cx, cy, R * 1.2);
+    grd.addColorStop(0, "rgba(255,255,255,0.95)"); grd.addColorStop(0.35, rgba(0.9)); grd.addColorStop(1, rgba(0.15));
+    g.fillStyle = grd; g.fill();
+    g.strokeStyle = rgba(0.8); g.lineWidth = Math.max(1, R * 0.012); g.stroke();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  refresh();
+  setInterval(refresh, 60000);
+  setTimeout(() => add("her", "Hello. I'm here. Hold the button or the space bar to talk, or type below."), 600);
+})();
+</script>
+</body>
+</html>

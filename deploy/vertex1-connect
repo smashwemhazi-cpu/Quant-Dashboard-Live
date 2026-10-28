@@ -166,7 +166,10 @@ if b is not None:
     print(\"EMAIL     \" + (\"FAILED via Google bridge - \" + b[\"error\"] if \"error\" in b else
           \"OK via Google bridge (no password) - %s, %s unread\" % (b.get(\"account\", \"?\"), b.get(\"unread\", \"?\"))))
 if b is not None and \"error\" not in b:
-    pass  # mail works through the bridge; the password route is not needed
+    if int(b.get(\"version\") or 1) < 2:
+        print(\"          -> your bridge script is an older copy: reports in email are not picked up yet.\")
+        print(\"             Paste the new google-bridge.gs at script.google.com, save, then Deploy > Manage deployments\")
+        print(\"             > pencil > Version: New version > Deploy (the link and key stay the same)\")
 elif u and p:
     print(\"EMAIL     signing in as\", u, \"at\", h)
     try:
