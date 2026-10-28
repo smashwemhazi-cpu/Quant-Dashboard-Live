@@ -9,8 +9,8 @@ PY=/opt/vertex1/venv/bin/python
 [ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
 SECTION=${1:-all}
 case "$SECTION" in
-  all|discord|email|calendar|ctrader) ;;
-  *) echo "Usage: vertex1-connect [ctrader|email|calendar|discord]   (nothing = all questions)"; exit 1 ;;
+  all|discord|email|calendar|ctrader|radar) ;;
+  *) echo "Usage: vertex1-connect [ctrader|email|calendar|discord|radar]   (nothing = all questions)"; exit 1 ;;
 esac
 cp -p "$ENV" "$ENV.bak.$(date +%Y%m%d-%H%M%S)"
 
@@ -40,6 +40,7 @@ ask ctrader DONNA_CTRADER_CLIENT_ID "9/12 cTrader Open API app Client ID (hidden
 ask ctrader DONNA_CTRADER_CLIENT_SECRET "10/12 cTrader Open API app Secret (hidden)" 1
 ask ctrader DONNA_CTRADER_ACCESS_TOKEN "11/12 Access token issued with the ACCOUNT INFO scope - not trading (hidden)" 1
 ask ctrader DONNA_CTRADER_REFRESH_TOKEN "12/12 Refresh token from the same screen (hidden)" 1
+ask radar JARVIS_YOUTUBE_API_KEY "Partner Radar: YouTube Data API key, starts AIza (hidden; Enter = skip)" 1
 
 "$PY" - "$ENV" <<'EOF'
 import os, re, sys
@@ -103,6 +104,7 @@ CHECKS = {
     "JARVIS_GOOGLE_BRIDGE_URL": (r"https://script\.google\.com/(a/macros/[^/\s]+|macros)/s/[A-Za-z0-9_-]+/exec",
                                  "not the Web app URL (it starts https://script.google.com/macros/s/ and ends /exec)"),
     "JARVIS_GOOGLE_BRIDGE_KEY": (r"[a-f0-9]{64}", "not the bridge key (64 letters and digits from setup())"),
+    "JARVIS_YOUTUBE_API_KEY": (r"AIza[0-9A-Za-z_-]{35}", "not a Google API key (it starts AIza and is 39 characters)"),
     "JARVIS_GCAL_ICS_URL": (r"https://calendar\.google\.com/calendar/ical/\S+\.ics", "not the 'Secret address in iCal format' link"),
     "JARVIS_PERSONAL_ACCOUNT": (r"\d{4,12}", "not an account number (digits only)"),
     "DONNA_CTRADER_CLIENT_ID": (r"[A-Za-z0-9_-]{10,200}", "not an Open API Client ID"),
@@ -198,6 +200,17 @@ else:
 c = a.calendar_events(days=7)
 print(\"CALENDAR \", (\"FAILED - \" + c[\"error\"]) if \"error\" in c else (\"OK - %d events in the next 7 days\" % len(c[\"events\"])))
 print(\"API KEY  \", \"set\" if os.getenv(\"ANTHROPIC_API_KEY\") else \"MISSING - email analysis needs it\")
+yk = os.getenv(\"JARVIS_YOUTUBE_API_KEY\")
+if yk:
+    import requests
+    try:
+        rr = requests.get(\"https://www.googleapis.com/youtube/v3/channels\", timeout=20,
+                          params={\"part\": \"id\", \"id\": \"UC_x5XG1OV2P6uZZ5FSM9Ttw\", \"key\": yk})
+        print(\"RADAR     \" + (\"OK - YouTube key works\" if rr.ok else \"FAILED - YouTube refused the key (is YouTube Data API v3 enabled?)\"))
+    except Exception as e:
+        print(\"RADAR     FAILED -\", type(e).__name__)
+else:
+    print(\"RADAR     not set (optional: vertex1-connect radar)\")
 from jarvis.adapters import ctrader_feed as ct
 if ct.configured():
     t = ct.poll()

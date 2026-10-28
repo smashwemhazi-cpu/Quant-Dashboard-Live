@@ -216,6 +216,25 @@ Each of these becomes a compliance case (category IB) automatically:
 
 `!ib IB123` shows one IB with the accounts behind each flag. The thresholds are settings (`JARVIS_IB_FARM_MIN_DEALS`, `JARVIS_IB_RATE_TOLERANCE_PCT`, `JARVIS_IB_SAME_DEPOSIT_MIN`, `JARVIS_IB_IN_OUT_MIN`). The revenue figure is an estimate, so check it with the dealing desk before acting on one IB.
 
+## Partner Radar (finding IBs)
+
+Every Monday DONNA searches YouTube for trading educators, academies and communities in the countries you have cleared for marketing. She scores each one and posts a shortlist to your private channel. She **never contacts anyone**.
+
+**Set up, once:**
+1. **Clear your countries:** `!radar countries ZA,MU,KE`. List only countries where Vertex 1 may market; the radar searches nothing else. Codes: ZA, MU, KE, NG, GH, AE, SA, QA, KW, BH, OM, BW, ZM, NA, ZW.
+2. **Get a free YouTube key:**
+   - At **console.cloud.google.com**, create a project called "DONNA radar".
+   - Under **APIs & Services → Library**, search **YouTube Data API v3** and click **Enable**.
+   - Under **Credentials → Create credentials → API key**, copy the key. Restricting it to "YouTube Data API v3" is recommended.
+3. On the server, run `vertex1-connect radar` and paste the key. It should say `RADAR OK`.
+
+**Using it:**
+- `!radar run` searches now; `!radar` shows the shortlist.
+- Each prospect shows a fit score: audience, views per video, posting in the last 60 days, and trading-education focus.
+- Channels that promise returns, offer to trade for clients, sell signals or pass prop challenges are kept **off** the shortlist. `!radar flagged` shows them.
+- Work the list with `!radar 12 approve`, `!radar 12 reject <why>`, `!radar 12 contacted`, `!radar 12 partner`.
+- `!radar draft 12` writes a first message with the risk warning. Check it with `!review`, then send it yourself.
+
 ## Connecting your live cTrader account (read-only)
 
 DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.
