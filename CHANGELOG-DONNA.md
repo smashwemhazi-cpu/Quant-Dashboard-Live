@@ -5,6 +5,12 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-29 · Tick tasks off in the Console
+
+**What was done:** each task in the Console now has a ✓ button. One click marks it done, the same as typing `!done 12`, and the list refreshes.
+
+**Why:** SH couldn't see how to complete a task from the Console.
+
 ## 2026-10-28 · Uptime alerts and off-site backups
 
 **What was done:**
