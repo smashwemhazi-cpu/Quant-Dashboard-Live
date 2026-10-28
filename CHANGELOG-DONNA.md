@@ -5,6 +5,20 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · Email: find out who really holds the inbox; repair after old update files
+
+**What was done**
+- **The setup now checks where your work mail really lives.** A Google login can exist for simba@vertex1brokers.com even when the company's mail is hosted somewhere else, such as Microsoft 365, the web host, Zoho or GoDaddy. In that case Google's mail server refuses every password, however correct, and that matches what kept happening. `vertex1-connect` now:
+  - looks up the company's mail records and prints "Mail for vertex1brokers.com is handled by …";
+  - points DONNA at the right inbox server by itself;
+  - stops insisting on a 16-letter Google password when the mailbox isn't Google.
+- **The check shows which address it signs in as.** It prints "signing in as <address> at <server>". If question 5 was skipped and an old or wrong address was saved, you can see it straight away.
+- **The server repairs itself after an old update file.** Running an old `vertex1-update8.sh` copies 23 October code over the current version, and the auto-updater could not tell. It now fingerprints the installed code, notices the change within 30 minutes, puts the current version back and tells you in Discord.
+
+**Why:** the right Google app password was saved ("Saved: JARVIS_IMAP_PASSWORD") and was still refused, and the installer that was run was the 23 October package (8 questions, not 12).
+
+**Recommendation:** delete every `vertex1-update*.sh` file on your PC. Updates arrive by themselves now.
+
 ## 2026-10-28 · Why Google kept refusing the email password, and stale risk numbers
 
 **What was done**
