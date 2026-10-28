@@ -53,6 +53,7 @@ HELP = ("D.O.N.N.A commands:\n"
         "!investigate 12 <note>     !escalate 12 <why>   !close 12 <what you did>\n"
         "!kri                       key risk indicators (red/amber/green)\n"
         "!complaints  !complaint 3  complaints register (!complaint for all the commands)\n"
+        "!screening  !screen <name> [YYYY-MM-DD]   sanctions & PEP screening status / check one name\n"
         "!attribution  !attribution country   where funded clients come from, cost and value (!spend fb 1200)\n"
         "!campaign kenya ib         regional campaign (ib / clients / retention); !campaigns, !campaign 3 results\n"
         "!radar  !radar run         Partner Radar: potential IBs (!radar countries ZA,MU first)\n"
@@ -297,10 +298,11 @@ def handle(text: str, channel: str = "") -> str | None:
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
     from jarvis.agents import complaints, ib, str_pack
 
-    from jarvis.agents import attribution, campaigns, radar
+    from jarvis.agents import attribution, campaigns, radar, screening
 
     reply = (complaints.command(cmd, rest) or str_pack.command(cmd, rest) or ib.command(cmd, rest)
-             or radar.command(cmd, rest) or campaigns.command(cmd, rest) or attribution.command(cmd, rest))
+             or radar.command(cmd, rest) or campaigns.command(cmd, rest) or attribution.command(cmd, rest)
+             or screening.command(cmd, rest))
     if reply is not None:
         return reply
     reply = compliance_commands(cmd, rest)

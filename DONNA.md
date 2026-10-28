@@ -271,6 +271,30 @@ Sources are grouped: your `!campaign` tags (ke-clients-2026w44), IBs and partner
 - Record what you spend with `!spend facebook 1200 Oct ads` or `!spend ke-clients-2026w44 250`. The source name must match the CRM source, or the campaign tag.
 - `!spend` on its own lists what has been recorded.
 
+## Sanctions and PEP screening
+
+**Lists.** Every night DONNA downloads the official lists:
+- the **UN Security Council Consolidated List**, which the FIC's targeted financial sanctions follow;
+- the **US OFAC SDN** list, with its aliases.
+
+Add others, such as the UK or EU consolidated lists or a licensed PEP list, as a CSV (columns: name, dob, list, ref) with `JARVIS_SANCTIONS_EXTRA_CSV`. If a download fails she keeps yesterday's copy. If none have ever loaded, `!status` says that screening is not running.
+
+**Clients.** Schedule the Syntellicore **customer list** to your email daily, with customer number, first and last name, date of birth and the PEP field. The KYC documents export is screened too. Each client is compared against the lists:
+- **Strong match:** the name matches at 92% or more and the date of birth agrees, or the list gives none.
+- **Possible match:** the name matches at 85% or more (`JARVIS_SCREEN_THRESHOLD`).
+- A near-identical name with a different birth year is dropped. An identical name with a different birth year is still reported as possible.
+- **PEP:** the CRM marks the client as a PEP, which calls for enhanced due diligence.
+
+Each one opens a compliance case and turns the "Open sanctions / PEP matches" indicator red. Clear a false positive with the reason, for example `!close 12 false positive - different date of birth and nationality`; the decision stays on file.
+
+**Names are never stored.** They are compared in memory and discarded. DONNA keeps only the customer number, the list entry and the score, so screening repeats with each daily customer export.
+
+**Commands:**
+- `!screening` shows the lists loaded, the last screening and the open matches.
+- `!screen <full name> [YYYY-MM-DD]` checks one person before onboarding. The name you type stays in Discord's history, so use the Console for this if you prefer.
+
+**PEP lists:** there is no free official PEP list. OpenSanctions has one, but its free licence is non-commercial, so a broker needs their paid licence or another vendor.
+
 ## Connecting your live cTrader account (read-only)
 
 DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.

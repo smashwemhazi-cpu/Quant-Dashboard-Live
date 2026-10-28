@@ -184,6 +184,10 @@ def ingest_file(path: Path) -> dict[str, Any]:
     if personal.is_statement(d):
         acc, n = personal.store_statement(d, path)
         return {"file": path.name, "status": "STORED", "kind": "statement", "account": acc, "rows": n}
+    from jarvis.agents import screening  # any export with client names is screened; the names are not kept
+
+    screened = screening.screen_frame(d, path.name) if screening.client_columns(
+        {str(c).lower().strip(): c for c in d.columns}) else None
     kind = detect(d)
     if kind is None:
         from jarvis.agents import growth  # Syntellicore leads / customers list
@@ -192,6 +196,9 @@ def ingest_file(path: Path) -> dict[str, Any]:
         if m:
             return {"file": path.name, "status": "STORED", "kind": "leads", "asof": _asof(path),
                     "rows": growth.store_leads(d, m, _asof(path))}
+        if screened:
+            return {"file": path.name, "status": "STORED", "kind": "customers", "rows": screened["screened"],
+                    "screening": screened}
         return {"file": path.name, "status": "UNRECOGNISED", "columns": list(d.columns)[:12]}
     asof = _asof(path)
     with _db() as c:
@@ -214,7 +221,10 @@ def recognised(path: Path) -> str | None:
     d = _read(path)
     if personal.is_statement(d):
         return "statement"
-    return detect(d) or ("leads" if growth.lead_columns(d) else None)
+    from jarvis.agents import screening
+
+    return detect(d) or ("leads" if growth.lead_columns(d) else None) or \
+        ("customers" if screening.client_columns({str(c).lower().strip(): c for c in d.columns}) else None)
 
 
 # ------------------------------------------------------------------ reports by email (Google bridge)
