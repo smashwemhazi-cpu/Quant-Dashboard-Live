@@ -31,6 +31,10 @@
   .panel li { padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
   .panel li:first-child { border-top: 0; }
   .when { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
+  #tasks li { display: flex; gap: 8px; align-items: flex-start; }
+  #tasks li .what { flex: 1; min-width: 0; }
+  .done { padding: 2px 9px; border-radius: 8px; font-size: 13px; line-height: 1.4; color: var(--ok); flex: none; }
+  .done:hover { background: rgba(56, 217, 150, .15); border-color: var(--ok); }
   .tag { white-space: nowrap; font-size: 11px; padding: 1px 6px; border-radius: 6px; margin-right: 6px; border: 1px solid currentColor; }
   .high, .RED { color: var(--bad); } .medium, .AMBER, .STALE { color: var(--warn); } .low { color: var(--muted); }
   .empty { color: var(--muted); font-style: italic; }
@@ -133,7 +137,7 @@
       $("attention").innerHTML = att.map((a) => `<div><b>Needs you</b>${esc(a)}</div>`).join("");
       const brainOff = att.some((a) => /^Claude/.test(a));
       list($("calendar"), s.calendar, (e) => `<li><span class="when">${esc(e.all_day ? "all day" : e.start.slice(11) + "–" + e.end)}</span>${esc(e.title)}</li>`, "Nothing scheduled");
-      list($("tasks"), s.tasks, (t) => `<li><span class="tag ${esc(t.priority)}">#${t.id}</span>${esc(t.title)}${t.overdue ? ` <span class="tag high">overdue ${esc(t.due)}</span>` : t.due ? ` <span class="hint">due ${esc(t.due)}</span>` : ""}</li>`, "No open tasks - say \"add\" in Discord: !add <task>");
+      list($("tasks"), s.tasks, (t) => `<li><span class="what"><span class="tag ${esc(t.priority)}">#${t.id}</span>${esc(t.title)}${t.overdue ? ` <span class="tag high">overdue ${esc(t.due)}</span>` : t.due ? ` <span class="hint">due ${esc(t.due)}</span>` : ""}</span><button type="button" class="done" data-done="${t.id}" title="Mark #${t.id} done">✓</button></li>`, "No open tasks - add one: !add Call the LP | 2026-11-02 | high");
       const m = s.mail || {};
       const mail = m.error ? m : [].concat(
         (m.urgent || []).map((x) => ({ cls: "high", t: x.subject, d: x.summary })),
@@ -277,6 +281,11 @@
     if (e.code === "Space" && document.activeElement !== $("text") && !spaceDown) { spaceDown = true; e.preventDefault(); startListening(); }
   });
   document.addEventListener("keyup", (e) => { if (e.code === "Space" && spaceDown) { spaceDown = false; stopListening(); } });
+  // one click marks a task done (the same as typing !done 12)
+  $("tasks").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-done]");
+    if (b) { b.disabled = true; say("!done " + b.dataset.done); }
+  });
   $("send").onclick = () => { const t = $("text").value; $("text").value = ""; say(t); };
   $("text").addEventListener("keydown", (e) => { if (e.key === "Enter") $("send").click(); });
 
