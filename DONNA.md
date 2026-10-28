@@ -295,6 +295,25 @@ Each one opens a compliance case and turns the "Open sanctions / PEP matches" in
 
 **PEP lists:** there is no free official PEP list. OpenSanctions has one, but its free licence is non-commercial, so a broker needs their paid licence or another vendor.
 
+## Uptime alerts and backups
+
+**Uptime alert (free).**
+- Every 10 minutes DONNA's server checks in with your Google bridge.
+- If it stays silent for 30 minutes, the bridge emails **you**, from and to your own address: "DONNA is offline". That covers the server being off, the network being down, or DONNA having stopped.
+- When it checks in again you get "DONNA is back online".
+- This needs bridge script **version 3**. After pasting it, choose **setup** and click **Run** once: that switches on the 15-minute watchdog and asks permission for Drive and to email you.
+
+**Off-site backup (free).**
+- The server already backs up every database nightly and keeps 14 days on the server.
+- An **encrypted** copy of each backup now also goes to **Google Drive → DONNA backups**, keeping the newest 14.
+- One-time set-up: run `vertex1-connect backup` on the server. It makes the encryption key and shows it once. **Save it in your password manager**: without it nobody can open the Drive copies, including Claude.
+- To open a copy on any computer: `openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in donna-backup-<day>.tgz.enc -out backup.tgz`. It asks for the key.
+
+**Whole-server snapshots (DigitalOcean, about 20% of the droplet price per month).**
+- These protect everything, including the operating system and settings.
+- In the DigitalOcean dashboard: **Droplets → your droplet → Backups → Enable backups**.
+- They are weekly and kept for four weeks, and you restore with one click.
+
 ## Connecting your live cTrader account (read-only)
 
 DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.

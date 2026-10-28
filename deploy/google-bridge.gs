@@ -1,11 +1,14 @@
 // D.O.N.N.A Google bridge - runs inside your own Google account, so no password is ever given to DONNA.
 // It READS new unread inbox emails, your calendar, and report attachments (.csv / .xlsx / .xls).
-// The one thing it writes is a DRAFT reply when you ask for one (!draft 12) - you review and send it yourself.
-// It never sends, deletes, labels or marks anything read.
+// It WRITES only: a draft reply when you ask for one (!draft 12), DONNA's encrypted nightly backup to the
+// "DONNA backups" folder in your Drive, and an email TO YOU if DONNA's server stops checking in (uptime alert).
+// It never sends email to anyone else, and never deletes, labels or marks anything read.
 // Set-up (5 minutes, once) is in DONNA.md under "Email and calendar without a password".
 // After pasting a newer copy: Deploy > Manage deployments > pencil > Version: New version > Deploy (the link stays the same).
 
-var VERSION = 2;
+var VERSION = 3;
+var WATCH_MINUTES = 30;      // email me if DONNA hasn't checked in for this long
+var BACKUPS_KEPT = 14;
 var REPORT_FILE = /\.(csv|xlsx|xls)$/i;
 var REPORT_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -16,6 +19,10 @@ function setup() {
   }
   GmailApp.getInboxUnreadCount();   // asks Google for permission the first time
   CalendarApp.getDefaultCalendar();
+  backupFolder_();
+  // the uptime watchdog: every 15 minutes, check DONNA's last heartbeat
+  var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'watchdog'; });
+  if (!has) ScriptApp.newTrigger('watchdog').timeBased().everyMinutes(15).create();
   Logger.log('DONNA bridge key - paste it at the "bridge key" question: ' + p.getProperty('KEY'));
 }
 
@@ -35,6 +42,8 @@ function doGet(e) {
     out = attachment_(q.id);
   } else if (q.action === 'message') {
     out = message_(q.id);
+  } else if (q.action === 'heartbeat') {
+    out = heartbeat_(q.release || '');
   } else {
     out = {ok: true, version: VERSION, account: Session.getEffectiveUser().getEmail(),
            unread: GmailApp.getInboxUnreadCount()};
@@ -100,6 +109,8 @@ function doPost(e) {
     out = {error: 'bad key'};
   } else if (q.action === 'draft') {
     out = draft_(body.id, body.text);
+  } else if (q.action === 'backup') {
+    out = backup_(body.name, body.data);
   } else {
     out = {error: 'unknown action'};
   }
@@ -127,4 +138,48 @@ function draft_(id, text) {
   if (!text) return {error: 'empty draft'};
   var d = m.createDraftReply(String(text).slice(0, 20000));   // saved in Drafts - never sent
   return {ok: true, draft: d.getId()};
+}
+
+// ------------------------------------------------------------------ uptime
+function heartbeat_(release) {
+  var p = PropertiesService.getScriptProperties();
+  var wasDown = p.getProperty('ALERTED') === '1';
+  p.setProperties({LAST_BEAT: String(Date.now()), RELEASE: String(release).slice(0, 20), ALERTED: '0'});
+  if (wasDown) {
+    MailApp.sendEmail(Session.getEffectiveUser().getEmail(), 'DONNA is back online',
+                      'DONNA\'s server is checking in again (version ' + release + '). Nothing for you to do.');
+  }
+  return {ok: true, version: VERSION};
+}
+
+function watchdog() {
+  var p = PropertiesService.getScriptProperties();
+  var last = Number(p.getProperty('LAST_BEAT') || 0);
+  if (!last || p.getProperty('ALERTED') === '1') return;    // never checked in yet, or already told
+  var minutes = Math.round((Date.now() - last) / 60000);
+  if (minutes < WATCH_MINUTES) return;
+  p.setProperty('ALERTED', '1');
+  MailApp.sendEmail(Session.getEffectiveUser().getEmail(), 'DONNA is offline (' + minutes + ' minutes)',
+    'DONNA\'s server has not checked in for ' + minutes + ' minutes. Morning/evening messages, email triage and ' +
+    'alerts are paused until it is back.\n\nWhat to do: open the DigitalOcean dashboard and check the droplet is ' +
+    'on (power it on or reboot it if not). If it is on, run DONNA-Console.bat or log in and type: vertex1-update --status\n\n' +
+    'You will get a "back online" email as soon as it checks in again.');
+}
+
+// ------------------------------------------------------------------ off-site backup
+function backupFolder_() {
+  var it = DriveApp.getFoldersByName('DONNA backups');
+  return it.hasNext() ? it.next() : DriveApp.createFolder('DONNA backups');
+}
+
+function backup_(name, data) {
+  if (!name || !data || !/^donna-backup-[0-9-]+\.tgz\.enc$/.test(name)) return {error: 'bad backup'};
+  var folder = backupFolder_();
+  folder.createFile(Utilities.newBlob(Utilities.base64Decode(data), 'application/octet-stream', name));
+  var files = [];
+  var it = folder.getFiles();
+  while (it.hasNext()) files.push(it.next());
+  files.sort(function (a, b) { return b.getDateCreated() - a.getDateCreated(); });
+  files.slice(BACKUPS_KEPT).forEach(function (f) { f.setTrashed(true); });   // keep the newest 14
+  return {ok: true, kept: Math.min(files.length, BACKUPS_KEPT)};
 }

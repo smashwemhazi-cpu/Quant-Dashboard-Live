@@ -203,6 +203,20 @@ def job_growth_review() -> None:
         notify("growth_review", r.get("delivery"))
 
 
+def job_heartbeat() -> None:
+    """Check in with the Google bridge; if these stop for 30 minutes, the owner gets an email from their own account."""
+    from pathlib import Path
+
+    from jarvis.adapters import google_bridge
+
+    if not google_bridge.configured():
+        return
+    rel = Path(__file__).resolve().parents[1] / "RELEASE"
+    r = google_bridge.call("heartbeat", release=rel.read_text().strip() if rel.exists() else "dev")
+    if "error" in r:
+        raise RuntimeError(f"uptime heartbeat: {r['error']}")
+
+
 def job_sanctions_lists() -> None:
     from jarvis.agents import screening
 
@@ -264,6 +278,7 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("evening", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_evening),
     ("growth_review", 60 * 24, int(os.getenv("JARVIS_GROWTH_UTC_HOUR", "5")), job_growth_review),  # on DONNA_GROWTH_WEEKDAY
     ("weekly_pack", 60 * 24, int(os.getenv("JARVIS_PACK_UTC_HOUR", "5")), job_weekly_pack),  # PDF on DONNA_PACK_WEEKDAY
+    ("heartbeat", 10, None, job_heartbeat),                                                # uptime watchdog
     ("sanctions_lists", 60 * 24, int(os.getenv("JARVIS_SANCTIONS_UTC_HOUR", "3")), job_sanctions_lists),
     ("partner_radar", 60 * 24, int(os.getenv("JARVIS_RADAR_UTC_HOUR", "6")), job_partner_radar),  # on DONNA_RADAR_WEEKDAY
 ]
