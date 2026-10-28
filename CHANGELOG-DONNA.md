@@ -5,6 +5,19 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · Marketing attribution
+
+**What was done:**
+- `!attribution` follows each lead from its source to a funded account and its deposits and revenue, by channel or by country.
+- Campaign tags and IB/partner sources are grouped automatically.
+- `!spend` records marketing cost, so you see cost per funded client and ROI per channel.
+- There is an IB section showing revenue against rebates.
+- The leads export's trading-account column, when present, is now kept so a lead can be linked to its account.
+
+**Needs from you:**
+- Add the trading-account column to the scheduled Syntellicore leads export.
+- Record spend with `!spend`.
+
 ## 2026-10-28 · Regional campaign engine
 
 **What was done:**

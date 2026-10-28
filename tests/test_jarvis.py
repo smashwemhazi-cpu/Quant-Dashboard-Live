@@ -866,3 +866,42 @@ def test_campaign_engine_only_for_cleared_countries_with_warnings_and_tracking(t
             ("2026-11-10", "L3", "", "google", "new", "", "KE", 1)])
     assert "2 lead(s), 1 funded" in campaigns.command("!campaign", "2")
     assert "live" in campaigns.command("!campaign", "2 live") and "ke-clients-2026w44" in campaigns.command("!campaigns", "")
+
+
+def test_attribution_follows_leads_to_funded_value_and_cost(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    from jarvis.agents import attribution as at, backoffice as bo
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("JARVIS_INBOX_DIR", str(tmp_path / "inbox"))
+    (tmp_path / "inbox").mkdir()
+    assert "no CRM leads export" in at.command("!attribution", "")
+    (tmp_path / "inbox" / "2026-10-28_leads.csv").write_text(
+        "customer_no,lead_status,source,registration_date,country,ftd,trading account\n"
+        "CU1,converted,fb / ke-clients-2026w44,2026-10-20,Kenya,yes,7001\n"
+        "CU2,new,fb / ke-clients-2026w44,2026-10-21,Kenya,no,\n"
+        "CU3,converted,Facebook,2026-10-22,Ghana,yes,7002\n"
+        "CU4,converted,IB 55 partner link,2026-10-22,Kenya,yes,7003\n"
+        "CU5,converted,Facebook,2025-01-01,Ghana,yes,7004\n")             # outside the 90-day window
+    with bo._db() as c:
+        c.executemany("INSERT INTO bo_activity VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [
+            ("2026-10-27", "7001", 0, 1000, 200, 0, 30, 0, 1e5, -5, -20, -300),
+            ("2026-10-27", "7002", 0, 500, 0, 0, 10, 0, 1e4, 0, -5, 50),
+            ("2026-10-27", "7003", 0, 2000, 0, 0, 40, 0, 1e5, 0, -30, -100)])
+    assert bo.BackOfficeAgent().ingest()["files"][0]["kind"] == "leads"
+    assert at.channel("fb / ke-clients-2026w44") == "campaign ke-clients-2026w44"
+    assert at.channel("IB 55 partner link").startswith("partner ")
+    at.add_spend("ke-clients-2026w44", 250)
+    at.add_spend("facebook", 100)
+    r = at.report(90, now=datetime(2026, 10, 28, tzinfo=timezone.utc))
+    rows = {x["channel"]: x for x in r["rows"]}
+    camp = rows["campaign ke-clients-2026w44"]
+    assert (camp["leads"], camp["ftd"], camp["conv_pct"]) == (2, 1, 50.0)
+    assert (camp["net_deposits"], camp["revenue"], camp["cpa"]) == (800.0, 325.0, 250.0) and camp["roi_pct"] == 30.0
+    assert rows["facebook"]["leads"] == 1 and rows["facebook"]["revenue"] == 5.0      # CU5 is too old
+    assert r["valued"] and r["leads"] == 4 and r["ftd"] == 3
+    by_country = {x["country"]: x for x in at.report(90, "country", now=datetime(2026, 10, 28, tzinfo=timezone.utc))["rows"]}
+    assert by_country["Kenya"]["ftd"] == 2
+    assert "Recorded 1,200.00" in at.command("!spend", "google 1,200 Oct search ads")
+    assert "google" in at.command("!spend", "")

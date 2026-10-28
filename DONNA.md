@@ -255,6 +255,22 @@ The three types:
 - `!campaigns` lists them all; `!campaign 3 live|done|stopped` sets the status.
 - Run each piece through `!review` before you publish it yourself.
 
+## Marketing attribution
+
+`!attribution` shows where your funded clients come from, for leads created in the last 90 days (`!attribution 30` for 30 days). For each source it gives:
+- leads, funded clients and conversion %;
+- net deposits;
+- estimated revenue: commission + swaps + client losses, for comparing channels, not for the accounts;
+- cost per funded client and ROI.
+
+Sources are grouped: your `!campaign` tags (ke-clients-2026w44), IBs and partners, and the CRM's own sources such as facebook and google. `!attribution country` shows the same figures by country. When an IB report is on file, an IB section shows each IB's funded clients, deposits, revenue, rebates and the net.
+
+**For the value columns**, the Syntellicore leads export needs the client's **trading account** column alongside the customer number. Without it you still get leads, funded clients and conversion.
+
+**For cost:**
+- Record what you spend with `!spend facebook 1200 Oct ads` or `!spend ke-clients-2026w44 250`. The source name must match the CRM source, or the campaign tag.
+- `!spend` on its own lists what has been recorded.
+
 ## Connecting your live cTrader account (read-only)
 
 DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.
