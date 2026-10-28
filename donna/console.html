@@ -12,12 +12,17 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: radial-gradient(ellipse at 50% 30%, #0d1b33 0%, var(--bg) 70%);
     color: var(--text); font: 15px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  /* one screen, no page scrolling: the panels and the conversation scroll inside themselves */
   body { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(360px, 1.4fr) minmax(240px, 1fr);
-    grid-template-rows: auto 1fr auto; gap: 16px; padding: 16px; min-height: 100vh; }
+    grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 14px; padding: 16px; height: 100vh; overflow: hidden; }
+  .attention { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; }
+  .attention div { background: rgba(245, 185, 66, .1); border: 1px solid rgba(245, 185, 66, .4); color: var(--text);
+    border-radius: 10px; padding: 8px 12px; font-size: 13.5px; }
+  .attention b { color: var(--warn); margin-right: 6px; }
   header { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: baseline; }
   header h1 { margin: 0; font-size: 18px; letter-spacing: .35em; font-weight: 600; color: var(--accent); }
   header .clock { color: var(--muted); font-variant-numeric: tabular-nums; }
-  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 0; overflow-y: auto; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px;
     backdrop-filter: blur(6px); min-width: 0; }
   .panel h2 { margin: 0 0 8px; font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--muted);
@@ -26,13 +31,13 @@
   .panel li { padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
   .panel li:first-child { border-top: 0; }
   .when { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
-  .tag { font-size: 11px; padding: 1px 6px; border-radius: 6px; margin-right: 6px; border: 1px solid currentColor; }
+  .tag { white-space: nowrap; font-size: 11px; padding: 1px 6px; border-radius: 6px; margin-right: 6px; border: 1px solid currentColor; }
   .high, .RED { color: var(--bad); } .medium, .AMBER, .STALE { color: var(--warn); } .low { color: var(--muted); }
   .empty { color: var(--muted); font-style: italic; }
-  .centre { display: flex; flex-direction: column; align-items: center; gap: 12px; min-width: 0; }
-  #orb { width: min(46vh, 100%); aspect-ratio: 1; cursor: pointer; }
+  .centre { display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; min-height: 0; }
+  #orb { width: min(34vh, 100%); max-width: 100%; aspect-ratio: 1; cursor: pointer; flex: none; }
   #mode { color: var(--muted); letter-spacing: .25em; text-transform: uppercase; font-size: 12px; min-height: 18px; }
-  #log { width: 100%; max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  #log { width: 100%; flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
   .msg { padding: 9px 12px; border-radius: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 92%; }
   .me { align-self: flex-end; background: rgba(74, 168, 255, .16); border: 1px solid rgba(74, 168, 255, .3); }
   .her { align-self: flex-start; background: rgba(45, 226, 196, .09); border: 1px solid rgba(45, 226, 196, .25); }
@@ -49,7 +54,9 @@
     padding: 8px; font: inherit; max-width: 220px; }
   .hint { color: var(--muted); font-size: 12px; }
   @media (max-width: 900px) {
-    body { grid-template-columns: minmax(0, 1fr); }
+    body { grid-template-columns: minmax(0, 1fr); height: auto; overflow: visible; }
+    .col { overflow: visible; }
+    #log { max-height: 50vh; }
     header { order: -2; }
     .centre { order: -1; }
     .bar { flex-wrap: wrap; }
@@ -60,6 +67,7 @@
 </head>
 <body>
 <header><h1>D.O.N.N.A</h1><span class="clock" id="clock"></span></header>
+<div class="attention" id="attention" hidden></div>
 
 <section class="col">
   <div class="panel"><h2>Today</h2><ul id="calendar"><li class="empty">Loading…</li></ul></div>
@@ -83,6 +91,11 @@
   <button id="send" type="button">Send</button>
   <button id="mute" type="button" title="Voice on/off">🔊</button>
   <select id="voice" title="DONNA's voice" hidden></select>
+  <select id="lang" title="The English DONNA listens for">
+    <option value="en-GB">English (UK)</option><option value="en-ZA">English (South Africa)</option>
+    <option value="en-KE">English (Kenya)</option><option value="en-NG">English (Nigeria)</option>
+    <option value="en-US">English (US)</option>
+  </select>
 </div>
 
 <script>
@@ -115,17 +128,26 @@
     try {
       const s = await api("/api/console/state");
       $("clock").textContent = s.now;
+      const att = Array.isArray(s.attention) ? s.attention : [];
+      $("attention").hidden = !att.length;
+      $("attention").innerHTML = att.map((a) => `<div><b>Needs you</b>${esc(a)}</div>`).join("");
+      const brainOff = att.some((a) => /^Claude/.test(a));
       list($("calendar"), s.calendar, (e) => `<li><span class="when">${esc(e.all_day ? "all day" : e.start.slice(11) + "–" + e.end)}</span>${esc(e.title)}</li>`, "Nothing scheduled");
-      list($("tasks"), s.tasks, (t) => `<li><span class="tag ${esc(t.priority)}">#${t.id}</span>${esc(t.title)}${t.due ? ` <span class="hint">due ${esc(t.due)}</span>` : ""}</li>`, "No open tasks");
+      list($("tasks"), s.tasks, (t) => `<li><span class="tag ${esc(t.priority)}">#${t.id}</span>${esc(t.title)}${t.overdue ? ` <span class="tag high">overdue ${esc(t.due)}</span>` : t.due ? ` <span class="hint">due ${esc(t.due)}</span>` : ""}</li>`, "No open tasks - say \"add\" in Discord: !add <task>");
       const m = s.mail || {};
       const mail = m.error ? m : [].concat(
         (m.urgent || []).map((x) => ({ cls: "high", t: x.subject, d: x.summary })),
         (m.reply || []).map((x) => ({ cls: "medium", t: x.subject, d: "reply needed · " + x.from })));
       list($("mail"), mail, (x) => `<li><span class="tag ${x.cls}">${x.cls === "high" ? "urgent" : "reply"}</span>${esc(x.t)}<div class="hint">${esc(x.d)}</div></li>`,
-        m.connected === false ? "Inbox not connected" : `Nothing urgent (${m.analysed_24h || 0} analysed in 24h)`);
+        m.connected === false ? "Inbox not connected" : brainOff ? "Email sorting is paused until Claude credit is topped up"
+          : `Nothing urgent (${m.analysed_24h || 0} analysed in 24h)`);
+      const k = s.kris || {};
+      const live = Array.isArray(s.risk) && !/NO DATA/.test(s.risk.join(" "));
       const risk = [].concat(
-        Array.isArray(s.kris) ? s.kris.map((k) => `<li><span class="tag ${esc(k.status)}">${esc(k.status)}</span>${esc(k.kri)}: ${esc(k.value)}</li>`) : [`<li class="empty">${esc(s.kris && s.kris.error)}</li>`],
-        Array.isArray(s.risk) ? s.risk.slice(1, 5).map((l) => `<li>${esc(l.trim())}</li>`) : []);
+        k.error ? [`<li class="empty">${esc(k.error)}</li>`] : (k.alerts || []).map((x) => `<li><span class="tag ${esc(x.status)}">${esc(x.status === "STALE" ? "old data" : x.status)}</span>${esc(x.kri)}: ${esc(x.value)}</li>`),
+        live ? s.risk.slice(1, 5).map((l) => `<li>${esc(l.trim())}</li>`) : [],
+        k.green ? [`<li class="hint">${k.green} indicator(s) green</li>`] : [],
+        (k.no_data || []).length || !live ? [`<li class="hint">Waiting for data: ${esc([].concat(k.no_data || [], live ? [] : ["live positions"]).join(", "))}</li>`] : []);
       $("risk").innerHTML = risk.join("") || `<li class="empty">All indicators green</li>`;
       if (orb.mode === "connecting") setMode("idle");
     } catch (e) {
@@ -195,7 +217,9 @@
 
   // ------------------------------------------------------------ voice in
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null, heard = "", micStream = null, analyser = null;
+  let rec = null, heard = "", sure = 1, micStream = null, analyser = null;
+  $("lang").value = store.get("donna.lang", "en-GB");
+  $("lang").onchange = () => store.set("donna.lang", $("lang").value);
   async function listenLevel() {
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -215,17 +239,28 @@
     if (!Rec) { add("her", "This browser can't hear you - open the console in Microsoft Edge or Google Chrome, or type instead."); return; }
     if (rec) return;
     if (window.speechSynthesis) speechSynthesis.cancel();
-    heard = "";
+    heard = ""; sure = 1;
     rec = new Rec();
-    rec.lang = navigator.language || "en-GB";
+    rec.lang = $("lang").value;
     rec.interimResults = true;
     rec.continuous = true;
     rec.onresult = (ev) => {
       heard = Array.from(ev.results).map((r) => r[0].transcript).join(" ");
+      Array.from(ev.results).forEach((r) => { if (r.isFinal && r[0].confidence) sure = Math.min(sure, r[0].confidence); });
       $("text").value = heard;
     };
     rec.onerror = (ev) => { if (ev.error === "not-allowed") add("her", "I need the microphone - click the lock icon by the address and allow it."); };
-    rec.onend = () => { rec = null; stopLevel(); $("mic").classList.remove("live"); const t = heard; $("text").value = ""; if (t.trim()) say(t); else setMode("idle"); };
+    rec.onend = () => {
+      rec = null; stopLevel(); $("mic").classList.remove("live");
+      const t = heard.trim();
+      if (!t) { setMode("idle"); return; }
+      if (sure < 0.6) {   // she isn't sure she heard right: let SH check it before it goes
+        $("text").value = t; $("text").focus(); setMode("idle");
+        add("her", "I'm not sure I heard that right - check the text below and press Enter, or hold to talk again.");
+        return;
+      }
+      $("text").value = ""; say(t);
+    };
     rec.start();
     listenLevel();
     $("mic").classList.add("live");

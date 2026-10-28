@@ -53,6 +53,7 @@ HELP = ("D.O.N.N.A commands:\n"
         "!investigate 12 <note>     !escalate 12 <why>   !close 12 <what you did>\n"
         "!kri                       key risk indicators (red/amber/green)\n"
         "!complaints  !complaint 3  complaints register (!complaint for all the commands)\n"
+        "!str 12                    STR evidence pack for case 12 (!str 12 filed <ref> / nofile <why>)\n"
         "!mi 30                     management info for the last 30 days\n"
         "!oblig                     regulatory calendar  (!oblig add <name> | YYYY-MM-DD | monthly, !oblig done 3)\n"
         "!review <text>             check marketing copy before it goes out\n"
@@ -290,9 +291,9 @@ def handle(text: str, channel: str = "") -> str | None:
         # read-only: anything that would write or send still needs approval in the console.
         # Goes through mind.chat so a follow-up !ask remembers the previous one.
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
-    from jarvis.agents import complaints
+    from jarvis.agents import complaints, str_pack
 
-    reply = complaints.command(cmd, rest)
+    reply = complaints.command(cmd, rest) or str_pack.command(cmd, rest)
     if reply is not None:
         return reply
     reply = compliance_commands(cmd, rest)
@@ -398,6 +399,22 @@ def main() -> None:
         if not message.content.startswith("!") and not chat_allowed(message.author.id, channel):
             return
         if not allowed(message.author.id, channel):
+            return
+        strp = re.fullmatch(r"!str\s+#?(\d+)", message.content.strip().lower())
+        if strp:
+            try:
+                from jarvis.agents import str_pack
+
+                async with message.channel.typing():
+                    cid = int(strp.group(1))
+                    summary = await asyncio.to_thread(str_pack.text, cid)
+                    pdf = await asyncio.to_thread(str_pack.build_pdf, cid)
+                await message.channel.send(f"```{summary[:1800]}```", file=discord.File(io.BytesIO(pdf), str_pack.filename(cid)))
+            except ValueError as e:
+                await message.channel.send(str(e))
+            except Exception as e:
+                log.exception("str pack failed")
+                await message.channel.send(f"Sorry - the STR pack failed ({type(e).__name__}).")
             return
         pack = re.fullmatch(r"!pack(?:\s+(\d{1,3}))?", message.content.strip().lower())
         if pack:
