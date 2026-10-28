@@ -514,3 +514,19 @@ def test_team_report_keeps_client_level_flags_private(monkeypatch):
         "asof": "2026-10-23", "leads": 4, "ftd": 1, "new_24h": 1, "new_7d": 2, "unassigned": 2, "unassigned_new": 1,
         "untouched": 2, "stale": 1, "stale_ids": ["CU2"], "by_source": []})
     assert "CU2" in "\n".join(growth.report_lines()) and "CU2" not in "\n".join(growth.report_lines(team=True))
+
+
+def test_kri_from_an_old_export_is_marked_stale(tmp_path, monkeypatch):
+    from jarvis.agents import backoffice as bo, compliance as co
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setattr(co.bo, "kyc_summary", lambda: {"pending_over_2d": ["CU1"] * 4, "oldest_pending_days": 39})
+    monkeypatch.setattr(co.bo, "book_summary", lambda: {"error": "NO DATA"})
+    monkeypatch.setattr(co.bo, "activity_summary", lambda: {"error": "NO DATA"})
+    with bo._db() as c:
+        c.execute("INSERT OR REPLACE INTO bo_meta VALUES ('last_docs', '2020-01-01')")
+    k = {x["kri"]: x for x in co.kris()}["Oldest pending KYC (days)"]
+    assert k["status"] == "STALE" and "export 2020-01-01" in k["value"] and k["stale_rag"] == "RED"
+    with bo._db() as c:
+        c.execute("INSERT OR REPLACE INTO bo_meta VALUES ('last_docs', ?)", (__import__("datetime").date.today().isoformat(),))
+    assert {x["kri"]: x for x in co.kris()}["Oldest pending KYC (days)"]["status"] == "RED"

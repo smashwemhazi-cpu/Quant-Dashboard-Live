@@ -167,8 +167,15 @@ def needs_you() -> list[str]:
     try:
         from jarvis.agents import compliance
 
-        reds = [k for k in compliance.kris() if k["status"] == "RED"]
-        items += [(1, f"Compliance KRI red: {k['kri']} = {k['value']}") for k in reds]
+        ks = compliance.kris()
+        items += [(1, f"Compliance KRI red: {k['kri']} = {k['value']}") for k in ks if k["status"] == "RED"]
+        from jarvis.agents import backoffice
+
+        old = sorted({backoffice.data_age(s) for s in ("docs", "eod", "activity")} - {(None, None)})
+        old = [(a, n) for a, n in old if n > backoffice.STALE_DAYS]
+        if old:
+            items.append((1, f"Back-office exports are {max(n for _, n in old)} days old - risk numbers can't be "
+                             "trusted until fresh ones are uploaded (Vertex1-Upload)"))
         overdue = [c for c in compliance.list_cases() if c["due"] and c["due"] < today]
         if overdue:
             items.append((2, f"{len(overdue)} compliance case(s) overdue, oldest #{overdue[0]['id']} "
