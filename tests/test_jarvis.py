@@ -682,3 +682,45 @@ def test_draft_reply_is_saved_as_a_gmail_draft_never_sent(tmp_path, monkeypatch)
     assert "4111" not in seen["messages"][0]["content"] and "say 2 days" in seen["messages"][0]["content"]
     assert "didn't come from an email" in a.draft_reply(manual, client=FakeClient())["error"]
     assert "no task" in a.draft_reply(999, client=FakeClient())["error"]
+
+
+def test_complaints_register_trail_deadlines_and_mi(tmp_path, monkeypatch):
+    from datetime import date, timedelta
+
+    from jarvis.agents import complaints as cp, compliance
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    old = date.today() - timedelta(days=50)
+    a = cp.log_complaint("Withdrawal of 2 Oct not received", "withdrawal", "cu142", received=old)
+    b = cp.log_complaint("Stop-out at a price never quoted", "execution", "6000013")
+    with __import__("pytest").raises(ValueError):
+        cp.log_complaint("x", "other", "John Smith")                       # names are refused
+    act = {r["id"]: r for r in cp.active()}
+    assert act[a]["ack_overdue"] and act[a]["overdue"] and not act[b]["overdue"]
+    kri = {k["kri"]: k for k in compliance.kris()}
+    assert kri["Complaints past final-answer date"]["status"] == "AMBER"
+
+    assert "resolve it first" in cp.command("!complaint", f"{a} close")       # no outcome yet
+    assert "outcome" in cp.command("!complaint", f"{a} resolve upheld")       # root cause required
+    cp.command("!complaint", f"{a} ack sent holding letter")
+    assert "recorded" in cp.command("!complaint", f"{a} resolve upheld | payments team missed the batch | paid with interest | 25")
+    assert "recorded" in cp.command("!complaint", f"{a} close")
+    r = cp.get(a)
+    assert (r["status"], r["outcome"], r["redress"]) == ("closed", "upheld", 25.0)
+    assert [h["action"] for h in r["log"]] == ["logged", "ack", "resolve", "close"]
+    s = cp.stats(90)
+    assert s["received"] == 2 and s["upheld_pct"] == 100.0 and s["top_root_causes"][0][0] == "payments team missed the batch"
+    assert "Logged complaint #" in cp.command("!complaint", "add | bonus | bonus removed without warning")
+    assert "Say why" in cp.command("!complaint", f"{b} notcomplaint")          # a reason is required
+
+
+def test_emails_that_read_like_complaints_are_logged_once(tmp_path, monkeypatch):
+    from jarvis.agents import complaints as cp
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    cid = cp.from_email("Formal complaint - withdrawal still not received", "Client says payout is 10 days late",
+                        "payments", "client.example", "<m7@x>", "2026-10-28T06:00:00Z")
+    r = cp.get(cid)
+    assert (r["category"], r["channel"], r["received"]) == ("withdrawal", "email - confirm", "2026-10-28")
+    assert cp.from_email("Formal complaint", "again", "payments", "client.example", "<m7@x>") is None   # same email
+    assert cp.from_email("Weekly newsletter", "markets update", "newsletter", "x.example", "<m8@x>") is None

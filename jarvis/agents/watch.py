@@ -65,6 +65,16 @@ def compliance_nudges(today: date | None = None) -> list[str]:
             days = (date.fromisoformat(o["due"]) - today).days
             when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
             out.append(f"Regulatory obligation due {when}: {o['name']} ({o['due']}).")
+    from jarvis.agents import complaints
+
+    for r in complaints.active(today):
+        if r["status"] == "escalated":
+            continue
+        if not r["acknowledged"] and r["ack_due"] <= today.isoformat() and _once(f"complaint-ack:{r['id']}"):
+            out.append(f"Complaint #{r['id']} must be acknowledged today ({r['category']}): !complaint {r['id']} ack")
+        left = (date.fromisoformat(r["resolve_due"]) - today).days
+        if 0 <= left <= 7 and _once(f"complaint-due:{r['id']}"):
+            out.append(f"Complaint #{r['id']} needs its final answer within {left} day(s) ({r['resolve_due']}).")
     soon = {today.isoformat(), (today + timedelta(days=1)).isoformat()}
     for c in compliance.list_cases():
         if c["due"] in soon and _once(f"case:{c['id']}:{c['due']}"):

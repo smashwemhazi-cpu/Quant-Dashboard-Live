@@ -52,6 +52,7 @@ HELP = ("D.O.N.N.A commands:\n"
         "!cases   !case 12          case register / one case with history\n"
         "!investigate 12 <note>     !escalate 12 <why>   !close 12 <what you did>\n"
         "!kri                       key risk indicators (red/amber/green)\n"
+        "!complaints  !complaint 3  complaints register (!complaint for all the commands)\n"
         "!mi 30                     management info for the last 30 days\n"
         "!oblig                     regulatory calendar  (!oblig add <name> | YYYY-MM-DD | monthly, !oblig done 3)\n"
         "!review <text>             check marketing copy before it goes out\n"
@@ -289,6 +290,11 @@ def handle(text: str, channel: str = "") -> str | None:
         # read-only: anything that would write or send still needs approval in the console.
         # Goes through mind.chat so a follow-up !ask remembers the previous one.
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
+    from jarvis.agents import complaints
+
+    reply = complaints.command(cmd, rest)
+    if reply is not None:
+        return reply
     reply = compliance_commands(cmd, rest)
     if reply is not None:
         return reply

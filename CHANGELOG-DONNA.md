@@ -5,6 +5,19 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · Complaints register
+
+**What was done:**
+- A full complaints register: number, client (account number only), category and summary for each complaint.
+- An acknowledgement deadline (2 days) and a final-answer deadline (42 days), both adjustable.
+- Each complaint goes through acknowledge, investigate, resolve and close. Resolving requires an outcome (upheld, partly upheld or not upheld) and a root cause, and can record any redress paid.
+- The complete history of each complaint is kept for the ombud or regulator file.
+- Emails that read like complaints are logged automatically for you to confirm or dismiss with a reason.
+- The register feeds the morning "needs you" list, two new risk indicators, reminders, the daily compliance report and `!complaint mi`.
+- It works in Discord and in the DONNA Console.
+
+**Why:** a complaints register is a FAIS-type requirement, and it was the most important missing control in the review.
+
 ## 2026-10-28 · Reports by email, the DONNA Console, and draft replies
 
 **What was done**
