@@ -19,7 +19,7 @@ import os
 import re
 import shutil
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -242,6 +242,18 @@ def kpi_summary() -> dict[str, Any]:
         get = lambda d: dict(c.execute("SELECT metric, value FROM bo_kpi WHERE asof = ?", (d,)).fetchall())  # noqa: E731
         cur, prev = get(dates[0]), (get(dates[1]) if len(dates) > 1 else {})
     return {"asof": dates[0], "prev_asof": dates[1] if prev else None, "kpis": cur, "prev": prev}
+
+
+STALE_DAYS = int(os.getenv("JARVIS_DATA_STALE_DAYS", "3"))
+
+
+def data_age(kind: str, today: date | None = None) -> tuple[str | None, int | None]:
+    """(export date, age in days) of the newest ingested export of this kind: eod, docs, activity, streams, kpi."""
+    with _db() as c:
+        row = c.execute("SELECT value FROM bo_meta WHERE key = ?", (f"last_{kind}",)).fetchone()
+    if not row:
+        return None, None
+    return row[0], ((today or date.today()) - date.fromisoformat(row[0][:10])).days
 
 
 def kyc_summary(today: pd.Timestamp | None = None) -> dict[str, Any]:

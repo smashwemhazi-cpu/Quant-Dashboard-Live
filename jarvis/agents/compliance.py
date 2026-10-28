@@ -213,23 +213,30 @@ def kris() -> list[dict[str, Any]]:
     """Key risk indicators with red/amber/green status."""
     out = []
 
-    def kri(name, value, amber, red, fmt="{:,.0f}"):
+    def kri(name, value, amber, red, fmt="{:,.0f}", source=None):
         rag = "RED" if value is not None and value >= red else "AMBER" if value is not None and value >= amber else "GREEN"
-        out.append({"kri": name, "value": "n/a" if value is None else fmt.format(value), "status": rag if value is not None else "NO DATA"})
+        item = {"kri": name, "value": "n/a" if value is None else fmt.format(value), "status": rag if value is not None else "NO DATA"}
+        if value is not None and source:
+            # a KRI computed from an old export is not today's position: say so instead of showing RED/GREEN
+            asof, age = bo.data_age(source)
+            if age is not None and age > bo.STALE_DAYS:
+                item.update(status="STALE", value=f"{item['value']} (export {asof}, {age} days old)", stale_rag=rag)
+        out.append(item)
 
     active = list_cases(limit=100_000)
     overdue = [c for c in active if c["due"] and c["due"] < date.today().isoformat()]
     kri("Open high-severity cases", sum(c["severity"] == "high" for c in active), 1, 3)
     kri("Overdue cases", len(overdue), 1, 5)
     q = bo.kyc_summary()
-    kri("KYC docs pending > 2 days", None if "error" in q else len(q["pending_over_2d"]), 3, 10)
-    kri("Oldest pending KYC (days)", None if "error" in q else q["oldest_pending_days"], 3, 14)
+    kri("KYC docs pending > 2 days", None if "error" in q else len(q["pending_over_2d"]), 3, 10, source="docs")
+    kri("Oldest pending KYC (days)", None if "error" in q else q["oldest_pending_days"], 3, 14, source="docs")
     b = bo.book_summary()
-    kri("Accounts near stop-out", None if "error" in b else len(b["margin_alerts"]), 1, 3)
+    kri("Accounts near stop-out", None if "error" in b else len(b["margin_alerts"]), 1, 3, source="eod")
     kri("Largest client share of equity %", None if "error" in b or not b["top_account"] else
-        b["top_account"]["share_pct"], 30, 50)
+        b["top_account"]["share_pct"], 30, 50, source="eod")
     t = bo.activity_summary()
-    kri("Deposit-withdraw-no-trade accounts", None if "error" in t else len(t["in_out_no_trading"]), 1, 3)
+    kri("Deposit-withdraw-no-trade accounts", None if "error" in t else len(t["in_out_no_trading"]), 1, 3,
+        source="activity")
     return out
 
 

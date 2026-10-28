@@ -5,6 +5,17 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · Why Google kept refusing the email password, and stale risk numbers
+
+**What was done**
+- **The email password fix.** When Google's 16-letter app password is copied from the browser, the gaps between the four groups are often special invisible spaces (non-breaking or thin spaces), not normal ones. The setup check treated a correctly pasted password as "not an app password", skipped it, and kept the old, wrong one. DONNA then kept reporting "Google refused the app password". Now:
+  - Every kind of space and invisible character is removed, and capitals are accepted, before the check.
+  - A real rejection says why, without showing the password: how many characters it had, and whether it looked like a normal Google password.
+  - If Google still refuses, the setup prints the three causes in order: the app password was made under a different Google account (for example a personal Gmail instead of the work address); an old DONNA entry was reused; or the normal password was changed, which cancels every app password.
+- **Stale risk numbers are labelled.** Risk indicators computed from an export older than 3 days (`JARVIS_DATA_STALE_DAYS`) now show **STALE**, with the export date, instead of RED or GREEN. The morning list now says "Back-office exports are N days old – upload fresh ones". Before this, "Oldest pending KYC = 39 days" kept growing every day from the 22 October export, even if those documents had since been processed.
+
+**Why:** SH reported Google still refusing the right password, and the morning message showed a red KRI built on a 6-day-old export.
+
 ## 2026-10-28 · What leaves the private channel, and cleaner messages
 
 **What was done**
