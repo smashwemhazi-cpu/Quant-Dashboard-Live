@@ -5,6 +5,20 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · Sanctions and PEP screening
+
+**What was done**
+- The UN Consolidated List and the OFAC SDN list (with aliases) are downloaded nightly. Any extra list can be added as a CSV.
+- Every client export with names (the customer list and the KYC documents) is screened with fuzzy name matching and a date-of-birth check. Strong and possible matches, and CRM-declared PEPs, open compliance cases.
+- A new red risk indicator shows while matches are open.
+- `!screen` checks one name before onboarding.
+- Client names are never stored.
+- A failed list download keeps the previous copy. If no list is loaded, the failure is flagged rather than silently screening against nothing.
+
+**Needs from you:**
+- Schedule the CRM customer list (number, names, date of birth, PEP) to your email daily.
+- Decide on a PEP data source (a paid OpenSanctions licence or a vendor).
+
 ## 2026-10-28 · Marketing attribution
 
 **What was done:**

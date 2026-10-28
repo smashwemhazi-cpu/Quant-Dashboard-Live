@@ -905,3 +905,75 @@ def test_attribution_follows_leads_to_funded_value_and_cost(tmp_path, monkeypatc
     assert by_country["Kenya"]["ftd"] == 2
     assert "Recorded 1,200.00" in at.command("!spend", "google 1,200 Oct search ads")
     assert "google" in at.command("!spend", "")
+
+
+UN_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
+<CONSOLIDATED_LIST><INDIVIDUALS>
+ <INDIVIDUAL><REFERENCE_NUMBER>QDi.001</REFERENCE_NUMBER><FIRST_NAME>IVAN</FIRST_NAME><SECOND_NAME>PETROV</SECOND_NAME>
+  <SECOND_NAME/><INDIVIDUAL_ALIAS><ALIAS_NAME>Johnny Petrovski</ALIAS_NAME></INDIVIDUAL_ALIAS>
+  <INDIVIDUAL_DATE_OF_BIRTH><YEAR>1970</YEAR></INDIVIDUAL_DATE_OF_BIRTH></INDIVIDUAL>
+</INDIVIDUALS><ENTITIES><ENTITY><REFERENCE_NUMBER>QDe.009</REFERENCE_NUMBER><FIRST_NAME>BLACK SEA TRADING LLC</FIRST_NAME>
+</ENTITY></ENTITIES></CONSOLIDATED_LIST>"""
+OFAC_SDN = '36,"AL-RASHID, Omar Faruq","individual","SDGT",-0-,-0-,-0-,-0-,-0-,-0-,-0-,"DOB 12 Mar 1982; nationality X."\n' \
+           '37,"GOLDEN DUNES EXCHANGE","-0- ","IRAN",-0-,-0-,-0-,-0-,-0-,-0-,-0-,-0-\n'
+OFAC_ALT = '36,101,"aka","RASHEED, Omar",-0-\n'
+
+
+def test_sanctions_lists_parse_and_clients_are_screened_without_keeping_names(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from jarvis.agents import backoffice as bo, compliance as co, screening as sc
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("JARVIS_INBOX_DIR", str(tmp_path / "inbox"))
+    un = sc.parse_un(UN_XML)
+    assert {(e["name"], e["dob"], e["kind"]) for e in un} == {("IVAN PETROV", "1970", "person"),
+                                                             ("Johnny Petrovski", "1970", "person"),
+                                                             ("BLACK SEA TRADING LLC", "", "entity")}
+    of = sc.parse_ofac(OFAC_SDN, OFAC_ALT)
+    assert {e["name"] for e in of} == {"Omar Faruq AL-RASHID", "GOLDEN DUNES EXCHANGE", "Omar RASHEED"}
+    assert [e["dob"] for e in of if e["ref"] == "36"][0] == "12 Mar 1982"
+
+    class R:
+        def __init__(self, body, ok=True):
+            self.content, self.text, self.ok = body, body.decode() if isinstance(body, bytes) else body, ok
+
+        def raise_for_status(self):
+            if not self.ok:
+                raise sc.requests.HTTPError("down")
+
+    monkeypatch.setattr(sc.requests, "get", lambda url, timeout: R(UN_XML) if "un.org" in url else
+                        R(OFAC_SDN) if "SDN" in url else R(OFAC_ALT))
+    assert sc.refresh() == {"UN": 3, "OFAC": 3}
+    monkeypatch.setattr(sc.requests, "get", lambda url, timeout: R(b"", ok=False))
+    assert "kept the previous copy" in sc.refresh()["UN"]                    # an outage keeps yesterday's list
+    assert sc.match("Ivan Petrov", "1970-05-01")[0]["level"] == "strong"
+    assert sc.match("ivan  PETROV")[0]["score"] == 1.0
+    exact_other_dob = sc.match("Ivan Petrov", "1991-01-01")[0]               # identical name, other birth year:
+    assert (exact_other_dob["level"], exact_other_dob["dob_agrees"]) == ("possible", False)  # kept, as possible
+    assert sc.match("Ivan Petrova", "1991-01-01") == []                      # near name + other year: dropped
+    assert sc.match("Omar Al-Rashid", "1982-03-12")[0]["list"] == "OFAC"     # "al" ignored, partial full name
+    assert sc.match("Jane Doe") == []
+
+    (tmp_path / "inbox").mkdir()
+    (tmp_path / "inbox" / "2026-10-28_customers.csv").write_text(
+        "customer_no,first_name,last_name,date_of_birth,pep\n"
+        "CU1,Ivan,Petrov,1970-05-01,no\nCU2,Jane,Doe,1990-01-01,yes\nCU3,Ivan,Petrov,1991-01-01,no\n")
+    r = bo.BackOfficeAgent().ingest()["files"][0]
+    assert r["kind"] == "customers" and r["screening"]["screened"] == 3 and r["screening"]["pep_cases"] == 1
+    cases = {c["subject"]: c for c in co.list_cases() if c["category"] == "SANCTIONS"}
+    assert set(cases) == {"CU1", "CU2", "CU3"} and cases["CU1"]["rule"] == "SANCTIONS_STRONG"
+    assert cases["CU3"]["rule"] == "SANCTIONS_POSSIBLE" and "differs" in cases["CU3"]["finding"]
+    assert cases["CU2"]["rule"] == "PEP_DECLARED"
+    import sqlite3
+    dump = "\n".join(sqlite3.connect(tmp_path / "s.db").iterdump())
+    assert "Jane" not in dump                                                  # client names are never stored
+    bo.BackOfficeAgent().ingest()                                              # nothing new to ingest
+    sc.screen_frame(pd.DataFrame({"customer_no": ["CU1"], "first_name": ["Ivan"], "last_name": ["Petrov"],
+                                  "date_of_birth": ["1970-05-01"]}))
+    assert sum(c["subject"] == "CU1" for c in co.list_cases()) == 1           # re-screening doesn't duplicate
+    kri = {k["kri"]: k for k in co.kris()}
+    assert kri["Open sanctions / PEP matches"]["status"] == "RED"
+    assert "STRONG" in sc.command("!screen", "Johnny Petrovski 1970-02-02")
+    assert "No match" in sc.command("!screen", "Jane Doe")
+    assert "UN 3 names" in sc.command("!screening", "")

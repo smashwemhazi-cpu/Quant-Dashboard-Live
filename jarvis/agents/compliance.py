@@ -235,6 +235,7 @@ def kris() -> list[dict[str, Any]]:
     open_complaints = complaints.active()
     kri("Complaints not acknowledged in time", sum(r["ack_overdue"] for r in open_complaints), 1, 3)
     kri("Complaints past final-answer date", sum(r["overdue"] for r in open_complaints), 1, 2)
+    kri("Open sanctions / PEP matches", sum(c["category"] == "SANCTIONS" for c in active), 1, 1)
     from jarvis.agents import ib
 
     s = ib.summary()
