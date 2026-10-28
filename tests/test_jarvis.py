@@ -977,3 +977,43 @@ def test_sanctions_lists_parse_and_clients_are_screened_without_keeping_names(tm
     assert "STRONG" in sc.command("!screen", "Johnny Petrovski 1970-02-02")
     assert "No match" in sc.command("!screen", "Jane Doe")
     assert "UN 3 names" in sc.command("!screening", "")
+
+
+def test_heartbeat_and_offsite_backup_go_through_the_bridge(tmp_path, monkeypatch):
+    import pytest
+
+    from jarvis import scheduler
+    from jarvis.adapters import google_bridge as gb
+
+    calls = []
+    monkeypatch.setattr(gb, "call", lambda action="ping", body=None, **p: calls.append((action, body, p)) or {"ok": True})
+    monkeypatch.delenv("JARVIS_GOOGLE_BRIDGE_URL", raising=False)
+    scheduler.job_heartbeat()
+    assert calls == []                                                     # no bridge: nothing to check in with
+    monkeypatch.setenv("JARVIS_GOOGLE_BRIDGE_URL", "https://script.google.com/macros/s/abc/exec")
+    monkeypatch.setenv("JARVIS_GOOGLE_BRIDGE_KEY", "k" * 64)
+    scheduler.job_heartbeat()
+    assert calls[-1][0] == "heartbeat" and "release" in calls[-1][2]
+    monkeypatch.setattr(gb, "call", lambda action="ping", body=None, **p: {"error": "Google bridge unreachable (Timeout)"})
+    with pytest.raises(RuntimeError, match="heartbeat"):
+        scheduler.job_heartbeat()
+
+    f = tmp_path / "donna-backup-2026-10-28.tgz.enc"
+    f.write_bytes(b"\x00secret")
+    sent = {}
+    monkeypatch.setattr(gb, "call", lambda action="ping", body=None, **p: sent.update(action=action, **body) or {"ok": True, "kept": 3})
+    assert gb.upload_backup(str(f)) == {"ok": True, "kept": 3}
+    assert sent["action"] == "backup" and sent["name"] == f.name and sent["data"] == "AHNlY3JldA=="
+    monkeypatch.setattr(gb, "call", lambda action="ping", body=None, **p: {"error": "unknown action"})
+    assert "older copy" in gb.upload_backup(str(f))["error"]
+    monkeypatch.setattr(gb, "BACKUP_MAX_BYTES", 3)
+    assert "too big" in gb.upload_backup(str(f))["error"]
+
+
+def test_bridge_script_watchdog_and_backup_are_wired():
+    from pathlib import Path
+
+    gs = (Path(__file__).resolve().parents[1] / "deploy" / "google-bridge.gs").read_text()
+    assert "var VERSION = 3;" in gs and "newTrigger('watchdog')" in gs and "function watchdog()" in gs
+    assert "q.action === 'heartbeat'" in gs and "q.action === 'backup'" in gs and "BACKUPS_KEPT = 14" in gs
+    assert "MailApp.sendEmail(Session.getEffectiveUser().getEmail()" in gs   # alerts go only to the owner

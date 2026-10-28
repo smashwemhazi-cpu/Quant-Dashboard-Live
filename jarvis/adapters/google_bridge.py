@@ -56,3 +56,20 @@ def web_page_reason(url: str, page: str) -> str:
         return "the bridge link is wrong or the deployment was archived - copy the Web app URL again (Deploy > Manage deployments)"
     m = re.search(r"<title>(.*?)</title>", page, re.IGNORECASE | re.DOTALL)
     return f"Google bridge answered with a web page ({(m.group(1).strip() if m else 'no title')[:80]}) instead of data"
+
+
+BACKUP_MAX_BYTES = 20 * 1024 * 1024
+
+
+def upload_backup(path: str) -> dict[str, Any]:
+    """Send one encrypted backup file to the 'DONNA backups' Drive folder (keeps the newest 14)."""
+    import base64
+
+    data = open(path, "rb").read()
+    if len(data) > BACKUP_MAX_BYTES:
+        return {"error": f"backup is {len(data) // 1048576} MB - too big for the bridge (max 20 MB)"}
+    name = os.path.basename(path)
+    r = call("backup", body={"name": name, "data": base64.b64encode(data).decode()})
+    if r.get("error") == "unknown action":
+        return {"error": "the Google bridge script is an older copy - paste the new google-bridge.gs (version 3)"}
+    return r

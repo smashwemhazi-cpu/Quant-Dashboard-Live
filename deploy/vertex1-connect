@@ -9,9 +9,25 @@ PY=/opt/vertex1/venv/bin/python
 [ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
 SECTION=${1:-all}
 case "$SECTION" in
-  all|discord|email|calendar|ctrader|radar) ;;
-  *) echo "Usage: vertex1-connect [ctrader|email|calendar|discord|radar]   (nothing = all questions)"; exit 1 ;;
+  all|discord|email|calendar|ctrader|radar|backup) ;;
+  *) echo "Usage: vertex1-connect [ctrader|email|calendar|discord|radar|backup]   (nothing = all questions)"; exit 1 ;;
 esac
+if [ "$SECTION" = backup ]; then
+  # the off-site backup key: made here, on the server, and shown once so the owner can keep it safe
+  if grep -qE '^JARVIS_BACKUP_KEY=.+' "$ENV"; then
+    echo "The off-site backup key is already set. To see it again: grep JARVIS_BACKUP_KEY $ENV"
+  else
+    cp -p "$ENV" "$ENV.bak.$(date +%Y%m%d-%H%M%S)"
+    echo "JARVIS_BACKUP_KEY=$(openssl rand -hex 32)" >> "$ENV"
+    echo "Made the off-site backup key. SAVE IT NOW in your password manager (not in email or chat):"
+    echo
+    grep -E '^JARVIS_BACKUP_KEY=' "$ENV" | cut -d= -f2-
+    echo
+    echo "Without it the backups in Google Drive cannot be opened - not even by Claude."
+  fi
+  echo "Tonight at 01:30 UTC an encrypted copy goes to Google Drive > DONNA backups (newest 14 kept)."
+  exit 0
+fi
 cp -p "$ENV" "$ENV.bak.$(date +%Y%m%d-%H%M%S)"
 
 ask() {  # ask SECTION NAME "question" hidden(0/1)
@@ -168,8 +184,8 @@ if b is not None:
     print(\"EMAIL     \" + (\"FAILED via Google bridge - \" + b[\"error\"] if \"error\" in b else
           \"OK via Google bridge (no password) - %s, %s unread\" % (b.get(\"account\", \"?\"), b.get(\"unread\", \"?\"))))
 if b is not None and \"error\" not in b:
-    if int(b.get(\"version\") or 1) < 2:
-        print(\"          -> your bridge script is an older copy: reports in email are not picked up yet.\")
+    if int(b.get(\"version\") or 1) < 3:
+        print(\"          -> your bridge script is an older copy: emailed reports, uptime alerts and Drive backups need version 3.\")
         print(\"             Paste the new google-bridge.gs at script.google.com, save, then Deploy > Manage deployments\")
         print(\"             > pencil > Version: New version > Deploy (the link and key stay the same)\")
 elif u and p:

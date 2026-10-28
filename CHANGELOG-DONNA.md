@@ -5,6 +5,18 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · Uptime alerts and off-site backups
+
+**What was done:**
+- The server checks in with the Google bridge every 10 minutes. If it goes quiet for 30 minutes, you get an email from your own Google account, and another when it is back. This works even when the server is completely down.
+- The nightly database backup is now also sent, encrypted, to Google Drive / DONNA backups, keeping the newest 14. The key is made on the server with `vertex1-connect backup` and kept by you.
+- Bridge script **version 3** adds both. Paste it once, then run **setup**.
+
+**Needs from you:**
+- Paste bridge version 3 and run setup.
+- Run `vertex1-connect backup` and save the key.
+- Optionally, turn on DigitalOcean weekly backups (about 20% of the droplet price).
+
 ## 2026-10-28 · Sanctions and PEP screening
 
 **What was done**

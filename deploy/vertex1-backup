@@ -18,3 +18,29 @@ find "$DATA" -path "$DATA/backups" -prune -o -name '*.db' -type f -print | while
 done
 chown -R vertex1:vertex1 "$DEST" && chmod -R o-rwx "$DEST"
 find "$DATA/backups" -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP" -exec rm -rf {} +
+
+# Off-site copy: encrypted with JARVIS_BACKUP_KEY (vertex1-connect backup), sent to the owner's Google Drive
+# through the bridge, newest 14 kept there. Open one on any computer with:
+#   openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in donna-backup-<day>.tgz.enc -out backup.tgz   (asks for the key)
+ENV=/etc/vertex1/vertex1.env
+KEY=$(grep -E '^JARVIS_BACKUP_KEY=' "$ENV" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || true)
+if [ -z "$KEY" ]; then
+  echo "off-site copy: not set up (run: vertex1-connect backup)"
+elif ! grep -qE '^JARVIS_GOOGLE_BRIDGE_URL=.+' "$ENV"; then
+  echo "off-site copy: needs the Google bridge (vertex1-connect email)"
+else
+  ENC="$DATA/backups/donna-backup-$(date -u +%Y-%m-%d).tgz.enc"
+  tar -C "$DEST" -czf - . | KEY="$KEY" openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:KEY -out "$ENC"
+  chown vertex1:vertex1 "$ENC"
+  sudo -u vertex1 bash -c 'set -a; . /etc/vertex1/vertex1.env; cd /opt/vertex1/app; /opt/vertex1/venv/bin/python -c "
+import os, sys
+from jarvis.adapters import google_bridge
+r = google_bridge.upload_backup(sys.argv[1])
+print(\"off-site copy:\", r.get(\"error\") or \"saved to Google Drive / DONNA backups\")
+if r.get(\"error\"):
+    from donna.channels import broadcast
+    broadcast(\"Tonight\x27s off-site backup did not reach Google Drive: \" + r[\"error\"] + \". The copy on the server is fine.\",
+              os.getenv(\"JARVIS_PERSONAL_TARGETS\", \"discord:personal\").split(\",\"), title=\"DONNA backup\")
+" "$1"' _ "$ENC" || echo "off-site copy: upload failed"
+  rm -f "$ENC"
+fi
