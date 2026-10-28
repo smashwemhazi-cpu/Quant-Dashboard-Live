@@ -235,6 +235,26 @@ Every Monday DONNA searches YouTube for trading educators, academies and communi
 - Work the list with `!radar 12 approve`, `!radar 12 reject <why>`, `!radar 12 contacted`, `!radar 12 partner`.
 - `!radar draft 12` writes a first message with the risk warning. Check it with `!review`, then send it yourself.
 
+## Regional campaigns
+
+`!campaign kenya ib` builds a complete, ready-to-review campaign for a country you have cleared (`!radar countries`). Each campaign is built from templates, so it works without Claude credit, and nothing is ever posted or sent.
+
+The three types:
+- **ib** (partner recruitment): who to approach, the first message, the follow-up, a partner one-pager and a two-week plan.
+- **clients:** three posts, landing-page copy, an email to new leads and a two-week plan.
+- **retention:** a win-back email, a WhatsApp follow-up for opted-in clients, a post and a plan.
+
+**What every piece includes:**
+- The angle that works in that market: mobile money in Kenya, Ghana and Nigeria; swap-free accounts and Arabic support in the GCC; rand funding and fast EFT withdrawals in South Africa.
+- The firm disclosure and the CFD risk warning. Set `DONNA_FIRM_DISCLOSURE` to include your licence number, e.g. "Vertex 1 Brokers, FSP 12345".
+- A red-flag check for wording like guarantees, risk-free or signals.
+
+**Tracking:**
+- Each campaign gets a tracking tag such as `ke-ib-2026w44`, built into its links.
+- `!campaign 3` counts the leads and funded clients whose CRM lead source contains the tag.
+- `!campaigns` lists them all; `!campaign 3 live|done|stopped` sets the status.
+- Run each piece through `!review` before you publish it yourself.
+
 ## Connecting your live cTrader account (read-only)
 
 DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.

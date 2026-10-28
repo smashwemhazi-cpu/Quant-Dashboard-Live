@@ -836,3 +836,33 @@ def test_partner_radar_only_searches_cleared_countries_and_scores_channels(tmp_p
     assert "approved" in radar.command("!radar", f"{good['id']} approve")
     assert "high risk of losing money" in radar.command("!radar", f"draft {good['id']}")
     assert "PARTNER RADAR" in radar.command("!radar", "")
+
+
+def test_campaign_engine_only_for_cleared_countries_with_warnings_and_tracking(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    from jarvis.agents import campaigns, growth, radar
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    assert "isn't cleared" in campaigns.command("!campaign", "kenya ib")
+    radar.set_permitted(["KE", "AE"])
+    assert "Unknown country" in campaigns.command("!campaign", "atlantis ib")
+    assert "ib, clients or retention" in campaigns.build("kenya", "webinar")["error"]
+    now = datetime(2026, 10, 28, tzinfo=timezone.utc)
+    for kind in campaigns.KINDS:
+        c = campaigns.build("Kenya", kind, now)
+        body = "\n".join(t for _, t in c["sections"])
+        assert c["red_flags"] == [] and "high risk of losing money" in body and "Kenya" in body
+        assert c["tag"] == f"ke-{kind}-2026w44"
+    assert campaigns.build("dubai", "clients", now)["tag"] == "ae-clients-2026w44"
+    again = campaigns.build("KE", "ib", now)
+    assert again["tag"] == "ke-ib-2026w44-2"                               # a second run gets its own tag
+    assert "utm_campaign=ke-clients-2026w44" in campaigns.text(campaigns.build("KE", "clients", now))
+    assert campaigns.red_flags("Guaranteed daily profit with our VIP signals") == ["promises returns", "sells signals"]
+    with growth._db() as c:
+        c.executemany("INSERT INTO bo_leads VALUES (?,?,?,?,?,?,?,?)", [
+            ("2026-11-10", "L1", "", "fb / ke-clients-2026w44", "new", "", "KE", 1),
+            ("2026-11-10", "L2", "", "KE-CLIENTS-2026W44", "new", "", "KE", 0),
+            ("2026-11-10", "L3", "", "google", "new", "", "KE", 1)])
+    assert "2 lead(s), 1 funded" in campaigns.command("!campaign", "2")
+    assert "live" in campaigns.command("!campaign", "2 live") and "ke-clients-2026w44" in campaigns.command("!campaigns", "")

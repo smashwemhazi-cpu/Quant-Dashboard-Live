@@ -5,6 +5,18 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · Regional campaign engine
+
+**What was done:**
+- `!campaign <country> ib|clients|retention` builds a full campaign for a cleared country: messages, posts, landing copy, email and a two-week plan.
+- The wording is fitted to each market. Every piece carries the risk warning and firm disclosure and passes a red-flag check.
+- Each campaign has a tracking tag, and `!campaign 3` counts its leads and funded clients from the CRM leads export.
+- Countries that aren't cleared are refused.
+
+**Needs from you:**
+- Set `DONNA_FIRM_DISCLOSURE` to include your licence number.
+- Make sure the CRM keeps the `utm_campaign` tag in the lead source, so campaigns can be measured.
+
 ## 2026-10-28 · Partner Radar
 
 **What was done:**
