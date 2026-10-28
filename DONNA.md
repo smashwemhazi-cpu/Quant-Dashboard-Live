@@ -192,6 +192,30 @@ Every client complaint gets a number, deadlines and an evidence trail: received,
 
 Both are kept with the case history. The pack is built from DONNA's own records, so it works without Claude credit.
 
+## IB control
+
+Schedule your CRM's **IB / partner commission report** to your email, or upload it. DONNA recognises it by its columns: an IB or partner id, the client account, and the commission or rebate paid, plus lots when present. She joins it to the cTrader account-activity report.
+
+`!ib` shows, per IB:
+- clients and funded clients;
+- deposits and withdrawals;
+- lots and rebates paid;
+- what the broker earned from those clients (an estimate: commission + swaps + client losses);
+- rebates as a % of those earnings.
+
+Each of these becomes a compliance case (category IB) automatically:
+
+| Flag | What it means |
+|---|---|
+| Paid more than earned | Rebates exceed what the IB's clients brought in |
+| Rate mismatch | Paid ≠ agreed rate × lots. Set the agreed rate with `!ib rate IB123 6.5` |
+| Rebate farming | A client trades heavily (100+ deals) for almost no profit or loss while the IB earns the rebate |
+| Self-referral | The IB trades as a client under its own code |
+| In and out, no trading | Several of the IB's clients deposit and withdraw without trading |
+| Identical deposits | Several clients made exactly the same deposit (possible multi-accounting) |
+
+`!ib IB123` shows one IB with the accounts behind each flag. The thresholds are settings (`JARVIS_IB_FARM_MIN_DEALS`, `JARVIS_IB_RATE_TOLERANCE_PCT`, `JARVIS_IB_SAME_DEPOSIT_MIN`, `JARVIS_IB_IN_OUT_MIN`). The revenue figure is an estimate, so check it with the dealing desk before acting on one IB.
+
 ## Connecting your live cTrader account (read-only)
 
 DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.
