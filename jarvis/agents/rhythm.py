@@ -180,6 +180,20 @@ def needs_you() -> list[str]:
         if overdue:
             items.append((2, f"{len(overdue)} compliance case(s) overdue, oldest #{overdue[0]['id']} "
                              f"{overdue[0]['subject']}"))
+        from jarvis.agents import complaints
+
+        oc = complaints.active()
+        unack = [r for r in oc if r["ack_overdue"]]
+        late = [r for r in oc if r["overdue"]]
+        if unack:
+            items.append((0, f"{len(unack)} complaint(s) not acknowledged in time, oldest #{unack[0]['id']} - "
+                             f"!complaint {unack[0]['id']} ack"))
+        if late:
+            items.append((0, f"{len(late)} complaint(s) past the final-answer date, oldest #{late[0]['id']}"))
+        new = [r for r in oc if r["status"] == "new" and r["channel"] == "email - confirm" and not r["ack_overdue"]]
+        if new:
+            items.append((1, f"{len(new)} email(s) look like complaints - confirm with !complaint {new[0]['id']} ack, "
+                             f"or !complaint {new[0]['id']} notcomplaint <why>"))
         due = compliance.list_obligations(days=0)
         items += [(1, f"Regulatory obligation due: {o['name']} ({o['due']})") for o in due[:3]]
     except Exception as e:

@@ -227,6 +227,11 @@ def kris() -> list[dict[str, Any]]:
     overdue = [c for c in active if c["due"] and c["due"] < date.today().isoformat()]
     kri("Open high-severity cases", sum(c["severity"] == "high" for c in active), 1, 3)
     kri("Overdue cases", len(overdue), 1, 5)
+    from jarvis.agents import complaints
+
+    open_complaints = complaints.active()
+    kri("Complaints not acknowledged in time", sum(r["ack_overdue"] for r in open_complaints), 1, 3)
+    kri("Complaints past final-answer date", sum(r["overdue"] for r in open_complaints), 1, 2)
     q = bo.kyc_summary()
     kri("KYC docs pending > 2 days", None if "error" in q else len(q["pending_over_2d"]), 3, 10, source="docs")
     kri("Oldest pending KYC (days)", None if "error" in q else q["oldest_pending_days"], 3, 14, source="docs")
@@ -359,6 +364,9 @@ def report_text() -> str:
         L.append(f" ... and {len(active) - 15} more - !cases in Discord")
     if not active:
         L.append(" None")
+    from jarvis.agents import complaints
+
+    L += [""] + complaints.report_lines()
     obs = list_obligations(days=14)
     L += ["", "REGULATORY CALENDAR (next 14 days)"]
     L += [f" #{o['id']} {o['due']}  {o['name']}" + ("  !! OVERDUE" if o["due"] < today else "") for o in obs] or \

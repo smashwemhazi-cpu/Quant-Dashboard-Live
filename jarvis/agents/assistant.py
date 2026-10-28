@@ -215,7 +215,16 @@ def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
                            r["summary"][:500], int(r["needs_reply"]), _now()))
                 ids = [add_task(t["title"], t["due"], t["priority"], f"From email: {subject}", "email", m["id"], conn=c)
                        for t in r["tasks"]]
-                done.append({"subject": subject, "from_domain": domain, **r, "task_ids": [i for i in ids if i]})
+                entry = {"subject": subject, "from_domain": domain, **r, "task_ids": [i for i in ids if i]}
+                try:
+                    from jarvis.agents import complaints
+
+                    cid = complaints.from_email(subject, r["summary"], r["category"], domain, m["id"], m["received"])
+                    if cid:
+                        entry["complaint_id"] = cid
+                except Exception as e:  # noqa: BLE001 - the register must never stop triage
+                    entry["complaint_error"] = f"{type(e).__name__}: {e}"
+                done.append(entry)
         except ConnectionError as e:
             return {"error": str(e), "processed": done}
     audit.log("assistant", "inbox_triage", {"processed": len(done)})

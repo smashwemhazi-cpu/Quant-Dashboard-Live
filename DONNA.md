@@ -157,6 +157,25 @@ Privacy and limits:
 - Speech recognition in Edge and Chrome sends your voice to Microsoft or Google to turn into text. If that is not acceptable for a conversation, type instead.
 - She needs Claude API credit to talk. Commands like `!tasks` work without it.
 
+## Complaints register
+
+Every client complaint gets a number, deadlines and an evidence trail: received, acknowledged, decided and why, and the root cause. That is what an ombud or regulator asks for.
+
+**Getting complaints in:**
+- Log one yourself with `!complaint add CU142 | withdrawal | what the client says`. Use the account or customer number only, never the name; leave it blank if you don't know it.
+- Emails that read like complaints ("complaint", "ombud", "refund", "still not received", "legal action"…) are logged automatically as **new – from email**. Confirm with `!complaint 3 ack`, or `!complaint 3 notcomplaint <why>`; the reason is kept.
+
+**Working a complaint:**
+- `!complaint 3 ack <note>`, then `!complaint 3 investigate <note>`.
+- `!complaint 3 resolve upheld | <root cause> | <what was done> | <redress>`. Use `partly` or `rejected` instead of `upheld` as needed. An outcome and a root cause are required.
+- `!complaint 3 close`. Use `!complaint 3 escalate <note>` if the client goes to the ombud.
+
+**Deadlines:** acknowledge within 2 days and give the final answer within 42 days (six weeks). Change them to match your complaints policy with `JARVIS_COMPLAINT_ACK_DAYS` and `JARVIS_COMPLAINT_RESOLVE_DAYS`.
+- Overdue items go to the top of the morning list and appear as risk indicators.
+- You get a reminder on the day an acknowledgement is due, and in the last week before an answer is due.
+
+**Management information:** `!complaint mi 90` shows volumes by category, the upheld rate, average days to answer, top root causes and redress paid. The daily compliance report has a complaints section.
+
 ## Connecting your live cTrader account (read-only)
 
 DONNA reads your balance, open positions, stops and current prices every 5 minutes through cTrader's Open API. **She can't trade, close or change anything.** The feed only sends read requests, and it refuses to start if the token it was given has trading permission.
