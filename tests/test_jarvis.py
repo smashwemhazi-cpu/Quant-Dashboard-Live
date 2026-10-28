@@ -423,6 +423,28 @@ def test_google_bridge_feeds_triage_and_calendar_without_a_password(tmp_path, mo
     assert "refused the key" in a.triage_inbox(client=FakeClient())["error"]
 
 
+def test_google_bridge_web_page_answers_name_the_setting(monkeypatch):
+    import requests
+
+    from jarvis.adapters import google_bridge as gb
+
+    monkeypatch.setenv("JARVIS_GOOGLE_BRIDGE_URL", "https://script.google.com/macros/s/abc/exec")
+    monkeypatch.setenv("JARVIS_GOOGLE_BRIDGE_KEY", "k" * 64)
+
+    def page(url, text):
+        def bad_json(self):
+            raise requests.JSONDecodeError("Expecting value", text, 0)
+        return lambda *a, **k: type("R", (), {"url": url, "text": text, "raise_for_status": lambda self: None,
+                                              "json": bad_json})()
+
+    monkeypatch.setattr(gb.requests, "get", page("https://accounts.google.com/v3/signin/identifier?x", "<html>"))
+    assert "'Who has access' must be 'Anyone'" in gb.call()["error"]
+    monkeypatch.setattr(gb.requests, "get", page("https://script.google.com/x", "<title>Error</title>Script function not found: doGet"))
+    assert "New version" in gb.call()["error"]
+    monkeypatch.setattr(gb.requests, "get", page("https://script.google.com/x", "<title>Odd</title>"))
+    assert "(Odd)" in gb.call()["error"]
+
+
 # ---------------------------------------------------------------- compliance & growth
 def _fake_client(payloads):
     """Anthropic-like client returning the given JSON payloads in order."""

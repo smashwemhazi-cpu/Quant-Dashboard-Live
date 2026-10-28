@@ -112,7 +112,7 @@ Set it up once, in the browser, signed in as **simba@vertex1brokers.com**:
    - The log at the bottom shows `DONNA bridge key - ...`. Copy the 64-character key.
 4. Click **Deploy**, then **New deployment**. Click the cog, then **Web app**.
    - **Execute as:** Me.
-   - **Who has access:** Anyone.
+   - **Who has access:** Anyone. Pick the plain "Anyone", not "Anyone with Google account" or "Anyone within Vertex 1 Brokers": those make Google answer with a sign-in page.
    - Click **Deploy** and copy the **Web app URL**, which ends in `/exec`.
 5. Double-click **Vertex1-Update-Now.bat**.
    - Press Enter at 5 and 6.
