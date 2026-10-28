@@ -4,7 +4,9 @@ Inbox  Google Workspace mailbox over IMAP, read-only (BODY.PEEK - nothing is mar
        JARVIS_IMAP_HOST=imap.gmail.com, JARVIS_IMAP_USER=<address>, JARVIS_IMAP_PASSWORD=<Google app password>
        Each new email is masked (long numbers, email addresses, phone numbers) before Claude classifies it
        and extracts tasks. Already-seen Message-IDs are skipped, so each email costs one call, once.
-Calendar  Google Calendar "Secret address in iCal format" in JARVIS_GCAL_ICS_URL (read-only).
+       Or, with no password at all, the Google bridge (deploy/google-bridge.gs, jarvis/adapters/google_bridge.py),
+       which is used first when JARVIS_GOOGLE_BRIDGE_URL/_KEY are set.
+Calendar  Google Calendar "Secret address in iCal format" in JARVIS_GCAL_ICS_URL (read-only), else the Google bridge.
 Tasks  Stored in the state DB; created from emails or by hand; listed in the my-day brief.
 Delivery  JARVIS_PERSONAL_TARGETS only (e.g. discord:personal) - never the company report channel.
 """
@@ -17,6 +19,7 @@ import os
 import re
 import sqlite3
 import sys
+from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
 from email.header import decode_header, make_header
 from email.utils import parseaddr, parsedate_to_datetime
@@ -26,6 +29,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from jarvis.adapters import google_bridge
 from jarvis.core import audit
 from jarvis.core.config import settings
 from jarvis.core.registry import Agent, register, tool
@@ -151,15 +155,12 @@ def classify(subject: str, sender_domain: str, body: str, client: Any = None) ->
     return json.loads(next(b.text for b in resp.content if b.type == "text"))
 
 
-def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
-    if not (settings.imap_host and settings.imap_user and settings.imap_password):
-        return {"error": "NO DATA - inbox not connected (JARVIS_IMAP_HOST / _USER / _PASSWORD)"}
-    if client is None and not os.getenv("ANTHROPIC_API_KEY"):
-        return {"error": "ANTHROPIC_API_KEY not set - email analysis needs the Claude API"}
-    import anthropic
+def inbox_connected() -> bool:
+    return google_bridge.configured() or bool(settings.imap_host and settings.imap_user and settings.imap_password)
 
-    done: list[dict[str, Any]] = []
-    with imaplib.IMAP4_SSL(settings.imap_host) as m, _db() as c:
+
+def _imap_mail(c: sqlite3.Connection, max_messages: int) -> Iterator[dict[str, str]]:
+    with imaplib.IMAP4_SSL(settings.imap_host) as m:
         m.login(settings.imap_user, settings.imap_password)
         m.select("INBOX", readonly=True)
         since = (date.today() - timedelta(days=2)).strftime("%d-%b-%Y")
@@ -171,23 +172,52 @@ def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
                 continue
             _, msg_data = m.fetch(num, "(BODY.PEEK[])")
             msg = email.message_from_bytes(msg_data[0][1])
-            subject = mask(str(make_header(decode_header(msg.get("Subject", "")))))
-            domain = parseaddr(msg.get("From", ""))[1].rpartition("@")[2].lower() or "unknown"
             try:
                 received = parsedate_to_datetime(msg.get("Date")).astimezone(timezone.utc).isoformat()
             except (TypeError, ValueError):
                 received = _now()
-            try:
-                r = classify(subject, domain, mask(_text_body(msg))[:MAX_BODY_CHARS], client)
-            except (anthropic.APIError, json.JSONDecodeError, StopIteration) as e:
-                done.append({"subject": subject, "error": f"{type(e).__name__}: {e}"})
-                continue  # not marked seen - retried next run
-            c.execute("INSERT INTO email_seen VALUES (?,?,?,?,?,?,?,?,?)",
-                      (raw_id, received, domain, subject[:300], r["category"], r["urgency"], r["summary"][:500],
-                       int(r["needs_reply"]), _now()))
-            ids = [add_task(t["title"], t["due"], t["priority"], f"From email: {subject}", "email", raw_id, conn=c)
-                   for t in r["tasks"]]
-            done.append({"subject": subject, "from_domain": domain, **r, "task_ids": [i for i in ids if i]})
+            yield {"id": raw_id, "received": received, "from": msg.get("From", ""), "body": _text_body(msg),
+                   "subject": str(make_header(decode_header(msg.get("Subject", ""))))}
+
+
+def _bridge_mail(c: sqlite3.Connection, max_messages: int) -> Iterator[dict[str, str]]:
+    r = google_bridge.call("mail", days=2, max=max_messages)
+    if "error" in r:
+        raise ConnectionError(r["error"])
+    for m in r.get("messages", []):
+        raw_id = str(m.get("id") or "").strip()
+        if raw_id and not c.execute("SELECT 1 FROM email_seen WHERE msg_id = ?", (raw_id,)).fetchone():
+            yield {"id": raw_id, "received": str(m.get("date") or _now()), "from": str(m.get("from", "")),
+                   "subject": str(m.get("subject", "")), "body": str(m.get("body", ""))}
+
+
+def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
+    if not inbox_connected():
+        return {"error": "NO DATA - inbox not connected (Google bridge, or JARVIS_IMAP_HOST / _USER / _PASSWORD)"}
+    if client is None and not os.getenv("ANTHROPIC_API_KEY"):
+        return {"error": "ANTHROPIC_API_KEY not set - email analysis needs the Claude API"}
+    import anthropic
+
+    done: list[dict[str, Any]] = []
+    source = _bridge_mail if google_bridge.configured() else _imap_mail
+    with _db() as c:
+        try:
+            for m in source(c, max_messages):
+                subject = mask(m["subject"])
+                domain = parseaddr(m["from"])[1].rpartition("@")[2].lower() or "unknown"
+                try:
+                    r = classify(subject, domain, mask(m["body"])[:MAX_BODY_CHARS], client)
+                except (anthropic.APIError, json.JSONDecodeError, StopIteration) as e:
+                    done.append({"subject": subject, "error": f"{type(e).__name__}: {e}"})
+                    continue  # not marked seen - retried next run
+                c.execute("INSERT INTO email_seen VALUES (?,?,?,?,?,?,?,?,?)",
+                          (m["id"], m["received"], domain, subject[:300], r["category"], r["urgency"],
+                           r["summary"][:500], int(r["needs_reply"]), _now()))
+                ids = [add_task(t["title"], t["due"], t["priority"], f"From email: {subject}", "email", m["id"], conn=c)
+                       for t in r["tasks"]]
+                done.append({"subject": subject, "from_domain": domain, **r, "task_ids": [i for i in ids if i]})
+        except ConnectionError as e:
+            return {"error": str(e), "processed": done}
     audit.log("assistant", "inbox_triage", {"processed": len(done)})
     return {"processed": done}
 
@@ -204,6 +234,8 @@ def inbox_status(hours: int = 24) -> dict[str, Any]:
 # ------------------------------------------------------------------ calendar
 def calendar_events(day: date | None = None, days: int = 1) -> dict[str, Any]:
     url = os.getenv("JARVIS_GCAL_ICS_URL", "").strip().strip("\"'")
+    if not url and google_bridge.configured():
+        return _bridge_calendar(day, days)
     if not url:
         return {"error": "NO DATA - calendar not connected (JARVIS_GCAL_ICS_URL)"}
     if not url.startswith("https://"):
@@ -228,6 +260,26 @@ def calendar_events(day: date | None = None, days: int = 1) -> dict[str, Any]:
                     "start": to_local(s).strftime("%Y-%m-%d") if all_day else to_local(s).strftime("%Y-%m-%d %H:%M"),
                     "end": "" if all_day or e is None else to_local(e).strftime("%H:%M"),
                     "location": str(ev.get("LOCATION", ""))})
+    return {"events": sorted(out, key=lambda x: (not x["all_day"], x["start"]))}
+
+
+def _bridge_calendar(day: date | None, days: int) -> dict[str, Any]:
+    day = day or datetime.now(LOCAL_TZ).date()
+    start = datetime.combine(day, datetime.min.time(), LOCAL_TZ)
+    r = google_bridge.call("calendar", start=start.isoformat(), days=days)
+    if "error" in r:
+        return {"error": r["error"]}
+    out = []
+    for ev in r.get("events", []):
+        try:
+            s = datetime.fromisoformat(str(ev["start"]).replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+            e = datetime.fromisoformat(str(ev["end"]).replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+        except (KeyError, ValueError):
+            continue
+        all_day = bool(ev.get("all_day"))
+        out.append({"title": str(ev.get("title") or "(no title)"), "all_day": all_day,
+                    "start": (ev.get("day") or s.strftime("%Y-%m-%d")) if all_day else s.strftime("%Y-%m-%d %H:%M"),
+                    "end": "" if all_day else e.strftime("%H:%M"), "location": str(ev.get("location") or "")})
     return {"events": sorted(out, key=lambda x: (not x["all_day"], x["start"]))}
 
 
@@ -260,7 +312,7 @@ def my_day_text() -> str:
         L.append(" No open tasks")
     ib = inbox_status()
     L += ["", f"INBOX (last 24h: {ib['emails']} analysed)"]
-    if not (settings.imap_host and settings.imap_user):
+    if not inbox_connected():
         L.append(" NO DATA - inbox not connected")
     L += [f" !! {r['subject'][:80]} - {r['summary'][:120]}" for r in ib["high"][:5]]
     L += [f" Reply needed: {r['subject'][:80]} ({r['sender_domain']})" for r in ib["needs_reply"]

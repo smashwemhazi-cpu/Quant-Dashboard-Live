@@ -30,6 +30,9 @@ ask discord DONNA_DISCORD_BOT_TOKEN "3/12 'DONNA Tasks' bot token for !tasks / !
 ask discord DONNA_DISCORD_COMMAND_CHANNELS "4/12 Channel for commands (Enter = track-b-personal) (hidden)" 1
 ask email JARVIS_IMAP_USER "5/12 Work email address" 0
 ask email JARVIS_IMAP_PASSWORD "6/12 Google app password - 16 letters (hidden)" 1
+case "$SECTION" in all|email) echo "No-password route if Google keeps refusing: the Google bridge (DONNA.md). Enter skips 6a and 6b." ;; esac
+ask email JARVIS_GOOGLE_BRIDGE_URL "6a/12 Google bridge link - the Web app URL ending in /exec (hidden)" 1
+ask email JARVIS_GOOGLE_BRIDGE_KEY "6b/12 Google bridge key from setup() (hidden)" 1
 ask calendar JARVIS_GCAL_ICS_URL "7/12 Google Calendar secret address in iCal format (hidden)" 1
 ask ctrader JARVIS_PERSONAL_ACCOUNT "8/12 Your personal cTrader account number (hidden)" 1
 [ "$SECTION" = all ] && echo "Questions 9-12 connect your live account READ-ONLY (see DONNA.md). Skip them if you haven't made the cTrader app yet."
@@ -97,6 +100,9 @@ CHECKS = {
     "JARVIS_IMAP_USER": (r"[^@\s]+@[^@\s]+\.[^@\s]+", "not an email address"),
     "JARVIS_IMAP_PASSWORD": (r"[a-z]{16}", "not an app password. An app password is 16 lowercase letters made at "
                              "myaccount.google.com/apppasswords - never type your normal Google password here"),
+    "JARVIS_GOOGLE_BRIDGE_URL": (r"https://script\.google\.com/(a/macros/[^/\s]+|macros)/s/[A-Za-z0-9_-]+/exec",
+                                 "not the Web app URL (it starts https://script.google.com/macros/s/ and ends /exec)"),
+    "JARVIS_GOOGLE_BRIDGE_KEY": (r"[a-f0-9]{64}", "not the bridge key (64 letters and digits from setup())"),
     "JARVIS_GCAL_ICS_URL": (r"https://calendar\.google\.com/calendar/ical/\S+\.ics", "not the 'Secret address in iCal format' link"),
     "JARVIS_PERSONAL_ACCOUNT": (r"\d{4,12}", "not an account number (digits only)"),
     "DONNA_CTRADER_CLIENT_ID": (r"[A-Za-z0-9_-]{10,200}", "not an Open API Client ID"),
@@ -152,9 +158,16 @@ SEND_MYDAY=$([ "$SECTION" = all ] && echo 1 || echo 0)
 sudo -u vertex1 bash -c 'export SEND_MYDAY='"$SEND_MYDAY"'; set -a; . /etc/vertex1/vertex1.env; cd /opt/vertex1/app; /opt/vertex1/venv/bin/python -c "
 import imaplib, os
 from jarvis.agents import assistant as a
+from jarvis.adapters import google_bridge as gb
 u, p = os.getenv(\"JARVIS_IMAP_USER\"), os.getenv(\"JARVIS_IMAP_PASSWORD\")
 h = os.getenv(\"JARVIS_IMAP_HOST\", \"imap.gmail.com\")
-if u and p:
+b = gb.call() if gb.configured() else None
+if b is not None:
+    print(\"EMAIL     \" + (\"FAILED via Google bridge - \" + b[\"error\"] if \"error\" in b else
+          \"OK via Google bridge (no password) - %s, %s unread\" % (b.get(\"account\", \"?\"), b.get(\"unread\", \"?\"))))
+if b is not None and \"error\" not in b:
+    pass  # mail works through the bridge; the password route is not needed
+elif u and p:
     print(\"EMAIL     signing in as\", u, \"at\", h)
     try:
         with imaplib.IMAP4_SSL(h) as m:
@@ -175,6 +188,8 @@ if u and p:
             print(\"                (an app password made under a personal Gmail account will never work for the work address)\")
             print(\"             2. Delete the old DONNA entry, create a new one, and paste it at question 6 straight away\")
             print(\"             3. Changing your normal Google password cancels every app password - make a new one after\")
+            print(\"          -> Company Google accounts can have app passwords switched off by the admin. Skip passwords:\")
+            print(\"             set up the Google bridge (DONNA.md, 5 minutes) and paste its link and key at 6a and 6b\")
 else:
     print(\"EMAIL     not set\")
 c = a.calendar_events(days=7)

@@ -369,6 +369,60 @@ def test_calendar_from_ics(monkeypatch):
     assert [e["title"] for e in a.calendar_events(date(2026, 10, 23))["events"]] == ["Month-end", "LP call"]
 
 
+def test_google_bridge_feeds_triage_and_calendar_without_a_password(tmp_path, monkeypatch):
+    import json
+    from datetime import date
+
+    from jarvis.adapters import google_bridge
+    from jarvis.agents import assistant as a
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.delenv("JARVIS_GCAL_ICS_URL", raising=False)
+    monkeypatch.setenv("JARVIS_GOOGLE_BRIDGE_URL", "https://script.google.com/macros/s/abc/exec")
+    monkeypatch.setenv("JARVIS_GOOGLE_BRIDGE_KEY", "k" * 64)
+    monkeypatch.setattr(a, "LOCAL_TZ", __import__("zoneinfo").ZoneInfo("Etc/GMT-4"))
+    answers = {
+        "mail": {"messages": [{"id": "<m9@x>", "date": "2026-10-28T06:00:00.000Z", "from": "LP Desk <ops@lp.example>",
+                               "subject": "Margin call on 6000013", "body": "Top up today. Call +27 82 555 1234."}]},
+        "calendar": {"events": [{"title": "FSCA call", "all_day": False, "location": "", "day": "",
+                                 "start": "2026-10-28T06:00:00.000Z", "end": "2026-10-28T06:30:00.000Z"},
+                                {"title": "Month-end", "all_day": True, "location": "", "day": "2026-10-28",
+                                 "start": "2026-10-27T20:00:00.000Z", "end": "2026-10-28T20:00:00.000Z"}]},
+    }
+    calls = []
+
+    def fake_get(url, params, timeout):
+        calls.append(params)
+        body = answers[params["action"]] if params["key"] == "k" * 64 else {"error": "bad key"}
+        return type("R", (), {"raise_for_status": lambda self: None, "json": lambda self: body})()
+
+    monkeypatch.setattr(google_bridge.requests, "get", fake_get)
+    seen = {}
+
+    class FakeClient:
+        class beta:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    seen["content"] = kw["messages"][0]["content"]
+                    out = {"category": "liquidity_provider", "urgency": "high", "summary": "LP margin call",
+                           "needs_reply": True, "tasks": [{"title": "Top up LP margin", "due": "", "priority": "high"}]}
+                    blk = type("B", (), {"type": "text", "text": json.dumps(out)})
+                    return type("R", (), {"stop_reason": "end_turn", "content": [blk]})
+
+    assert a.inbox_connected()
+    r = a.triage_inbox(client=FakeClient())["processed"]
+    assert r[0]["from_domain"] == "lp.example" and r[0]["task_ids"] and "555 1234" not in seen["content"]
+    assert a.triage_inbox(client=FakeClient())["processed"] == []          # same email never re-processed
+    ev = a.calendar_events(date(2026, 10, 28))["events"]
+    assert [(e["title"], e["start"], e["end"]) for e in ev] == [("Month-end", "2026-10-28", ""),
+                                                                ("FSCA call", "2026-10-28 10:00", "10:30")]
+    assert calls[-1]["start"] == "2026-10-28T00:00:00+04:00"
+    monkeypatch.setenv("JARVIS_GOOGLE_BRIDGE_KEY", "x" * 64)
+    assert "refused the key" in a.calendar_events(date(2026, 10, 28))["error"]
+    assert "refused the key" in a.triage_inbox(client=FakeClient())["error"]
+
+
 # ---------------------------------------------------------------- compliance & growth
 def _fake_client(payloads):
     """Anthropic-like client returning the given JSON payloads in order."""
