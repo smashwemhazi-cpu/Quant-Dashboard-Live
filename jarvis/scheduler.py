@@ -203,6 +203,16 @@ def job_growth_review() -> None:
         notify("growth_review", r.get("delivery"))
 
 
+def job_partner_radar() -> None:
+    from jarvis.agents import radar
+
+    r = radar.weekly(send=True)
+    if "error" in r:
+        raise RuntimeError(r["error"])  # "NO DATA ..." = not set up: the job waits quietly
+    if "skipped" not in r:
+        notify("partner_radar", {"countries": r["countries"], "channels": r["channels"]})
+
+
 def job_weekly_pack() -> None:
     r = agents()["pack"].weekly(send=True)
     if "skipped" not in r:
@@ -243,6 +253,7 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("evening", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_evening),
     ("growth_review", 60 * 24, int(os.getenv("JARVIS_GROWTH_UTC_HOUR", "5")), job_growth_review),  # on DONNA_GROWTH_WEEKDAY
     ("weekly_pack", 60 * 24, int(os.getenv("JARVIS_PACK_UTC_HOUR", "5")), job_weekly_pack),  # PDF on DONNA_PACK_WEEKDAY
+    ("partner_radar", 60 * 24, int(os.getenv("JARVIS_RADAR_UTC_HOUR", "6")), job_partner_radar),  # on DONNA_RADAR_WEEKDAY
 ]
 
 
@@ -298,6 +309,7 @@ SETUP_ERRORS = {
     "client_auth_failure": "cTrader: Client ID / Secret refused (new app not approved or not entered yet)",
     "trading permission": "cTrader: token has trading permission - needs a read-only one",
     "access_token_invalid": "cTrader: token expired or invalid - get a new one",
+    "youtube: api key refused": "Partner Radar: YouTube API key refused - check it (vertex1-connect radar)",
     "credit balance": "Claude: credit used up - top up at console.anthropic.com > Plans & Billing",
     "older copy": "Google bridge: the script in your Google account needs its update (paste the new "
                   "google-bridge.gs, then Deploy > Manage deployments > pencil > New version)",

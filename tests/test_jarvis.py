@@ -784,3 +784,55 @@ def test_ib_control_reconciles_rebates_and_flags_abuse(tmp_path, monkeypatch):
     assert kri["IBs paid more than their clients earned"]["value"] == "1"
     assert "IB55" in ib.command("!ib", "") and "!! IB_REBATE_FARMING" in ib.command("!ib", "IB55")
     assert "per lot" in ib.command("!ib", "rate IB55 5")
+
+
+def test_partner_radar_only_searches_cleared_countries_and_scores_channels(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    from jarvis.agents import radar
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    assert "not set up" in radar.run()["error"]
+    monkeypatch.setenv("JARVIS_YOUTUBE_API_KEY", "AIza" + "x" * 35)
+    assert "no countries cleared" in radar.run()["error"]
+    assert radar.command("!radar", "countries ke, xx ZA").startswith("Cleared for marketing: KE Kenya, ZA South Africa")
+    assert radar.permitted() == ["KE", "ZA"]                                 # unknown codes are dropped
+    calls = []
+    chans = {
+        "UC1": {"snippet": {"title": "Nairobi Forex Academy", "description": "Price action and risk management "
+                            "education for traders", "country": "KE", "customUrl": "@nairobifx"},
+                "statistics": {"subscriberCount": "52000", "videoCount": "300", "viewCount": "3000000"}},
+        "UC2": {"snippet": {"title": "Guaranteed Profits FX", "description": "100% win VIP signals, account management",
+                            "country": "KE"},
+                "statistics": {"subscriberCount": "90000", "videoCount": "50", "viewCount": "800000"}},
+        "UC3": {"snippet": {"title": "London Trader", "description": "forex", "country": "GB"},
+                "statistics": {"subscriberCount": "500000", "videoCount": "10", "viewCount": "100"}},
+    }
+
+    def fake_get(url, params, timeout):
+        calls.append((url.rsplit("/", 1)[1], params))
+        kind = url.rsplit("/", 1)[1]
+        if kind == "search":
+            body = {"items": [{"id": {"channelId": c}} for c in chans]} if params["regionCode"] == "KE" else {"items": []}
+        elif kind == "channels":
+            body = {"items": [{"id": c, **v, "contentDetails": {"relatedPlaylists": {"uploads": "UU" + c}}}
+                              for c, v in chans.items() if c in params["id"].split(",")]}
+        else:
+            body = {"items": [{"contentDetails": {"videoPublishedAt": "2026-10-25T10:00:00Z"}}]}
+        return type("R", (), {"status_code": 200, "text": "", "raise_for_status": lambda self: None,
+                              "json": lambda self: body})()
+
+    monkeypatch.setattr(radar.requests, "get", fake_get)
+    r = radar.run(now=datetime(2026, 10, 28, tzinfo=timezone.utc))
+    assert r["channels"] == 2                                      # the GB channel is not a Kenyan prospect
+    assert {p["regionCode"] for k, p in calls if k == "search"} == {"ZA", "KE"}
+    sl = radar.shortlist()
+    assert [p["title"] for p in sl["KE"]] == ["Nairobi Forex Academy"]  # flagged channel kept off the shortlist
+    flagged = radar.command("!radar", "flagged")
+    assert "promises returns" in flagged and "offers to trade for clients" in flagged and "sells signals" in flagged
+    good = sl["KE"][0]
+    assert good["score"] >= 70 and good["url"] == "https://www.youtube.com/@nairobifx"
+    assert "Say why" in radar.command("!radar", f"{good['id']} reject")
+    assert "approved" in radar.command("!radar", f"{good['id']} approve")
+    assert "high risk of losing money" in radar.command("!radar", f"draft {good['id']}")
+    assert "PARTNER RADAR" in radar.command("!radar", "")

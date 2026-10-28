@@ -5,6 +5,16 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · Partner Radar
+
+**What was done:**
+- A weekly shortlist of potential IBs (trading educators, academies and communities) from YouTube, scored on audience, views, recent activity and education focus.
+- Channels with red flags (promised returns, account management, signals, prop-challenge passing) are left off the shortlist and listed separately.
+- The radar searches only the countries you clear with `!radar countries`.
+- You approve, reject (with a reason), or mark contacted or partner. `!radar draft 12` writes a first message that includes the risk warning. DONNA never contacts anyone.
+
+**Needs from you:** clear your countries, and add a free YouTube Data API key (`vertex1-connect radar`).
+
 ## 2026-10-28 · IB control
 
 **What was done:**
