@@ -750,3 +750,37 @@ def test_str_pack_gathers_evidence_deadline_and_records_the_decision(tmp_path, m
     assert co.get_case(cid)["status"] == "escalated"
     assert "STR filed on" in str_pack.text(cid) and str_pack.decision(cid)["detail"] == "FIC-2026-0042"
     assert str_pack.command("!str", "999") == "no case #999"
+
+
+def test_ib_control_reconciles_rebates_and_flags_abuse(tmp_path, monkeypatch):
+    from jarvis.agents import backoffice as bo, compliance as co, ib
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("JARVIS_INBOX_DIR", str(tmp_path / "inbox"))
+    box = tmp_path / "inbox"
+    box.mkdir()
+    # account activity: asof, account, equity, deposit, withdrawal, closed, deals, rejected, volume, swaps, commission, net_pnl
+    with bo._db() as c:
+        c.executemany("INSERT INTO bo_activity VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [
+            ("2026-10-27", "7001", 50, 500, 0, 0, 400, 0, 9e6, 0, -40, 2),        # farms: 400 deals, ~0 P&L
+            ("2026-10-27", "7002", 0, 1000, 990, 0, 0, 0, 0, 0, 0, 0),            # in and out, no trades
+            ("2026-10-27", "7003", 0, 1000, 995, 0, 0, 0, 0, 0, 0, 0),
+            ("2026-10-27", "8001", 900, 1000, 0, 0, 20, 0, 1e5, -5, -10, -100),   # an honest losing client
+        ])
+    (box / "2026-10-28_IB commission report.csv").write_text(
+        "IB ID,Client Account,Lots,IB Commission\nIB55,7001,90,450\nIB55,7002,0,0\nIB55,7003,0,0\nIB77,8001,2,10\n")
+    assert bo.BackOfficeAgent().ingest()["files"][0]["kind"] == "ib"
+    s = {x["ib"]: x for x in ib.summary()["ibs"]}
+    rules = {f["rule"] for f in s["IB55"]["flags"]}
+    assert {"IB_REBATE_ABOVE_REVENUE", "IB_REBATE_FARMING", "IB_IN_OUT_NO_TRADE"} <= rules
+    assert s["IB77"]["flags"] == [] and s["IB77"]["revenue"] == 115 and s["IB77"]["rebate_pct"] == 8.7
+    ib.set_rate("IB77", 4.0)                                                   # 2 lots x 4 = 8, paid 10
+    assert [f["rule"] for f in ib.summary()["ibs"][1]["flags"]] == ["IB_RATE_MISMATCH"]
+    co.scan()
+    assert {c["rule"] for c in co.list_cases() if c["category"] == "IB"} >= {"IB_REBATE_FARMING", "IB_RATE_MISMATCH"}
+    co.scan()                                                                   # same month: no duplicate cases
+    assert sum(c["rule"] == "IB_REBATE_FARMING" for c in co.list_cases()) == 1
+    kri = {k["kri"]: k for k in co.kris()}
+    assert kri["IBs paid more than their clients earned"]["value"] == "1"
+    assert "IB55" in ib.command("!ib", "") and "!! IB_REBATE_FARMING" in ib.command("!ib", "IB55")
+    assert "per lot" in ib.command("!ib", "rate IB55 5")

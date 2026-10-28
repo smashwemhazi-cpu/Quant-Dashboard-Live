@@ -5,6 +5,20 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · IB control
+
+**What was done:**
+- The CRM's IB / partner commission report is now recognised and joined to account activity.
+- `!ib` shows each IB's clients, deposits, lots, rebates paid and the broker's estimated earnings from them.
+- Six abuse checks become compliance cases automatically: paid more than earned, rate mismatch, rebate farming, self-referral, in-and-out with no trading, and identical deposits.
+- A new risk indicator counts IBs paid more than their clients earned.
+- The daily compliance report has an IB section.
+
+**Needs from you:**
+- Schedule the IB commission report to your email.
+- Set each IB's agreed rate with `!ib rate IB123 6.5` so payments can be checked against it.
+- Send me the report's column names, not its contents, if DONNA doesn't recognise it.
+
 ## 2026-10-28 · STR evidence pack and a better Console
 
 **What was done**

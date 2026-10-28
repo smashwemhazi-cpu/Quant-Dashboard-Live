@@ -202,6 +202,9 @@ def scan() -> dict[str, Any]:
     if "error" not in k and "error" not in t and k["kpis"].get("Volume", 1) == 0 and t["volume"] > 0:
         add("DATA", "DATA_VOLUME_SYNC", "low", "CRM", f"CRM reports volume 0 while cTrader shows "
             f"${t['volume']:,.0f} - management information is understated")
+    from jarvis.agents import ib
+
+    ib.scan_flags(add)
     total = sum(len(v) for v in new.values())
     if total:
         audit.log("compliance", "scan", {"new_cases": new})
@@ -232,6 +235,11 @@ def kris() -> list[dict[str, Any]]:
     open_complaints = complaints.active()
     kri("Complaints not acknowledged in time", sum(r["ack_overdue"] for r in open_complaints), 1, 3)
     kri("Complaints past final-answer date", sum(r["overdue"] for r in open_complaints), 1, 2)
+    from jarvis.agents import ib
+
+    s = ib.summary()
+    kri("IBs paid more than their clients earned", None if "error" in s else
+        sum(any(f["rule"] == "IB_REBATE_ABOVE_REVENUE" for f in x["flags"]) for x in s["ibs"]), 1, 2)
     q = bo.kyc_summary()
     kri("KYC docs pending > 2 days", None if "error" in q else len(q["pending_over_2d"]), 3, 10, source="docs")
     kri("Oldest pending KYC (days)", None if "error" in q else q["oldest_pending_days"], 3, 14, source="docs")
@@ -367,6 +375,10 @@ def report_text() -> str:
     from jarvis.agents import complaints
 
     L += [""] + complaints.report_lines()
+    from jarvis.agents import ib
+
+    if "error" not in ib.summary():
+        L += [""] + ib.report_lines()
     obs = list_obligations(days=14)
     L += ["", "REGULATORY CALENDAR (next 14 days)"]
     L += [f" #{o['id']} {o['due']}  {o['name']}" + ("  !! OVERDUE" if o["due"] < today else "") for o in obs] or \

@@ -102,6 +102,10 @@ def detect(d: pd.DataFrame) -> str | None:
         return "streams"
     if "value" in cols and any(c.startswith("caption") for c in cols):
         return "kpi"
+    from jarvis.agents import ib
+
+    if ib.columns(d):
+        return "ib"
     return None
 
 
@@ -171,7 +175,7 @@ def _stream_group(path: Path) -> str:
 
 
 def ingest_file(path: Path) -> dict[str, Any]:
-    from jarvis.agents import personal  # personal journal + cBot logs share this inbox
+    from jarvis.agents import ib as ib_agent, personal  # personal journal + cBot logs share this inbox
 
     if personal.is_bot_log(path):
         who, n = personal.store_bot_log(path)
@@ -193,7 +197,8 @@ def ingest_file(path: Path) -> dict[str, Any]:
     with _db() as c:
         n = {"eod": lambda: _store_eod(c, d, asof), "kpi": lambda: _store_kpi(c, d, asof),
              "docs": lambda: _store_docs(c, d), "activity": lambda: _store_activity(c, d, asof),
-             "streams": lambda: _store_streams(c, d, asof, _stream_group(path))}[kind]()
+             "streams": lambda: _store_streams(c, d, asof, _stream_group(path)),
+             "ib": lambda: ib_agent.store(c, d, asof)}[kind]()
         c.execute("INSERT OR REPLACE INTO bo_meta VALUES (?, ?)", (f"last_{kind}", asof))
     return {"file": path.name, "status": "STORED", "kind": kind, "asof": asof, "rows": n}
 
