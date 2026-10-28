@@ -222,6 +222,53 @@ def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
     return {"processed": done}
 
 
+DRAFT_PROMPT = """You draft email replies for SH, Compliance & Risk Officer at Vertex 1 Brokers (a retail FX/CFD broker).
+Write only the reply body, ready to paste: plain text, no subject line, no markdown, signed "Kind regards,\nSH".
+- Short, polite and professional. Answer what was asked; if something must be checked first, say it will be confirmed.
+- Never promise payments, withdrawals, bonuses, refunds or deadlines that the email does not already confirm.
+- Never give investment advice or trading recommendations.
+- Numbers, addresses and phone numbers were masked as [number]/[email]/[phone]; keep the placeholders, never guess them.
+- Follow SH's note if there is one."""
+
+
+def draft_reply(task_id: int, note: str = "", client: Any = None) -> dict[str, Any]:
+    """Write a reply to the email behind a task and save it in Gmail Drafts. Never sends."""
+    with _db() as c:
+        t = c.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if not t:
+        return {"error": f"no task #{task_id}"}
+    if t["source"] != "email" or not t["source_ref"]:
+        return {"error": f"task #{task_id} didn't come from an email, so there is nothing to reply to"}
+    if not google_bridge.configured():
+        return {"error": "drafts need the Google bridge (vertex1-connect email, questions 6a and 6b)"}
+    if client is None and not os.getenv("ANTHROPIC_API_KEY"):
+        return {"error": "ANTHROPIC_API_KEY not set - drafting needs the Claude API"}
+    m = google_bridge.call("message", id=t["source_ref"])
+    if "error" in m:
+        return {"error": m["error"] if m["error"] != "unknown action" else "the Google bridge script is an older copy"}
+    if "body" not in m:
+        return {"error": "the Google bridge script is an older copy - paste the new google-bridge.gs and deploy a new version"}
+    import anthropic
+
+    client = client or anthropic.Anthropic()
+    content = (f"Task: {t['title']}\nSH's note: {note or '(none)'}\n\nEmail from someone at "
+               f"{parseaddr(str(m.get('from', '')))[1].rpartition('@')[2] or 'unknown'}\nSubject: {mask(str(m.get('subject', '')))}"
+               f"\n\n{mask(str(m.get('body', '')))[:MAX_BODY_CHARS]}")
+    resp = client.beta.messages.create(
+        model=TRIAGE_MODEL, max_tokens=2000, system=DRAFT_PROMPT, messages=[{"role": "user", "content": content}],
+        output_config={"effort": "low"}, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
+    if resp.stop_reason == "refusal":
+        return {"error": "the model declined to draft this one - reply manually"}
+    text = next((b.text for b in resp.content if b.type == "text"), "").strip()
+    if not text:
+        return {"error": "the draft came back empty - try again"}
+    d = google_bridge.call("draft", body={"id": t["source_ref"], "text": text})
+    if "error" in d:
+        return {"error": d["error"] if d["error"] != "unknown action" else "the Google bridge script is an older copy"}
+    audit.log("assistant", "draft_reply", {"task": task_id, "chars": len(text)})
+    return {"draft": text, "saved": True}
+
+
 def inbox_status(hours: int = 24) -> dict[str, Any]:
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     with _db() as c:

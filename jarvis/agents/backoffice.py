@@ -198,6 +198,90 @@ def ingest_file(path: Path) -> dict[str, Any]:
     return {"file": path.name, "status": "STORED", "kind": kind, "asof": asof, "rows": n}
 
 
+def recognised(path: Path) -> str | None:
+    """What ingest_file would store this file as, without storing it; None = not a report DONNA knows."""
+    from jarvis.agents import growth, personal
+
+    if personal.is_bot_log(path):
+        return "botlog"
+    if path.suffix.lower() not in (".csv", ".xlsx", ".xls"):
+        return None
+    d = _read(path)
+    if personal.is_statement(d):
+        return "statement"
+    return detect(d) or ("leads" if growth.lead_columns(d) else None)
+
+
+# ------------------------------------------------------------------ reports by email (Google bridge)
+MAIL_REPORT_DAYS = int(os.getenv("JARVIS_REPORT_MAIL_DAYS", "3"))
+BRIDGE_OUTDATED = ("the Google bridge script is an older copy without report reading: paste the new "
+                   "google-bridge.gs at script.google.com, save, then Deploy > Manage deployments > pencil > "
+                   "Version: New version > Deploy")
+
+
+def _report_senders() -> set[str]:
+    return {x.strip().lower() for x in os.getenv("JARVIS_REPORT_SENDERS", "").split(",") if x.strip()}
+
+
+def fetch_mail_reports(days: int = MAIL_REPORT_DAYS) -> dict[str, Any]:
+    """Save report attachments from the mailbox into the inbox. Only files DONNA recognises are kept;
+    anything else is deleted at once, so stray client spreadsheets never stay on the server."""
+    import base64
+    from email.utils import parseaddr
+
+    from jarvis.adapters import google_bridge
+
+    if not google_bridge.configured():
+        return {"error": "NO DATA - Google bridge not set up"}
+    r = google_bridge.call("reports", days=days, max=30)
+    if "error" in r:
+        return {"error": r["error"]}
+    if "attachments" not in r:
+        return {"error": BRIDGE_OUTDATED}
+    box = inbox()
+    box.mkdir(parents=True, exist_ok=True)
+    senders = _report_senders()
+    done: list[dict[str, Any]] = []
+    with _db() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS bo_mail (att_id TEXT PRIMARY KEY, name TEXT, sender TEXT, "
+                  "received TEXT, kind TEXT, taken_at TEXT)")
+        for a in r["attachments"]:
+            att_id, name = str(a.get("id", "")), str(a.get("name", ""))
+            if not att_id or c.execute("SELECT 1 FROM bo_mail WHERE att_id = ?", (att_id,)).fetchone():
+                continue
+            sender = parseaddr(str(a.get("from", "")))[1].lower()
+            received = str(a.get("date", ""))[:10]
+            kind = None
+            if senders and sender not in senders and sender.rpartition("@")[2] not in senders:
+                kind = "skipped: sender not in JARVIS_REPORT_SENDERS"
+            else:
+                f = google_bridge.call("attachment", id=att_id)
+                if "error" in f:
+                    done.append({"file": name, "status": "ERROR", "error": f["error"]})
+                    continue  # not recorded - tried again next run
+                safe = re.sub(r"[^A-Za-z0-9._ -]", "_", name)[-120:] or "report.csv"
+                if not re.search(r"\d{4}-\d{2}-\d{2}", safe) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", received):
+                    safe = f"{received}_{safe}"  # the email date becomes the report date
+                path = box / safe
+                try:
+                    path.write_bytes(base64.b64decode(f.get("data", "")))
+                    kind = recognised(path)
+                except Exception as e:  # a corrupt attachment must not stop the others
+                    kind = None
+                    done.append({"file": name, "status": "ERROR", "error": f"{type(e).__name__}: {e}"})
+                if kind is None:
+                    path.unlink(missing_ok=True)
+                    kind = "not a report - deleted"
+                else:
+                    done.append({"file": safe, "status": "SAVED", "kind": kind})
+            c.execute("INSERT OR REPLACE INTO bo_mail VALUES (?,?,?,?,?,?)",
+                      (att_id, name[:200], sender.rpartition("@")[2], received, kind,
+                       datetime.now(timezone.utc).isoformat(timespec="seconds")))
+    if done:
+        audit.log("backoffice", "mail_reports", {"files": done})
+    return {"files": done}
+
+
 # ------------------------------------------------------------------ analysis
 def book_summary() -> dict[str, Any]:
     with _db() as c:

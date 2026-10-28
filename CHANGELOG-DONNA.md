@@ -5,6 +5,19 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-10-28 · Reports by email, the DONNA Console, and draft replies
+
+**What was done**
+- **Reports read straight from your email.** Every 30 minutes DONNA picks up cTrader and Syntellicore report attachments, loads the ones she recognises, and runs the compliance checks straight away. Anything else is deleted at once. The back-office numbers stop going STALE once the reports are scheduled to your inbox.
+- **DONNA Console.** Double-click `DONNA-Console.bat` to open her animated orb, which breathes while idle, ripples while listening, swirls while thinking and pulses while speaking.
+  - You can talk to her (hold the button or the space bar), and she answers out loud.
+  - Live panels show today's calendar, urgent emails, open tasks and the risk indicators.
+  - It is reachable only through your private SSH link to the server, never from the internet.
+- **Draft replies.** `!draft 12 <note>` writes a reply to the email behind task 12 and saves it in your Gmail Drafts. DONNA never sends anything.
+- **Bridge script version 2** adds both of these. Paste it once more (DONNA.md, "Updating the bridge script"). The setup check warns you while the old copy is still in place.
+
+**Needs from you:** paste the new bridge script, schedule the reports to your email, and add Claude API credit (for talking, triage and drafts).
+
 ## 2026-10-28 · Email and calendar with no password: the Google bridge
 
 **What was done**

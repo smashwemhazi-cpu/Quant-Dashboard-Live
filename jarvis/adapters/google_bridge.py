@@ -6,6 +6,7 @@ JARVIS_GOOGLE_BRIDGE_URL=https://script.google.com/macros/s/.../exec   JARVIS_GO
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Any
@@ -17,13 +18,18 @@ def configured() -> bool:
     return bool(os.getenv("JARVIS_GOOGLE_BRIDGE_URL", "").strip() and os.getenv("JARVIS_GOOGLE_BRIDGE_KEY", "").strip())
 
 
-def call(action: str = "ping", **params: Any) -> dict[str, Any]:
-    """One request to the bridge. Returns its JSON, or {"error": ...} - never raises."""
+def call(action: str = "ping", body: dict[str, Any] | None = None, **params: Any) -> dict[str, Any]:
+    """One request to the bridge (a POST when there is a body). Returns its JSON, or {"error": ...} - never raises."""
     if not configured():
         return {"error": "NO DATA - Google bridge not set up (JARVIS_GOOGLE_BRIDGE_URL / _KEY)"}
+    url = os.getenv("JARVIS_GOOGLE_BRIDGE_URL", "").strip().strip("\"'")
+    query = {"action": action, "key": os.getenv("JARVIS_GOOGLE_BRIDGE_KEY", "").strip(), **params}
     try:
-        r = requests.get(os.getenv("JARVIS_GOOGLE_BRIDGE_URL", "").strip().strip("\"'"), timeout=60,
-                         params={"action": action, "key": os.getenv("JARVIS_GOOGLE_BRIDGE_KEY", "").strip(), **params})
+        if body is None:
+            r = requests.get(url, timeout=60, params=query)
+        else:  # Google answers a POST with a redirect to the result, which requests follows as a GET
+            r = requests.post(url, timeout=60, params=query, data=json.dumps(body),
+                              headers={"Content-Type": "text/plain"})
         r.raise_for_status()
     except requests.RequestException as e:
         return {"error": f"Google bridge unreachable ({type(e).__name__})"}

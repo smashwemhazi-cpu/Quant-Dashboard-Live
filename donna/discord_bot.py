@@ -44,6 +44,7 @@ HELP = ("D.O.N.N.A commands:\n"
         "!tasks                     open tasks\n"
         "!done 12 13                mark tasks done\n"
         "!add <title> | YYYY-MM-DD | high/medium/low\n"
+        "!draft 12 <note>           reply to task 12's email, saved in Gmail Drafts (never sent)\n"
         "!today                     my-day brief\n"
         "!ask <question>            e.g. !ask which clients are at risk this week?\n"
         "\nCOMPLIANCE & RISK\n"
@@ -270,6 +271,14 @@ def handle(text: str, channel: str = "") -> str | None:
         prio = next((p.lower() for p in parts[1:] if p.lower() in ("high", "medium", "low")), "medium")
         tid = assistant.add_task(parts[0], due, prio, source="discord")
         return f"Added #{tid}: {parts[0]}" + (f" (due {due})" if due else "") + f" [{prio}]"
+    if cmd == "!draft":
+        m = re.match(r"\s*#?(\d+)\s*(.*)", rest, re.S)
+        if not m:
+            return "Usage: !draft 12 <optional note, e.g. 'say we need 2 days'>"
+        r = assistant.draft_reply(int(m.group(1)), m.group(2).strip())
+        if "error" in r:
+            return f"No draft: {r['error']}"
+        return f"Draft saved in your Gmail Drafts - check it and press send yourself:\n\n{r['draft']}"
     if cmd == "!today":
         return assistant.my_day_text()
     if cmd == "!ask":

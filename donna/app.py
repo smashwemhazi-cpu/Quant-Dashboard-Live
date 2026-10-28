@@ -39,6 +39,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from donna import channels
+from donna.console import router as console_router
 
 log = logging.getLogger("donna")
 
@@ -140,6 +141,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="D.O.N.N.A. Core", version="4.0", lifespan=lifespan)
+app.include_router(console_router)  # the DONNA Console page - answers through the SSH tunnel only
 
 
 def audit(actor: str, event: str, detail: dict[str, Any]) -> None:

@@ -88,6 +88,28 @@ def job_backoffice_ingest() -> None:
             notify("lead_tasks", growth.lead_tasks(s))
 
 
+def job_report_mail() -> None:
+    """Reports emailed by cTrader / Syntellicore -> inbox -> the normal ingest, straight away."""
+    from jarvis.agents import backoffice
+
+    r = backoffice.fetch_mail_reports()
+    if "error" in r:
+        if r["error"].startswith("NO DATA"):
+            return
+        raise RuntimeError(r["error"])
+    saved = [f for f in r["files"] if f["status"] == "SAVED"]
+    if saved:
+        notify("report_mail", saved)
+        job_backoffice_ingest()
+        from jarvis.agents.personal import PERSONAL_TARGETS
+
+        if PERSONAL_TARGETS:
+            from donna.channels import broadcast
+
+            broadcast("Picked up from your email and loaded:\n" + "\n".join(f" {f['kind']}: {f['file']}" for f in saved),
+                      PERSONAL_TARGETS, title="D.O.N.N.A reports")
+
+
 def job_compliance_report() -> None:
     notify("compliance_report", agents()["compliance"].daily_report(send=True).get("delivery"))
 
@@ -199,6 +221,7 @@ def job_evening() -> None:
 JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("execution", 15, None, job_execution),
     ("backoffice_ingest", 15, None, job_backoffice_ingest),
+    ("report_mail", 30, None, job_report_mail),                                            # emailed reports
     ("lp_slippage", 60, None, job_lp_slippage),
     ("desk_report", 60 * 24, 6, job_desk_report),
     ("retention", 60 * 6, None, job_retention),
