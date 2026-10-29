@@ -1,49 +1,35 @@
-# T1 on Dukascopy XAUUSD ticks — NOT RUN (data source blocked)
+# T1 trend scalper on Dukascopy XAUUSD data (Jan 2025 – 29 Oct 2026)
 
-**Status (2026-10-29): no results.** The test could not run because the environment can't download the data.
+The cloud environment could not reach `datafeed.dukascopy.com`, so the data was downloaded on the user's PC with
+`npx dukascopy-node -i xauusd -from 2025-01-01 -to 2026-10-29 -t m1 -p bid|ask -f csv` and uploaded.
 
-**Second attempt (2026-10-29, fresh session): still blocked.** The allow-list change did not take effect in a
-fresh session. Same check, same result:
+- Data: 1-minute bars, bid and ask, joined by minute. 155,218 stale flat minutes (closed market) were dropped.
+- Spread is measured as ask close minus bid close:
+  - median 5.8 pips over 07:00–16:30 UTC (6.0 in 2026);
+  - 6.6–6.9 pips in Asian hours;
+  - p90 7.8–8.3 pips;
+  - 11–13 pips around 22:00–23:00.
+- T1 rules and the simulator are unchanged (`trendscalp.py`, `scalp.py`). Within each minute the simulator still assumes the stop is hit before the target.
 
-```
-$ curl -sS -o /dev/null -w "%{http_code}" https://datafeed.dukascopy.com/datafeed/XAUUSD/2026/08/20/10h_ticks.bi5
-curl: (56) CONNECT tunnel failed, response 403
-000
-```
+## Results at 0.01 lot ($1 per 10 pips)
 
-Proxy log: `connect_rejected` — "gateway answered 403 to CONNECT (policy denial or upstream failure)",
-host `datafeed.dukascopy.com:443`. Per the plan, the run stopped at step 1: no smoke test, no fetch, no simulation.
+| Spread | SL / TP pips | Trades | Win % | Exp. R | PF | Net | 2025 PF | 2026 PF (trades, net) |
+|---|---|---|---|---|---|---|---|---|
+| 3.0 | 60 / 90 | 213 | 35.2 | −0.19 | 0.73 | −$246 | 0.85 | 0.43 (54, −$153) |
+| 3.0 | 60 / 120 | 192 | 30.2 | −0.18 | 0.76 | −$207 | 0.91 | 0.44 (51, −$150) |
+| 3.0 | 100 / 150 | 250 | 37.6 | −0.13 | 0.80 | −$326 | 1.09 | **0.63 (141, −$380)** |
+| 3.0 | 100 / 200 | 227 | 33.5 | −0.10 | 0.85 | −$233 | 1.19 | **0.67 (131, −$338)** |
+| 5.8 | 60 / 90 | 216 | 33.8 | −0.23 | 0.68 | −$299 | 0.78 | 0.43 |
+| 5.8 | 60 / 120 | 197 | 28.9 | −0.22 | 0.71 | −$260 | 0.83 | 0.44 |
+| 5.8 | 100 / 150 | 250 | 36.0 | −0.16 | 0.76 | −$397 | 0.97 | 0.63 |
+| 5.8 | 100 / 200 | 226 | 31.9 | −0.14 | 0.80 | −$312 | 1.11 | 0.62 |
 
-## What happened (first attempt)
-Step 1 network check:
+**2026 by month** (SL100/TP150): Jan −$77, Feb −$55, Mar −$27, Apr +$22, May −$67, Jun −$46, Jul −$74, Aug −$52, Sep −$40, Oct +$37. That is 8 losing months out of 10.
 
-```
-$ curl -sS -o /dev/null -w "%{http_code}" https://datafeed.dukascopy.com/datafeed/XAUUSD/2026/08/20/10h_ticks.bi5
-curl: (56) CONNECT tunnel failed, response 403
-000
-```
+**By side** (SL100/TP150): longs PF 0.78–0.84, shorts PF 0.72. Shorts lose too, even though gold fell 25% from March.
 
-The session's egress proxy refused the CONNECT to `datafeed.dukascopy.com:443` (`connect_rejected`, policy
-denial). `dukascopy-node` downloads from the same host, so no tick data could be fetched. Nothing was
-downloaded, no bars were built, and T1 was not simulated. **No numbers in this file come from Dukascopy data.**
-
-## What's needed
-Under the cloud environment's Network access settings, add **`datafeed.dukascopy.com`** (or `*.dukascopy.com`)
-to **Allowed domains**, or pick a broader access level. Steps:
-https://code.claude.com/docs/en/cloud-environments#network-access
-
-## Ready to run once access is allowed
-`dukas_ticks.py` (this folder) carries out the pre-registered plan. T1's rules and the cost model are unchanged.
-
-```
-python dukas_ticks.py fetch <workdir> 2025-01 2026-10   # month by month: ticks -> M1 BID OHLC + median spread (pips), raw CSV deleted
-python dukas_ticks.py check <workdir>                   # rows per month, first/last, price range, spread p50/p90 by UTC hour
-python dukas_ticks.py run   <workdir>                   # T1 SL60/100 x RR1.5/2.0 at COST spread 0.30, then SL100 at measured 07:00-16:30 median spread
-```
-
-Keep `<workdir>` outside the repo (the bar and tick data must not be committed). The tick-to-M1 conversion has
-only been checked on a hand-made 3-tick CSV, not yet on real Dukascopy output.
-
-## Reference: the earlier bar-data results (unchanged)
-On minute bars (see README): SL100/TP150 had PF 1.10 overall and PF 0.74 in 2026. Until the tick test runs,
-treat T1 as **unvalidated**. The 2026 bar-data result is a loss, and nothing here changes that.
+## Verdict
+- This confirms the minute-bar result (2026 PF 0.74), and the real data is worse (PF 0.63).
+- On a $388 account at 0.01 lot, the 2026 loss of about $380 would have wiped out the account.
+- Only in 2025, when gold trended steadily up, did the 100-pip versions break even or make a little money.
+- **T1 must not trade live.** Fixed pip stops that the account can afford sit inside gold's normal 2026 hourly range, which is 150–330 pips.
