@@ -2,7 +2,19 @@
 
 **Status (2026-10-29): no results.** The test could not run because the environment can't download the data.
 
-## What happened
+**Second attempt (2026-10-29, fresh session): still blocked.** The allow-list change did not take effect in a
+fresh session. Same check, same result:
+
+```
+$ curl -sS -o /dev/null -w "%{http_code}" https://datafeed.dukascopy.com/datafeed/XAUUSD/2026/08/20/10h_ticks.bi5
+curl: (56) CONNECT tunnel failed, response 403
+000
+```
+
+Proxy log: `connect_rejected` — "gateway answered 403 to CONNECT (policy denial or upstream failure)",
+host `datafeed.dukascopy.com:443`. Per the plan, the run stopped at step 1: no smoke test, no fetch, no simulation.
+
+## What happened (first attempt)
 Step 1 network check:
 
 ```
