@@ -433,3 +433,16 @@ Leverage 1:200 sets margin, not risk. At 1:200, 0.01 lot of gold (about $4,000) 
 PSR is the probabilistic Sharpe ratio: the estimated probability that the strategy's true Sharpe is above zero. The deflated version also accounts for how many variants were tried before picking this one.
 
 The day-trade rule is likely the luckiest of the nine slices examined, so it stays on demo only. Asian 16j has the strongest single-sample evidence, but it still needs out-of-sample data.
+
+## Build 16n: day trading plus the Asian session in one bot
+- **New settings** (group "Profile"): `16n Asia Session Start/End` (default 01:00–05:00 UTC; set both to the same value to disable) and `16n Asia: Use Range Fade` (default on).
+- **The Asian window** runs the same ladder engine. Flat-regime fade ladders are allowed there, as in 16j.
+- **The day sessions** keep the 16m profile: pullbacks only, RR cap 2.5.
+- **Trade cap and losing streak** (3 trades, 2 losses) are counted separately for the Asian block and the day block, so Asian losses do not stop London/NY.
+- **The daily cash loss cap** (6%) stays per calendar day.
+- **Not carried over from 16j:** the weekly cap and the equity-curve filter. The 16m profile keeps them off.
+- **Settings file:** `breakout-16n-day-asia-388.cbotset`.
+- **Expected log header:**
+  - `BUILD MLB-2026-10-16n (day-trade profile = True, asia 0100-0500)`
+  - `CONFIG | asia session=on 0100-0500 UTC | asia fade=True | day-session fade=False ...`
+- **Evidence status:** neither half is proven. On Dukascopy 2025–26 data the day part showed no edge in 2026, and the Asian replica is low-confidence (see `ctrader/research/daytrade-16m`). Run it on demo before live.

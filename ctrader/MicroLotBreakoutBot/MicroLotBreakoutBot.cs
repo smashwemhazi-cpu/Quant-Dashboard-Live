@@ -257,8 +257,19 @@ namespace cAlgo.Robots
         [Parameter("16m Day-Trade Profile (pullback only, RR cap 2.5, no weekly/equity filters)", Group = "Profile", DefaultValue = true)]
         public bool DayTradeProfile { get; set; }
 
+        // 16n: an Asian window runs on the same engine. Its own trade cap and losing-streak count start at the
+        // window's open, so Asian losses do not block London/NY (the daily cash loss cap stays per calendar day).
+        [Parameter("16n Asia Session Start (UTC hhmm, = End to disable)", Group = "Profile", DefaultValue = 100, MinValue = 0, MaxValue = 2359)]
+        public int AsiaStart { get; set; }
+
+        [Parameter("16n Asia Session End (UTC hhmm)", Group = "Profile", DefaultValue = 500, MinValue = 0, MaxValue = 2359)]
+        public int AsiaEnd { get; set; }
+
+        [Parameter("16n Asia: Use Range Fade (flat regime)", Group = "Profile", DefaultValue = true)]
+        public bool AsiaUseFade { get; set; }
+
         // The profile overrides saved values, so an old .cbotset cannot switch fade back on by accident.
-        private bool EffUseRangeFade { get { return !DayTradeProfile && UseRangeFade; } }
+        private bool EffUseRangeFade { get { return InAsia(Server.Time) ? AsiaUseFade : !DayTradeProfile && UseRangeFade; } }
         private double EffMaxOrderRewardRisk { get { return DayTradeProfile ? 2.5 : MaxOrderRewardRisk; } }
         private double EffMaxWeeklyLossPercent { get { return DayTradeProfile ? 0 : MaxWeeklyLossPercent; } }
         private bool EffUseEquityCurveFilter { get { return !DayTradeProfile && UseEquityCurveFilter; } }
@@ -415,7 +426,7 @@ namespace cAlgo.Robots
             PendingOrders.Filled += OnOrderFilled;
             Positions.Closed += OnPositionClosed;
 
-            Print("BUILD MLB-2026-10-16m (day-trade profile = {0})", DayTradeProfile);
+            Print("BUILD MLB-2026-10-16n (day-trade profile = {0}, asia {1:D4}-{2:D4})", DayTradeProfile, AsiaStart, AsiaEnd);
             Print("Started on {0} {1}. Volume={2} units ({3} lots). PipSize={4} PipValue={5}",
                 SymbolName, TimeFrame, _volume, Symbol.VolumeInUnitsToQuantity(_volume), Symbol.PipSize, Symbol.PipValue);
 
@@ -439,6 +450,8 @@ namespace cAlgo.Robots
                 EntryMode, LadderOrders, LadderDepthAtr, LadderStopAtr, LadderMinStopAtr, LadderExpiryBars, UseTrendLadder);
             Print("CONFIG | sessions={0:D4}-{1:D4},{2:D4}-{3:D4} UTC | breakout={4} fade={5} | ATR={6} boxMaxATR={7} | maxSpreadPips={8}",
                 Session1Start, Session1End, Session2Start, Session2End, UseBreakout, EffUseRangeFade, AtrPeriod, BoxMaxAtr, MaxSpreadPips);
+            Print("CONFIG | asia session={0} {1:D4}-{2:D4} UTC | asia fade={3} | day-session fade={4} | trade cap and loss streak counted per block",
+                AsiaEnabled() ? "on" : "off", AsiaStart, AsiaEnd, AsiaUseFade, !DayTradeProfile && UseRangeFade);
             Print("CONFIG | max order reward:risk = {0} (0 = off) | max weekly loss = {1}% (0 = off)", EffMaxOrderRewardRisk, EffMaxWeeklyLossPercent);
             Print("CONFIG | ladder breakeven (average entry) = {0} | breakeven at {1}R", LadderBreakeven, BreakevenR);
             Print("CONFIG | equity curve filter = {0} (average of last {1} trades{2})", EffUseEquityCurveFilter, EquityCurveTrades,
@@ -952,9 +965,12 @@ namespace cAlgo.Robots
             if (InNewsWindow(now)) { reason = "news window"; return false; }
 
             DateTime dayStart = now.Date;
+            // Trade cap and losing streak count per block: the Asian window, or the day sessions after it.
+            DateTime blockStart = InAsia(now) ? dayStart.AddMinutes(Minutes(AsiaStart))
+                : (AsiaEnabled() ? dayStart.AddMinutes(Minutes(AsiaEnd)) : dayStart);
             // A ladder's fills share one comment (setup id) and count as ONE trade.
-            int tradesToday = OurHistory().Where(t => t.EntryTime >= dayStart).Select(SetupKey)
-                .Concat(_vClosed.Where(v => v.EntryTime >= dayStart).Select(v => v.Setup)).Distinct().Count();
+            int tradesToday = OurHistory().Where(t => t.EntryTime >= blockStart).Select(SetupKey)
+                .Concat(_vClosed.Where(v => v.EntryTime >= blockStart).Select(v => v.Setup)).Distinct().Count();
             if (tradesToday >= MaxTradesPerDay) { reason = "daily trade cap"; return false; }
 
             var closedToday = OurHistory().Where(t => t.ClosingTime >= dayStart)
@@ -977,8 +993,8 @@ namespace cAlgo.Robots
             }
 
             // Paper trades count toward the losing streak (signal quality), not toward cash limits.
-            var streakList = closedToday.Select(x => new { x.Net, x.Closed })
-                .Concat(_vClosed.Where(v => v.CloseTime >= dayStart).GroupBy(v => v.Setup)
+            var streakList = closedToday.Where(x => x.Closed >= blockStart).Select(x => new { x.Net, x.Closed })
+                .Concat(_vClosed.Where(v => v.CloseTime >= blockStart).GroupBy(v => v.Setup)
                     .Select(g => new { Net = g.Sum(v => v.Net), Closed = g.Max(v => v.CloseTime) }))
                 .OrderByDescending(x => x.Closed);
             int streak = 0;
@@ -1559,13 +1575,29 @@ namespace cAlgo.Robots
             if (t.DayOfWeek == DayOfWeek.Saturday || t.DayOfWeek == DayOfWeek.Sunday)
                 return false;
             int m = t.Hour * 60 + t.Minute;
-            return (m >= Minutes(Session1Start) && m < Minutes(Session1End)) ||
+            return InAsia(t) ||
+                   (m >= Minutes(Session1Start) && m < Minutes(Session1End)) ||
                    (m >= Minutes(Session2Start) && m < Minutes(Session2End));
+        }
+
+        private bool AsiaEnabled()
+        {
+            return Minutes(AsiaEnd) > Minutes(AsiaStart);
+        }
+
+        private bool InAsia(DateTime t)
+        {
+            if (!AsiaEnabled() || t.DayOfWeek == DayOfWeek.Saturday || t.DayOfWeek == DayOfWeek.Sunday)
+                return false;
+            int m = t.Hour * 60 + t.Minute;
+            return m >= Minutes(AsiaStart) && m < Minutes(AsiaEnd);
         }
 
         private DateTime CurrentSessionEnd(DateTime t)
         {
             int m = t.Hour * 60 + t.Minute;
+            if (InAsia(t))
+                return t.Date.AddMinutes(Minutes(AsiaEnd));
             if (m >= Minutes(Session1Start) && m < Minutes(Session1End))
                 return t.Date.AddMinutes(Minutes(Session1End));
             if (m >= Minutes(Session2Start) && m < Minutes(Session2End))
