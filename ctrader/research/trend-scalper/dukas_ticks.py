@@ -2,6 +2,7 @@
 median spread (pips, pip = 0.10), append to a pickle, delete the raw CSV, then run T1.
 
 Usage:  python dukas_ticks.py fetch  <workdir> [2025-01 2026-10]
+        python dukas_ticks.py m1     <workdir> <bid_m1.csv> <ask_m1.csv>   (Dukascopy M1 BID+ASK bars instead of ticks)
         python dukas_ticks.py check  <workdir>
         python dukas_ticks.py run    <workdir>
 Needs network access to datafeed.dukascopy.com. Raw ticks and bars stay in <workdir>; never commit them.
@@ -25,6 +26,25 @@ def to_m1(csv_path):
     m = pd.DataFrame({'o': g.bid.first(), 'h': g.bid.max(), 'l': g.bid.min(), 'c': g.bid.last(),
                       'spread_pips': g.spr.median()}).dropna(subset=['o'])
     return m
+
+
+def from_m1(work, bid_csv, ask_csv):
+    """Dukascopy M1 BID and ASK bar CSVs (timestamp ms, open, high, low, close) -> same pickle as fetch.
+    Per-minute spread = mean of the open and close ASK-BID differences (no tick median available).
+    Stale minutes (O=H=L=C = previous close: Sundays, the 21:00 break, holidays) are filled bars with no ticks,
+    which to_m1 would never produce, so they are dropped."""
+    rd = lambda p: pd.read_csv(p).set_index('timestamp')
+    b, a = rd(bid_csv), rd(ask_csv)
+    j = b.join(a, lsuffix='_b', rsuffix='_a', how='inner')
+    spr = ((j.open_a - j.open_b) + (j.close_a - j.close_b)) / 2 / PIP
+    m = pd.DataFrame({'o': j.open_b, 'h': j.high_b, 'l': j.low_b, 'c': j.close_b, 'spread_pips': spr})
+    m.index = pd.to_datetime(m.index, unit='ms', utc=True).tz_convert(None)
+    m = m[(m.o > 0) & (m.spread_pips >= 0)].sort_index()
+    m = m[~m.index.duplicated(keep='last')]
+    stale = (m.o == m.h) & (m.h == m.l) & (m.l == m.c) & (m.o == m.c.shift())
+    m = m[~stale]; print('stale flat minutes dropped', int(stale.sum()))
+    os.makedirs(work, exist_ok=True); m.to_pickle(os.path.join(work, 'dukas_m1.pkl'))
+    print('bid rows', len(b), 'ask rows', len(a), 'joined', len(j), 'kept', len(m))
 
 
 def fetch(work, a='2025-01', b='2026-10', end='2026-10-29'):
@@ -87,4 +107,4 @@ def run(work):
 
 if __name__ == '__main__':
     cmd, work = sys.argv[1], sys.argv[2]
-    {'fetch': lambda: fetch(work, *sys.argv[3:5]), 'check': lambda: check(work), 'run': lambda: run(work)}[cmd]()
+    {'fetch': lambda: fetch(work, *sys.argv[3:5]), 'm1': lambda: from_m1(work, *sys.argv[3:5]), 'check': lambda: check(work), 'run': lambda: run(work)}[cmd]()

@@ -33,3 +33,15 @@ The cloud environment could not reach `datafeed.dukascopy.com`, so the data was 
 - On a $388 account at 0.01 lot, the 2026 loss of about $380 would have wiped out the account.
 - Only in 2025, when gold trended steadily up, did the 100-pip versions break even or make a little money.
 - **T1 must not trade live.** Fixed pip stops that the account can afford sit inside gold's normal 2026 hourly range, which is 150–330 pips.
+
+## Reproduce
+```
+python dukas_ticks.py m1    <workdir> xauusd-m1-bid-2025-01-01-2026-10-29.csv xauusd-m1-ask-2025-01-01-2026-10-29.csv
+python dukas_ticks.py check <workdir>
+python dukas_ticks.py run   <workdir>
+```
+`m1` drops the 155,218 stale flat minutes and writes the same bar file `fetch` would. A rerun on 2026-10-30 matched
+the 3.0-pip rows above exactly (for example SL100/TP150: 250 trades, PF 0.80, 2026 PF 0.63, −$379.50). Note: `run` uses
+the measured 07:00–16:30 median as the spread; here that is ask−bid averaged over the open and close, which also gives 5.8 pips.
+Keeping the stale minutes is wrong: they create fake Sunday D1 bars and flatten ATR. Doing so inflates the results
+(SL100/TP150 PF 0.90, 2026 PF 0.79).
