@@ -446,3 +446,13 @@ The day-trade rule is likely the luckiest of the nine slices examined, so it sta
   - `BUILD MLB-2026-10-16n (day-trade profile = True, asia 0100-0500)`
   - `CONFIG | asia session=on 0100-0500 UTC | asia fade=True | day-session fade=False ...`
 - **Evidence status:** neither half is proven. On Dukascopy 2025–26 data the day part showed no edge in 2026, and the Asian replica is low-confidence (see `ctrader/research/daytrade-16m`). Run it on demo before live.
+
+## 16n live beta (frozen strategy, capped loss)
+`breakout-16n-live-beta.cbotset` is the same strategy as `breakout-16n-day-asia-388`. Only two risk limits change:
+- **Equity floor $340:** the bot flattens and stops after about −$48 from $388.
+- **Daily loss cap 4%.**
+
+Rules fixed before going live (no code or setting changes during the beta):
+- **Early stop at 20 trades:** stop if PF < 0.8.
+- **Verdict at 40 trades:** keep if PF ≥ 1.2 and drawdown ≤ 15%; otherwise retire.
+- **Floor hit:** if the $340 floor is hit first, the beta has failed.
