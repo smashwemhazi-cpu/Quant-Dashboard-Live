@@ -52,3 +52,54 @@ Its `day16m` profile reproduces `sim16m.py` exactly (441 trades, PF 0.84).
 - **Validation is weak:** against the cTrader 16j tick log ($200, 3 Jun – 16 Oct 2026), only 24 of the replica's 57 filled setups match a cTrader setup (same minute and side).
 - **Too sensitive:** reading the H1 regime one bar later at the top of the hour raises matches to 32 of 77, and moves the replica's real-trade PF from 0.33 to 0.93.
 - The day-trading bot's replica matched 78% of fills, so the 16m verdict above stands; the Asian replica cannot be trusted to the same degree.
+
+## 16n live beta on the same data (`simladder.py` profile `day16n`, `beta16n.py`)
+`day16n` mirrors `breakout-16n-live-beta.cbotset`:
+- the 16m day sessions (pullbacks only) plus the Asian window 01:00–05:00 UTC, where fade ladders are allowed;
+- the 3-trade cap and 2-loss streak counted per block (Asia from 01:00, day from 05:00);
+- daily loss 4% per calendar day, 3% risk, commission $7/lot;
+- equity floor $340 (the run stops there).
+
+Check: with the Asian window off it reproduces 16m exactly (441 trades, PF 0.84, −$220.49).
+
+### Full period, $388 start (Jan 2025 – Oct 2026)
+| Spread | Floor | Real trades | Win % | PF | Net | Ends |
+|---|---|---|---|---|---|---|
+| Dukascopy real | $340 | 30 | 23.3 | **0.50** | −$50 | **floor hit in early 2025** |
+| Fixed 3 pips | $340 | 21 | 14.3 | **0.28** | −$52 | **floor hit in early 2025** |
+| Dukascopy real | off | 267 | 27.7 | 0.69 | −$256 | stops trading in 2025 at about $132 |
+| Fixed 3 pips | off | 646 | 30.5 | 0.87 | −$255 | stops trading in Aug 2026 at about $133 |
+
+- With the floor off, the account eventually stops trading. Below about $133, 3% of equity can't cover even one rung at the $4 minimum stop.
+- **By setup type (3 pips, floor off):**
+  - Asian fades lose: 208 trades, PF 0.64, −$223.
+  - Pullbacks are about break-even: 438 trades, PF 0.98, −$32.
+  - The Asian half is what makes 16n worse than 16m.
+- **By side (3 pips, floor off):** longs PF 0.83, shorts PF 0.94.
+- **2026 months (3 pips, floor off):** January and February were small gains, then March–August all lost.
+
+### Rolling start of the beta (pre-registered rules applied, start $388 on the 1st of each month)
+`python beta16n.py <bidask.pkl> <real|0.30> <YYYY-MM-DD>`, 21 starts from Feb 2025 to Oct 2026:
+
+| Outcome | 3-pip spread | Dukascopy spread |
+|---|---|---|
+| **KEEP** (PF ≥ 1.2, DD ≤ 15% at 40 trades) | 3 (Jul, Oct, Nov 2025) | 1 (Sep 2025) |
+| RETIRE at 40 trades | 6 | 6 |
+| STOP at 20 trades (PF < 0.8) | 6 | 5 |
+| **FAIL** ($340 floor hit) | 6 | 9 |
+
+2026 starts at the Dukascopy spread:
+- floor hit: Feb, Mar, Apr, May, Aug;
+- retire: Jan, Jun, Sep, Oct;
+- stop: Jul;
+- keep: none.
+
+### Caveats
+- In the 16m validation, the replica's PF ran about 0.2 below cTrader ticks, because inside each minute it assumes the stop is hit before the target.
+- The Asian replica matched cTrader poorly (see above), so the Asian numbers have low confidence.
+- Even with +0.2 added, 16n is at most break-even in 2026.
+
+### Verdict
+- **On this data the 16n live beta most likely ends at the $340 floor or in retirement.**
+- It passed its own KEEP rule in 1 of 21 monthly starts at the Dukascopy spread, and 3 of 21 at 3 pips. None of those starts was in 2026.
+- **Keep it on demo, not live.**
