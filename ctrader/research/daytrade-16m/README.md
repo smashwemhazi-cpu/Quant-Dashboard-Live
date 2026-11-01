@@ -65,10 +65,10 @@ Check: with the Asian window off it reproduces 16m exactly (441 trades, PF 0.84,
 ### Full period, $388 start (Jan 2025 – Oct 2026)
 | Spread | Floor | Real trades | Win % | PF | Net | Ends |
 |---|---|---|---|---|---|---|
-| Dukascopy real | $340 | 30 | 23.3 | **0.50** | −$50 | **floor hit in early 2025** |
-| Fixed 3 pips | $340 | 21 | 14.3 | **0.28** | −$52 | **floor hit in early 2025** |
-| Dukascopy real | off | 267 | 27.7 | 0.69 | −$256 | stops trading in 2025 at about $132 |
-| Fixed 3 pips | off | 646 | 30.5 | 0.87 | −$255 | stops trading in Aug 2026 at about $133 |
+| Dukascopy real | $340 | 30 | 23.3 | **0.50** | −$50 | **floor hit 11 Feb 2025** |
+| Fixed 3 pips | $340 | 21 | 14.3 | **0.28** | −$52 | **floor hit 3 Feb 2025** |
+| Dukascopy real | off | 267 | 27.7 | 0.69 | −$256 | last trade 15 Dec 2025, at $132 |
+| Fixed 3 pips | off | 646 | 30.5 | 0.87 | −$255 | last trade 17 Aug 2026, at $133 |
 
 - With the floor off, the account eventually stops trading. Below about $133, 3% of equity can't cover even one rung at the $4 minimum stop.
 - **By setup type (3 pips, floor off):**
