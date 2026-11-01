@@ -5,6 +5,9 @@ and the equity-curve filter with paper (shadow) trades, all as in the C# code.
 Profiles:
   asian16j : sessions 01:00-05:00 UTC, fade on, RR cap 2.5, risk 4%, weekly cap 4%, equity filter (10), commission $8/lot
   day16m   : sessions 08:00-11:00 + 14:00-16:30, fade off, RR cap 2.5, risk 3%, no weekly cap, no filter, commission $7/lot
+  day16n   : 16n live beta (breakout-16n-live-beta.cbotset): day16m plus an Asian window 01:00-05:00 UTC with fade
+             allowed only there; trade cap (3) and losing streak (2) counted per block (Asia from 01:00, day from
+             05:00), daily loss 4% per calendar day, equity floor $340 (stops the run)
 
 Usage: python simladder.py <m1_bidask.pkl> <profile> [real|spread_price] [start_equity]
 """
@@ -18,6 +21,8 @@ BASE = dict(atr=14, bb=20, bbsd=2.0, ema=50, slope_bars=5, flat_slope=0.3, depth
 PROFILES = {
     'asian16j': dict(sess=((60, 300),), fade=True, risk_pct=4.0, weekly_pct=4.0, eq_filter=10, comm=0.08),
     'day16m': dict(sess=((480, 660), (840, 990)), fade=False, risk_pct=3.0, weekly_pct=0.0, eq_filter=0, comm=0.07),
+    'day16n': dict(sess=((60, 300), (480, 660), (840, 990)), fade=True, asia=(60, 300), risk_pct=3.0, weekly_pct=0.0,
+                   eq_filter=0, comm=0.07, daily_loss_pct=4.0, eq_floor=340.0),
 }
 
 
@@ -32,7 +37,7 @@ def regime_series(bid, P):
 
 
 def run(m, profile, spread_override=None, equity=388.0, **over):
-    P = dict(BASE, **PROFILES[profile], **over)
+    P = {**BASE, **PROFILES[profile], **over}
     m = m.copy()
     if spread_override is not None:
         for k in 'ohlc':
@@ -95,8 +100,12 @@ def run(m, profile, spread_override=None, equity=388.0, **over):
                 orders = []
             if not pos and not orders and in_sess[j] and not (np.isnan(atr) or np.isnan(md) or np.isnan(rg)):
                 dk = day[j]
-                today = [s for s in setups.values() if s['day'] == dk and s['filled']]
-                done = sorted([s for s in today if s['closed'] is not None], key=lambda s: s['closed'], reverse=True)
+                # 16n: trade cap and losing streak count per block (the Asian window, or the day sessions after it)
+                asia = P.get('asia'); in_asia = bool(asia) and asia[0] <= mins[j] < asia[1]
+                blk = dk + np.timedelta64(asia[0] if in_asia else asia[1], 'm') if asia else dk
+                today = [s for k, s in setups.items() if s['day'] == dk and s['filled'] and k >= blk]
+                done = sorted([s for s in today if s['closed'] is not None and s['closed'] >= blk],
+                              key=lambda s: s['closed'], reverse=True)
                 streak = 0
                 for s in done:
                     if s['net'] < 0: streak += 1
@@ -106,7 +115,8 @@ def run(m, profile, spread_override=None, equity=388.0, **over):
                 ok = len(today) < P['max_setups'] and streak < P['max_streak'] and day_pnl > -eq * P['daily_loss_pct'] / 100
                 if P['weekly_pct'] > 0 and wk_pnl <= -(eq - wk_pnl) * P['weekly_pct'] / 100:
                     ok = False
-                if ok and (rg != 0 or P['fade']):
+                fade_ok = P['fade'] and (in_asia if asia else True)
+                if ok and (rg != 0 or fade_ok):
                     spread = ao_ - bo
                     if rg == 0:
                         fade = True; side = -1 if (top - c5) < (c5 - bot) else 1
