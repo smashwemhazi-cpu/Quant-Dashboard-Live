@@ -64,7 +64,8 @@ HELP = ("D.O.N.N.A commands:\n"
         "!oblig                     regulatory calendar  (!oblig add <name> | YYYY-MM-DD | monthly, !oblig done 3)\n"
         "!review <text>             check marketing copy before it goes out\n"
         "\nGROWTH\n"
-        "!leads                     lead backlog, sources, conversion\n"
+        "!leads                     Lead Finder: possible IBs and traders (Telegram, YouTube, web, LinkedIn)\n"
+        "!leads run / sources / linkedin / add <link> KE <note> / draft 12    !crm  CRM lead backlog\n"
         "!drafts                    today's compliant social-post drafts\n"
         "\nThinking partner:\n"
         "just talk                  in the chat channel; she remembers (!reset clears)\n"
@@ -304,10 +305,10 @@ def handle(text: str, channel: str = "") -> str | None:
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
     from jarvis.agents import complaints, ib, str_pack
 
-    from jarvis.agents import attribution, campaigns, radar, screening
+    from jarvis.agents import attribution, campaigns, leadfinder, radar, screening
 
     reply = (complaints.command(cmd, rest) or str_pack.command(cmd, rest) or ib.command(cmd, rest)
-             or radar.command(cmd, rest) or campaigns.command(cmd, rest) or attribution.command(cmd, rest)
+             or leadfinder.command(cmd, rest) or radar.command(cmd, rest) or campaigns.command(cmd, rest) or attribution.command(cmd, rest)
              or screening.command(cmd, rest))
     if reply is not None:
         return reply
@@ -377,8 +378,6 @@ def compliance_commands(cmd: str, rest: str) -> str | None:
         if r["compliant_version"]:
             out += ["", "Compliant version:", r["compliant_version"]]
         return "\n".join(out)
-    if cmd == "!leads":
-        return "\n".join(growth.report_lines())
     if cmd == "!drafts":
         return growth.drafts_text(growth.draft_posts())
     return None

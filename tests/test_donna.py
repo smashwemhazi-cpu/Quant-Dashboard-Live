@@ -110,7 +110,42 @@ def test_reply_executor_routes_slack_thread(client, monkeypatch):
     assert out["status"] == "EXECUTED" and sent == {"ch": "C42", "ts": "123.45"}
 
 
-def test_lead_flow_consent_once_and_stop_is_permanent(client):
+def test_trader_lead_is_draft_only_by_default(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    from jarvis.agents import leadfinder
+
+    lead = {"handle": "Big_Trader", "source_chat": "FX Pros", "snippet": "looking for a broker with FIX API",
+            "matched_terms": ["fix api"], "intent_score": 5}
+    r = client.post("/api/leads", headers=SVC, json=lead).json()
+    assert r["status"] == "LISTED" and r["staged"] is False
+    assert client.get("/api/actions/pending", headers=APPR).json() == []       # nothing queued to send
+    t = leadfinder.shortlist("trader")
+    assert t[0]["url"] == "https://t.me/Big_Trader" and "FIX API" in t[0]["about"]
+    d = leadfinder.draft(t[0]["id"])
+    assert "not sent" in d and "STOP" in d and "spread" not in d.lower()        # consent request, no pitch
+
+
+def test_telegram_search_results_reach_the_lead_finder(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    from jarvis.agents import leadfinder, radar
+
+    assert client.get("/api/prospects/queries", headers=SVC).json() == {}       # no country cleared: no search
+    radar.set_permitted(["KE"])
+    assert "forex Kenya" in client.get("/api/prospects/queries", headers=SVC).json()["KE"]
+    items = [{"username": "nairobi_fx_academy", "title": "Nairobi FX Academy", "about": "Forex education, "
+              "price action mentorship and a trading community", "members": 12000, "country": "KE"},
+             {"username": "vipsignalske", "title": "VIP Signals KE", "about": "Guaranteed 100% win signals",
+              "members": 40000, "country": "KE"},
+             {"username": "london_fx", "title": "London FX", "about": "forex", "members": 9, "country": "ZA"}]
+    assert client.post("/api/prospects", json=items).status_code == 401
+    assert client.post("/api/prospects", headers=SVC, json=items).json() == {"stored": 2}  # ZA isn't cleared
+    sl = leadfinder.shortlist("ib")
+    assert [r["name"] for r in sl] == ["Nairobi FX Academy"] and sl[0]["source"] == "telegram"
+    assert "promises returns" in leadfinder.command("!leads", "flagged")
+
+
+def test_lead_flow_consent_once_and_stop_is_permanent(client, monkeypatch):
+    monkeypatch.setenv("DONNA_LEAD_AUTOSEND", "1")   # the old approve-then-send route, now opt-in
     lead = {"handle": "Big_Trader", "source_chat": "FX Pros", "snippet": "need FIX API",
             "matched_terms": ["fix api"], "intent_score": 5}
     r = client.post("/api/leads", headers=SVC, json=lead).json()

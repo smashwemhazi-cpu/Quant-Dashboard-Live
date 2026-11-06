@@ -5,6 +5,27 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-06 · Lead Finder: Telegram, web and LinkedIn, one list
+
+**What was done:**
+- `!leads` is now the **Lead Finder**: one list of possible IBs and partners per cleared country, plus traders who ask for a broker in Telegram groups you're in. Each entry shows a 0-100 score, the source (YT, TG, WEB, LI), followers, last activity and the link. The old CRM backlog moved to `!crm` (`!leads crm` also works).
+- **Telegram:** once a day the lead monitor uses Telegram's own search to find public trading channels and groups in your cleared countries. It reads their public name, description and member count. It doesn't join anything or message anyone.
+- **Web:** a weekly open-web search (Brave Search API) finds academies, trading communities, IB websites, public t.me channels and LinkedIn **company** pages. It drops personal LinkedIn profiles, news, reference sites and regulators.
+- **LinkedIn:** LinkedIn's terms forbid automated collection, so DONNA never visits it. `!leads linkedin` gives ready-made LinkedIn search links per country. You browse yourself and log anyone useful with `!leads add <link> KE <note>`.
+- **YouTube:** the Partner Radar channels feed into the same list.
+- **Draft-only outreach:** nothing is sent automatically any more. `!leads draft 12` writes the first message for you to check with `!review` and send yourself. For an IB it's a partnership note with the risk warning. For a trader it's a consent request only: no pitch, and STOP is honoured. The old approve-then-auto-send route is off unless `DONNA_LEAD_AUTOSEND=1` is set.
+- Red-flag marketing (promised returns, trading for clients, paid signals, prop-challenge passing) is flagged and kept off the shortlist (`!leads flagged`).
+- Data protection: business information only, snippets capped at 280 characters, only countries you cleared, and the do-not-contact list is respected. Never-actioned prospects are deleted after 180 days and rejected ones after 90.
+
+**Why:** SH said the lead generator wasn't working the right way. `!leads` only showed the CRM export, which said NO DATA, and the radar searched YouTube only.
+
+**Needs from you:**
+- Clear your marketing countries if you haven't: `!radar countries ZA,MU,KE`.
+- Telegram (free): get api_id and api_hash at my.telegram.org, then run `vertex1-connect telegram` and type the login code Telegram sends you.
+- Web search: `vertex1-connect leads` with a Brave Search API key. Brave asks for a card but gives $5 of free credit a month, which covers this use (about 25 searches a week per country). Optional; Claude did not sign up for it.
+- YouTube (free): `vertex1-connect radar`, if not done yet.
+
+**Recommendation:** use a dedicated work Telegram number for the lead monitor, not your personal one. Record the lead finder in your marketing / data-protection register: B2B partner prospecting under legitimate interest, with the retention above.
 ## 2026-11-06 · Cleaner reports in Discord; send DONNA files, including PDFs
 
 **What was done**

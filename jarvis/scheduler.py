@@ -229,13 +229,14 @@ def job_sanctions_lists() -> None:
 
 
 def job_partner_radar() -> None:
-    from jarvis.agents import radar
+    """The weekly Lead Finder (YouTube radar + web search; Telegram is searched daily by the lead monitor)."""
+    from jarvis.agents import leadfinder
 
-    r = radar.weekly(send=True)
+    r = leadfinder.weekly(send=True)
     if "error" in r:
         raise RuntimeError(r["error"])  # "NO DATA ..." = not set up: the job waits quietly
     if "skipped" not in r:
-        notify("partner_radar", {"countries": r["countries"], "channels": r["channels"]})
+        notify("partner_radar", {"countries": r["countries"], "found": r["found"], "problems": r["problems"]})
 
 
 def job_weekly_pack() -> None:
@@ -337,6 +338,7 @@ SETUP_ERRORS = {
     "trading permission": "cTrader: token has trading permission - needs a read-only one",
     "access_token_invalid": "cTrader: token expired or invalid - get a new one",
     "youtube: api key refused": "Partner Radar: YouTube API key refused - check it (vertex1-connect radar)",
+    "web search: brave refused": "Lead Finder: Brave Search key refused - check it (vertex1-connect leads)",
     "credit balance": "Claude: credit used up - top up at console.anthropic.com > Plans & Billing",
     "older copy": "Google bridge: the script in your Google account needs its update (paste the new "
                   "google-bridge.gs, then Deploy > Manage deployments > pencil > New version)",

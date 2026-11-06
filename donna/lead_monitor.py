@@ -6,11 +6,16 @@ Rewrite of the "Telegram Hunter". What changed and why:
   * Word-boundary intent scoring with weights. The old substring match flagged 'ib' in
     "possible"/"visible", 'lots' in "pilots", 'mam' in "mama".
   * Self-promoters, signal sellers and bots are skipped; one lead per handle (DB UNIQUE).
-  * Outreach is a single, approved consent request (no pitch), sent by this process with
-    pacing and flood handling; replies are classified so STOP is honoured permanently.
+  * Draft-only by default: a trader who asks for a broker goes on the Lead Finder list (!leads) and
+    nothing is sent. Only with DONNA_LEAD_AUTOSEND=1 does this process send the single, approved
+    consent request (no pitch), with pacing and flood handling; STOP is honoured permanently.
+  * Once a day it also searches Telegram's public channels and groups (Telegram's own search,
+    contacts.Search) for trading communities in the countries cleared for marketing, and hands
+    their public title, description and member count to the Lead Finder. It never joins them.
 
 Env: TG_API_ID, TG_API_HASH, TG_SESSION (path), DONNA_URL, DONNA_API_KEY,
-     LEAD_GROUPS (comma list of @usernames or ids you are a legitimate member of)
+     LEAD_GROUPS (optional: comma list of @usernames or ids you are a legitimate member of),
+     DONNA_TG_SEARCH_HOURS (default 24)
 Run: python -m donna.lead_monitor   (first run asks for the phone login code)
 """
 from __future__ import annotations
@@ -38,6 +43,16 @@ INTENT_TERMS: list[tuple[str, float]] = [
 NOISE = re.compile(r"(?i)\b(join (my|our)|dm me for|vip signals?|guaranteed|100% (profit|win)|"
                    r"free signals?|account management service|t\.me/|https?://)")
 URL_OR_MENTION_ONLY = re.compile(r"^\s*(@\w+|https?://\S+)\s*$")
+
+
+AUTOSEND = os.getenv("DONNA_LEAD_AUTOSEND", "0") == "1"
+FIT = re.compile(r"(?i)forex|\bfx\b|trad(e|er|ers|ing)|gold|xau|indices|nasdaq|crypto|pips?|smc|"
+                 r"price action|academy|mentor|signals?|invest")
+
+
+def channel_fits(title: str) -> bool:
+    """A search hit worth a closer look: trading words in its name (the Lead Finder scores it properly)."""
+    return bool(FIT.search(title or ""))
 
 
 @dataclass
@@ -76,11 +91,10 @@ async def main() -> None:
     from telethon import TelegramClient, errors, events  # imported here so the scorer is testable alone
 
     logging.basicConfig(level=logging.INFO)
-    groups = [g.strip() for g in os.environ["LEAD_GROUPS"].split(",") if g.strip()]
+    groups = [g.strip() for g in os.getenv("LEAD_GROUPS", "").split(",") if g.strip()]
     api = DonnaAPI(os.environ.get("DONNA_URL", "http://127.0.0.1:8080"), os.environ["DONNA_API_KEY"])
     client = TelegramClient(os.environ.get("TG_SESSION", "donna_lead_monitor"),
                             int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"])
-    @client.on(events.NewMessage(chats=groups))
     async def on_group_message(event) -> None:
         text = event.raw_text or ""
         sc = score_message(text)
@@ -135,11 +149,75 @@ async def main() -> None:
                 log.error("outreach worker: %s", e)
             await asyncio.sleep(60)
 
+    async def discovery_worker() -> None:
+        """Daily: search Telegram's public directory for trading communities in the cleared countries."""
+        from telethon.tl.functions.channels import GetFullChannelRequest
+        from telethon.tl.functions.contacts import SearchRequest
+
+        every = float(os.getenv("DONNA_TG_SEARCH_HOURS", "24")) * 3600
+        while True:
+            try:
+                plan = await api.call("GET", "/api/prospects/queries")
+                for country, queries in plan.items():
+                    found: dict[str, dict] = {}
+                    for q in queries:
+                        res = await client(SearchRequest(q=q, limit=30))
+                        for ch in res.chats:
+                            if not getattr(ch, "username", None) or getattr(ch, "scam", False) \
+                                    or getattr(ch, "fake", False) or ch.username in found:
+                                continue
+                            found[ch.username] = {"username": ch.username, "title": (ch.title or "")[:200],
+                                                  "members": getattr(ch, "participants_count", None),
+                                                  "about": "", "country": country, "_entity": ch}
+                        await asyncio.sleep(random.uniform(4, 9))  # gentle: a few searches a minute
+                    hits = [f for f in found.values() if channel_fits(f["title"])]
+                    for f in hits[:25]:  # description and member count for the likely ones only
+                        try:
+                            full = await client(GetFullChannelRequest(f["_entity"]))
+                            f["about"] = (full.full_chat.about or "")[:600]
+                            f["members"] = full.full_chat.participants_count or f["members"]
+                        except errors.FloodWaitError as e:
+                            await asyncio.sleep(e.seconds + 5)
+                        except Exception as e:  # private, deleted or restricted: keep the title only
+                            log.info("no details for @%s: %s", f["username"], type(e).__name__)
+                        await asyncio.sleep(random.uniform(3, 6))
+                    if hits:
+                        res = await api.call("POST", "/api/prospects",
+                                             json=[{k: v for k, v in f.items() if k != "_entity"} for f in hits])
+                        log.info("telegram search %s: %d found, %d stored", country, len(hits), res.get("stored", 0))
+            except errors.FloodWaitError as e:
+                log.warning("telegram search flood wait %ss", e.seconds)
+                await asyncio.sleep(e.seconds + 5)
+                continue
+            except Exception as e:  # DONNA down or Telegram hiccup: try again next round
+                log.error("telegram search: %s", e)
+            await asyncio.sleep(every)
+
+    if groups:
+        client.add_event_handler(on_group_message, events.NewMessage(chats=groups))
     await client.start()
-    log.info("lead monitor online: %s", ", ".join(groups))
-    client.loop.create_task(outreach_worker())
+    log.info("lead monitor online: groups %s; Telegram search every %sh; outreach %s",
+             ", ".join(groups) or "none", os.getenv("DONNA_TG_SEARCH_HOURS", "24"),
+             "auto-send after approval" if AUTOSEND else "draft-only")
+    if AUTOSEND:
+        client.loop.create_task(outreach_worker())
+    client.loop.create_task(discovery_worker())
     await client.run_until_disconnected()
 
 
+async def login() -> None:
+    """One-time interactive login (phone number + code) that saves the session file, then exits."""
+    from telethon import TelegramClient
+
+    client = TelegramClient(os.environ.get("TG_SESSION", "donna_lead_monitor"),
+                            int(os.environ["TG_API_ID"]), os.environ["TG_API_HASH"])
+    await client.start()
+    me = await client.get_me()
+    print(f"Logged in to Telegram as {getattr(me, 'first_name', '') or 'you'} - the session is saved.")
+    await client.disconnect()
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+
+    asyncio.run(login() if sys.argv[1:] == ["login"] else main())
