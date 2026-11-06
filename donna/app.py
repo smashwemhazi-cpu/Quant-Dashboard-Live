@@ -643,6 +643,12 @@ def add_prospects(items: list[ProspectIn], actor: str = Depends(require_service)
     n = sum(1 for p in items[:200] if _prospect({
         "source": "telegram", "ext_id": p.username, "kind": "ib", "country": p.country, "name": p.title,
         "url": f"https://t.me/{p.username}", "about": p.about, "audience": p.members}) is not None)
+    from jarvis.agents import leadfinder
+
+    try:
+        leadfinder.telegram_result(n)   # !leads shows when the search finished and what it found
+    except Exception as e:
+        log.error("lead finder status: %s", e)
     audit("lead_monitor", "prospects", {"received": len(items), "stored": n})
     return {"stored": n}
 
