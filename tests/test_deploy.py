@@ -108,3 +108,28 @@ def test_google_bridge_link_and_key_are_saved(tmp_path, url):
     saved = env.read_text()
     assert "JARVIS_GOOGLE_BRIDGE_URL=" + url in saved
     assert "JARVIS_GOOGLE_BRIDGE_KEY=" + "ab" * 32 in saved
+
+
+@pytest.mark.parametrize("pasted", ["\x1b[200~38863_AbCdEfGh1234567890\x1b[201~", "^[[200~38863_AbCdEfGh1234567890",
+                                    " 38863_AbCd EfGh1234567890 ", "Client ID: 38863_AbCdEfGh1234567890"])
+def test_pasted_ctrader_client_id_is_cleaned_not_rejected(tmp_path, pasted):
+    import os
+    import sys
+
+    env = tmp_path / "vertex1.env"
+    env.write_text("")
+    out = subprocess.run([sys.executable, "-c", _settings_writer(), str(env)], capture_output=True, text=True,
+                         env={**os.environ, "SET_DONNA_CTRADER_CLIENT_ID": pasted}, cwd=ROOT, check=True).stdout
+    assert "SKIPPED" not in out
+    assert "DONNA_CTRADER_CLIENT_ID=38863_AbCdEfGh1234567890" in env.read_text()
+
+
+def test_rejected_client_id_says_why(tmp_path):
+    import os
+    import sys
+
+    env = tmp_path / "vertex1.env"
+    env.write_text("")
+    out = subprocess.run([sys.executable, "-c", _settings_writer(), str(env)], capture_output=True, text=True,
+                         env={**os.environ, "SET_DONNA_CTRADER_CLIENT_ID": "38863_Ab/Cd#Ef"}, cwd=ROOT, check=True).stdout
+    assert "SKIPPED DONNA_CTRADER_CLIENT_ID" in out and "starting 38863_" in out and "'/'" in out
