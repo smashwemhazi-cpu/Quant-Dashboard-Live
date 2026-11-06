@@ -34,6 +34,7 @@ import io
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 from jarvis.agents import assistant
@@ -76,6 +77,7 @@ HELP = ("D.O.N.N.A commands:\n"
         "!morning  !evening  !risk  today's digests / live position risk\n"
         "!growth  !exp              growth review / experiments (!exp start 3)\n"
         "!audit                     what DONNA did today; audit trail check\n"
+        "!journal                   your trading analysis (drop a cTrader statement - Excel or PDF - in here first)\n"
         "!status                    running version and what is connected / broken\n"
         "!pack  !pack 30            management pack PDF (last 7 / 30 days) to forward to the directors")
 
@@ -167,6 +169,10 @@ def mind_command(cmd: str, rest: str, channel: str) -> str | None:
         return copilot.experiments_text()
     if cmd == "!audit":
         return audit_text()
+    if cmd == "!journal":
+        from jarvis.agents import personal
+
+        return "\n".join(personal.report_lines()).strip()
     if cmd == "!status":
         return status_text()
     return None
@@ -378,6 +384,48 @@ def compliance_commands(cmd: str, rest: str) -> str | None:
     return None
 
 
+MAX_UPLOAD_MB = 15
+
+
+def save_upload(filename: str, data: bytes) -> Path | None:
+    """Put a file sent in Discord into the inbox; None if it isn't a type DONNA reads."""
+    from jarvis.agents.backoffice import UPLOAD_TYPES, inbox
+
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).name)[:120]
+    if not name or Path(name).suffix.lower() not in UPLOAD_TYPES:
+        return None
+    box = inbox()
+    box.mkdir(parents=True, exist_ok=True)
+    path = box / name
+    path.write_bytes(data)
+    return path
+
+
+def upload_reply(names: list[str], skipped: list[str]) -> str:
+    """Ingest what was just saved and say, in plain words, what DONNA did with each file."""
+    from jarvis.agents.backoffice import BackOfficeAgent
+
+    res = BackOfficeAgent().ingest()
+    got = {r["file"]: r for r in res.get("files", [])}
+    words = {"statement": "trade statement", "botlog": "cBot log", "leads": "leads list", "customers": "client list"}
+    L = []
+    for n in names:
+        r = got.get(n)
+        if not r:
+            L.append(f"{n}: saved, but I couldn't process it.")
+        elif r["status"] == "STORED":
+            what = words.get(r.get("kind", ""), str(r.get("kind", "report")).replace("_", " "))
+            extra = f", {r['rows']} new rows" if "rows" in r else ""
+            L.append(f"{n}: read as a {what}{extra}.")
+            if r.get("kind") == "statement":
+                L.append("  Type !journal for the trading analysis.")
+        else:
+            L.append(f"{n}: not recognised ({r.get('error') or r.get('status')}). "
+                     "If it's a PDF, export the same report from cTrader or the CRM as Excel or CSV.")
+    L += [f"{n}: skipped - I read Excel, CSV, PDF and cBot .log files up to {MAX_UPLOAD_MB} MB." for n in skipped]
+    return "\n".join(L)
+
+
 def chunks(text: str) -> list[str]:
     from donna.channels import chunks as split
 
@@ -402,9 +450,22 @@ def main() -> None:
 
     @client.event
     async def on_message(message: "discord.Message") -> None:
-        if message.author.bot or message.webhook_id or not message.content.strip():
+        if message.author.bot or message.webhook_id or not (message.content.strip() or message.attachments):
             return
         channel = getattr(message.channel, "name", "")
+        if message.attachments:  # files for DONNA to read: statements, exports, cBot logs
+            if not allowed(message.author.id, channel):
+                return
+            names, skipped = [], []
+            for a in message.attachments:
+                path = save_upload(a.filename, await a.read()) if a.size <= MAX_UPLOAD_MB * 2**20 else None
+                (names if path else skipped).append(path.name if path else a.filename)
+            async with message.channel.typing():
+                reply = await asyncio.to_thread(upload_reply, names, skipped)
+            for part in chunks(reply):
+                await message.channel.send(part)
+            if not message.content.strip():
+                return
         if not message.content.startswith("!") and not chat_allowed(message.author.id, channel):
             return
         if not allowed(message.author.id, channel):

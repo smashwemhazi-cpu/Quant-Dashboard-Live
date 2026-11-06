@@ -40,6 +40,9 @@ TEST_NAME = re.compile(r"test|\bqa\b|automation", re.I)
 NULL_DATE = "1900-01-01"
 
 
+UPLOAD_TYPES = (".csv", ".xlsx", ".xls", ".log", ".txt", ".pdf")
+
+
 def inbox() -> Path:
     return Path(os.getenv("JARVIS_INBOX_DIR", str(Path(settings.data_dir).parent / "inbox")))
 
@@ -65,8 +68,44 @@ def _db() -> sqlite3.Connection:
 
 
 # ------------------------------------------------------------------ parsing
+def _header_like(cells: list[str]) -> bool:
+    filled = [c for c in cells if c]
+    return len(filled) >= 3 and not any(re.fullmatch(r"[-+()\d.,$%\s:/]+", c) for c in filled)
+
+
+def _read_pdf(path: Path) -> pd.DataFrame:
+    """The biggest table in a PDF report (a trade statement wins over any other table), stitched across pages.
+    Works for PDFs with real text tables; a scanned image has no text and raises."""
+    import pdfplumber
+
+    tables: list[list[list[str]]] = []
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            for t in page.extract_tables():
+                rows = [[(c or "").replace("\n", " ").strip() for c in r] for r in t]
+                rows = [r for r in rows if any(r)]
+                if rows:
+                    tables.append(rows)
+    best: list[str] | None = None
+    score = -1
+    for t in tables:
+        h = next((r for r in t if _header_like(r)), None)
+        if not h:
+            continue
+        low = {c.lower() for c in h}
+        sc = (10000 if {"symbol", "closing time"} <= low else 0) + sum(len(x) for x in tables if len(x[0]) == len(h))
+        if sc > score:
+            best, score = h, sc
+    if best is None:
+        raise ValueError("no readable table in this PDF - export the report as Excel or CSV instead")
+    body = [r for t in tables if len(t[0]) == len(best) for r in t if r != best and not _header_like(r)]
+    return pd.DataFrame(body, columns=[c or f"col{i}" for i, c in enumerate(best)])
+
+
 def _read(path: Path) -> pd.DataFrame:
-    if path.suffix.lower() in (".xlsx", ".xls"):
+    if path.suffix.lower() == ".pdf":
+        d = _read_pdf(path)
+    elif path.suffix.lower() in (".xlsx", ".xls"):
         d = pd.read_excel(path)
     else:
         for enc in ("utf-8-sig", "cp1252"):  # Syntellicore exports are Windows-1252
@@ -564,7 +603,7 @@ class BackOfficeAgent(Agent):
         done = box / "processed"
         done.mkdir(exist_ok=True)
         results = []
-        for p in sorted(x for x in box.iterdir() if x.suffix.lower() in (".csv", ".xlsx", ".xls", ".log", ".txt")):
+        for p in sorted(x for x in box.iterdir() if x.suffix.lower() in UPLOAD_TYPES):
             try:
                 r = ingest_file(p)
             except Exception as e:  # one bad file must not block the others

@@ -5,6 +5,28 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-06 · Cleaner reports in Discord; send DONNA files, including PDFs
+
+**What was done**
+- **Reports are laid out as sections.** Every report DONNA posts (daily wrap, morning, evening, compliance and the rest) now shows each part under its own heading:
+  - Tables stay lined up.
+  - News and notes wrap as normal text with bullets.
+  - Green, amber and red statuses show as coloured dots.
+  - "!!" items get a ⚠️.
+  - All the "NO DATA" lines fold into one **Not connected yet** line at the bottom, instead of filling the report.
+  - To go back to the old single block, set `DONNA_DISCORD_STYLE=mono`.
+- **The daily-wrap price table is compact.** It's one short row per market (close, day, 5 days, range), so it no longer wraps onto two lines. ⚠ marks a day whose range is over 1.5x normal.
+- **Send DONNA files in Discord.** Drag a file into #donna, or any channel she answers in. She reads it straight away and tells you what it was:
+  - cTrader trade statements (Excel **or PDF**)
+  - back-office exports (Excel/CSV)
+  - cBot logs
+- **PDF reading.** DONNA finds the trade table in a PDF, even across pages. A PDF without a real table (a scan or a photo) gets a plain reply asking for the Excel export.
+- **New `!journal` command.** Your trading analysis from the statements: net, win rate, average win vs loss, profit factor, drawdown, big losses, best and worst session and symbol, re-entries after a loss, and overtrading days.
+
+**Why:** SH asked for reports that read better, and for a way to upload PDFs for trade analysis. The analysis existed, but files could only arrive through the server inbox or email.
+
+**Why the wrap still shows "Not connected yet" for CRM, book and trading activity:** no Syntellicore KPI export or cTrader end-of-day/active-accounts report has reached DONNA yet. Drop those files into #donna, or schedule them to email daily, and those sections fill in by themselves.
+
 ## 2026-10-29 · Tick tasks off in the Console
 
 **What was done:** each task in the Console now has a ✓ button. One click marks it done, the same as typing `!done 12`, and the list refreshes.
