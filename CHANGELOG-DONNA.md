@@ -35,6 +35,17 @@ or keys, and nothing paid is signed up for without your OK.
 - YouTube (free): `vertex1-connect radar`, if not done yet.
 
 **Recommendation:** use a dedicated work Telegram number for the lead monitor, not your personal one. Record the lead finder in your marketing / data-protection register: B2B partner prospecting under legitimate interest, with the retention above.
+## 2026-11-06 · cTrader Client ID paste no longer rejected
+
+**What was done:** `vertex1-connect` now cleans pasted IDs and tokens before checking them. It removes:
+- the invisible "bracketed paste" codes some terminals add on a right-click paste
+- stray spaces
+- a "Client ID:" label copied along with the value
+
+If a value is still refused, the message says how many characters it got, how the Client ID starts, and which characters were unexpected.
+
+**Why:** SH's Client ID was refused as "not an Open API Client ID", so the old ID stayed saved and cTrader kept saying the ID and Secret don't match.
+
 ## 2026-11-06 · Cleaner reports in Discord; send DONNA files, including PDFs
 
 **What was done**

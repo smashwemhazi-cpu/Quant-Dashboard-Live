@@ -72,7 +72,14 @@ if junk:
     lines = [l for l in lines if l not in junk]
     print(f"REMOVED {len(junk)} line(s) that weren't settings (they stopped the settings file loading)")
 INVISIBLE = re.compile(r"[\u200b-\u200f\u2060\ufeff]")  # zero-width characters that ride along when pasting
-new = {k[4:]: INVISIBLE.sub("", v).strip() for k, v in os.environ.items() if k.startswith("SET_")}
+# a right-click paste in some terminals wraps the text in "bracketed paste" codes (ESC[200~ ... ESC[201~)
+PASTE_CODES = re.compile(r"\x1b\[[0-9;]*[~A-Za-z]|\^\[\[20[01]~|\[20[01]~")
+new = {k[4:]: PASTE_CODES.sub("", INVISIBLE.sub("", v)).strip() for k, v in os.environ.items() if k.startswith("SET_")}
+NO_SPACES = ("DONNA_CTRADER_", "JARVIS_PERSONAL_ACCOUNT", "TG_API_", "JARVIS_GOOGLE_BRIDGE_KEY")
+for k in [k for k in new if k.startswith(NO_SPACES)]:  # IDs and tokens never contain spaces; a paste can add them
+    new[k] = re.sub(r"\s+", "", new[k])
+    if k == "DONNA_CTRADER_CLIENT_ID":  # "Client ID: 1234_abc" copied with its label
+        new[k] = re.sub(r"(?i)^client_?id:?", "", new[k])
 # which company actually holds the inbox: a Google login can exist for an address whose mail lives elsewhere,
 # and then imap.gmail.com refuses every password
 user = new.get("JARVIS_IMAP_USER") or next((l.split("=", 1)[1].strip().strip('"') for l in lines
@@ -140,7 +147,10 @@ if not google:
 for k, v in list(new.items()):
     rx, why = CHECKS.get(k, (r"[^\"`$\\]+", "contains characters that are not allowed"))
     if not re.fullmatch(rx, v) or re.search(r'["`$\\]', v):
-        print(f"SKIPPED {k}: {why}")
+        odd = sorted({c for c in v if not re.fullmatch(r"[A-Za-z0-9_.-]", c)})
+        hint = f" ({len(v)} characters" + (f", starting {v[:6]}" if k == "DONNA_CTRADER_CLIENT_ID" else "") + \
+            (", unexpected: " + " ".join("space" if c == " " else repr(c) for c in odd[:5]) if odd else "") + ")"
+        print(f"SKIPPED {k}: {why}{hint}")
         new.pop(k)
 current = {l.split("=", 1)[0]: l.split("=", 1)[1].strip('"') for l in lines if "=" in l and not l.lstrip().startswith("#")}
 present = set(current)
