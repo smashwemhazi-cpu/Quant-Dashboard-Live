@@ -24,6 +24,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 import uuid
@@ -40,6 +41,9 @@ REFRESH_DAYS = float(os.getenv("DONNA_CTRADER_REFRESH_DAYS", "20"))   # access t
 HISTORY_DAYS = int(os.getenv("DONNA_CTRADER_HISTORY_DAYS", "90"))      # closed trades fetched on the first sync
 WEEK_MS = 7 * 24 * 3600 * 1000                                         # one deal-list request covers at most a week
 FILLED = {2, 3, "FILLED", "PARTIALLY_FILLED"}                          # ProtoOADealStatus
+HISTORY_REQUESTS = int(os.getenv("DONNA_CTRADER_HISTORY_REQUESTS", "4"))   # deal-list calls per run, at most
+HISTORY_GAP = float(os.getenv("DONNA_CTRADER_HISTORY_GAP", "1.0"))        # seconds between them
+RATE_LIMITED = re.compile(r"BLOCKED_PAYLOAD_TYPE|REQUEST_FREQUENCY_EXCEEDED|rate limit", re.I)
 
 # payload types (OpenApiModelMessages.proto / OpenApiCommonModelMessages.proto)
 HEARTBEAT = 51
@@ -228,17 +232,32 @@ def closed_trade(d: dict[str, Any], symbol: str) -> dict[str, Any] | None:
             "balance": cp.get("balance", 0) / scale}
 
 
-async def deals(s: Session, acct: int, from_ms: int, to_ms: int) -> list[dict[str, Any]]:
-    """Every deal between two times, a week per request (the API's limit for one deal-list call)."""
+async def deals(s: Session, acct: int, from_ms: int, to_ms: int,
+                max_requests: int | None = None) -> tuple[list[dict[str, Any]], int]:
+    """Deals between two times, a week per request (the API's limit for one deal-list call), oldest week first.
+
+    cTrader allows only a few history requests per second, so they are spaced HISTORY_GAP apart and at most
+    `max_requests` go out per run; a long backfill finishes over the next runs. A rate-limit answer stops the
+    backfill for this run without failing it. Returns (deals, time reached): the next run starts from there."""
     out: list[dict[str, Any]] = []
     start = from_ms
-    while start < to_ms:
+    for n in range(max_requests or HISTORY_REQUESTS):
+        if start >= to_ms:
+            break
         end = min(start + WEEK_MS, to_ms)
-        r = await s.ask(DEAL_LIST_REQ, {"ctidTraderAccountId": acct, "fromTimestamp": start, "toTimestamp": end},
-                        DEAL_LIST_RES)
+        if n:
+            await asyncio.sleep(HISTORY_GAP)
+        try:
+            r = await s.ask(DEAL_LIST_REQ, {"ctidTraderAccountId": acct, "fromTimestamp": start, "toTimestamp": end},
+                            DEAL_LIST_RES)
+        except FeedError as e:
+            if not RATE_LIMITED.search(str(e)):
+                raise
+            audit.log("ctrader_feed", "history_rate_limited", {"reached_ms": start})
+            break
         out += r.get("deal", [])
         start = end
-    return out
+    return out, start
 
 
 async def snapshot(transport: Any, login: str, access: str, refresh: str, client_id: str, client_secret: str,
@@ -272,7 +291,7 @@ async def snapshot(transport: Any, login: str, access: str, refresh: str, client
     last = _synced_to(login)
     # an hour of overlap so a trade closed while the last sync ran is not missed; rows are de-duplicated on insert
     from_ms = last - 3600_000 if last else now_ms - HISTORY_DAYS * 24 * 3600_000
-    history = await deals(s, acct, from_ms, now_ms)
+    history, reached = await deals(s, acct, from_ms, now_ms)
     names: dict[int, str] = {}
     if positions or history:
         lst = await s.ask(SYMBOLS_LIST_REQ, {"ctidTraderAccountId": acct}, SYMBOLS_LIST_RES)
@@ -297,7 +316,7 @@ async def snapshot(transport: Any, login: str, access: str, refresh: str, client
     equity = balance + sum(n for _, n in pnl.values())
     closed = [t for t in (closed_trade(d, names.get(int(d["symbolId"]), str(d["symbolId"]))) for d in history) if t]
     return {"login": login, "balance": balance, "equity": equity, "positions": out, "unpriced": unpriced,
-            "closed": closed, "synced_to_ms": now_ms, "token_refreshed": refresh_due}
+            "closed": closed, "synced_to_ms": reached if reached > from_ms else last, "token_refreshed": refresh_due}
 
 
 async def _run(login: str) -> dict[str, Any]:
@@ -347,6 +366,9 @@ def poll() -> dict[str, Any]:
     try:
         snap = asyncio.run(_run(login))
     except FeedError as e:
+        if RATE_LIMITED.search(str(e)):   # cTrader asked us to slow down: skip this run, the next one catches up
+            audit.log("ctrader_feed", "rate_limited", {"error": str(e)[:200]})
+            return {"skipped": "rate limited by cTrader - will retry on the next run"}
         return {"error": str(e)}
     except Exception as e:  # network, TLS, timeouts: report, don't crash the scheduler
         return {"error": f"cTrader unreachable ({type(e).__name__})"}
@@ -356,7 +378,8 @@ def poll() -> dict[str, Any]:
 
     rhythm.store_positions(snap["positions"], snap["equity"], None, source=f"ctrader:{login}")
     added = personal.store_trades(login, snap["closed"])
-    _mark_synced(login, snap["synced_to_ms"])
+    if snap["synced_to_ms"]:
+        _mark_synced(login, snap["synced_to_ms"])
     audit.log("ctrader_feed", "snapshot", {"positions": len(snap["positions"]), "unpriced": snap["unpriced"],
                                            "closed_trades_added": added})
     return ({k: v for k, v in snap.items() if k not in ("positions", "closed")}
