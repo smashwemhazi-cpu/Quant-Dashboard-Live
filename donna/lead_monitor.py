@@ -154,8 +154,7 @@ async def main() -> None:
         from telethon.tl.functions.channels import GetFullChannelRequest
         from telethon.tl.functions.contacts import SearchRequest
 
-        every = float(os.getenv("DONNA_TG_SEARCH_HOURS", "24")) * 3600
-        while True:
+        while True:  # DONNA decides when a search is due (daily, or now after !leads run); ask every 5 minutes
             try:
                 plan = await api.call("GET", "/api/prospects/queries")
                 for country, queries in plan.items():
@@ -191,13 +190,13 @@ async def main() -> None:
                 continue
             except Exception as e:  # DONNA down or Telegram hiccup: try again next round
                 log.error("telegram search: %s", e)
-            await asyncio.sleep(every)
+            await asyncio.sleep(300)
 
     if groups:
         client.add_event_handler(on_group_message, events.NewMessage(chats=groups))
     await client.start()
-    log.info("lead monitor online: groups %s; Telegram search every %sh; outreach %s",
-             ", ".join(groups) or "none", os.getenv("DONNA_TG_SEARCH_HOURS", "24"),
+    log.info("lead monitor online: groups %s; Telegram search when DONNA asks; outreach %s",
+             ", ".join(groups) or "none",
              "auto-send after approval" if AUTOSEND else "draft-only")
     if AUTOSEND:
         client.loop.create_task(outreach_worker())

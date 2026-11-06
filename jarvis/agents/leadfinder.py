@@ -39,7 +39,12 @@ from jarvis.core.config import settings
 BRAVE = "https://api.search.brave.com/res/v1/web/search"
 RETENTION_DAYS = int(os.getenv("JARVIS_PROSPECT_RETENTION_DAYS", "180"))
 REJECTED_DAYS = 90
-STATUSES = ("new", "approved", "contacted", "partner", "rejected")
+# the pipeline, in order; "partner" (IB signed) and "funded" (trader deposited) are both wins
+STAGES = ("new", "approved", "contacted", "replied", "meeting", "won")
+STATUSES = ("new", "approved", "contacted", "replied", "meeting", "partner", "funded", "rejected", "lost")
+RANK = {"new": 0, "approved": 1, "contacted": 2, "replied": 3, "meeting": 4, "partner": 5, "funded": 5}
+ACTIVE = ("new", "approved", "contacted", "replied", "meeting")
+TG_HOURS = float(os.getenv("DONNA_TG_SEARCH_HOURS", "24"))
 SOURCE_TAG = {"youtube": "YT", "telegram": "TG", "web": "WEB", "linkedin": "LI", "manual": "YOU",
               "telegram-group": "TG"}
 IB_WORDS = re.compile(r"\b(introducing broker|\bIBs?\b|partner(?:ship)?s?|affiliate|academy|mentor\w*|education|"
@@ -62,6 +67,7 @@ def _db() -> sqlite3.Connection:
             kind TEXT, country TEXT, name TEXT, url TEXT, about TEXT, audience INTEGER, last_active TEXT,
             score INTEGER, flags TEXT, first_seen TEXT, last_seen TEXT, status TEXT DEFAULT 'new', note TEXT,
             UNIQUE (source, ext_id));
+        CREATE TABLE IF NOT EXISTS lead_events (prospect INTEGER, status TEXT, ts TEXT, note TEXT);
     """)
     return c
 
@@ -126,6 +132,37 @@ def purge(now: datetime | None = None) -> int:
 
 
 # ------------------------------------------------------------------ sources
+def _setting(key: str) -> str:
+    with radar._db() as c:
+        r = c.execute("SELECT value FROM radar_settings WHERE key = ?", (key,)).fetchone()
+    return r["value"] if r and r["value"] else ""
+
+
+def _set(key: str, value: str) -> None:
+    with radar._db() as c:
+        c.execute("INSERT OR REPLACE INTO radar_settings VALUES (?, ?)", (key, value))
+
+
+def request_telegram(now: datetime | None = None) -> None:
+    """Ask the lead monitor for a Telegram search now (it checks every few minutes)."""
+    _set("tg_requested", _now(now))
+
+
+def telegram_plan(now: datetime | None = None) -> dict[str, list[str]]:
+    """What the lead monitor should search for right now: nothing unless a search is due (daily, or asked for with
+    !leads run) and countries are cleared. Handing out a plan counts as starting that search."""
+    now = now or datetime.now(timezone.utc)
+    codes = radar.permitted()
+    last = _setting("tg_last")
+    due = bool(_setting("tg_requested")) or not last or \
+        datetime.fromisoformat(last) <= now - timedelta(hours=TG_HOURS)
+    if not codes or not due:
+        return {}
+    _set("tg_last", _now(now))
+    _set("tg_requested", "")
+    return {code: telegram_queries(code) for code in codes}
+
+
 def sources() -> dict[str, str]:
     """Which sources are on, in plain words."""
     yt = bool(os.getenv("JARVIS_YOUTUBE_API_KEY", "").strip())
@@ -133,7 +170,9 @@ def sources() -> dict[str, str]:
     tg = bool(os.getenv("TG_API_ID", "").strip() and os.getenv("TG_API_HASH", "").strip())
     return {
         "YouTube": "on" if yt else "off - free key: vertex1-connect radar",
-        "Telegram": "on (searched daily by the lead monitor)" if tg else "off - Telegram login: vertex1-connect telegram",
+        "Telegram": (f"on - last search {_setting('tg_last')[:16].replace('T', ' ') or 'not yet'} UTC"
+                     + (", a new one is queued" if _setting("tg_requested") else "")) if tg
+        else "off - Telegram login: vertex1-connect telegram",
         "Web": "on" if web else "off - Brave Search key: vertex1-connect leads",
         "LinkedIn": "you search, I log it (!leads linkedin)",
     }
@@ -226,6 +265,9 @@ def run(now: datetime | None = None) -> dict[str, Any]:
                 " 3. vertex1-connect leads      web search - Brave key (asks for a card, $5/month free credit)\n"
                 "Meanwhile: !leads linkedin gives you LinkedIn searches to do yourself, and !leads add logs a find."}
     found, problems = {}, []
+    if "Telegram" in on:
+        request_telegram(now)
+        found["telegram"] = "searching now, results in about 10 minutes"
     if "YouTube" in on:
         try:
             radar.run(now)
@@ -246,7 +288,7 @@ def run(now: datetime | None = None) -> dict[str, Any]:
 def shortlist(kind: str = "ib", per_country: int = 8, include_flagged: bool = False) -> list[dict[str, Any]]:
     with _db() as db:
         rows = [dict(r) for r in db.execute(
-            "SELECT * FROM lead_prospects WHERE kind = ? AND status IN ('new','approved','contacted') "
+            "SELECT * FROM lead_prospects WHERE kind = ? AND status IN ('new','approved','contacted','replied','meeting') "
             + ("" if include_flagged else "AND (flags IS NULL OR flags = '') ")
             + "ORDER BY score DESC, COALESCE(audience, 0) DESC", (kind,))]
     seen: dict[str, int] = {}
@@ -295,7 +337,8 @@ def shortlist_text(now: datetime | None = None) -> str:
         L += [line(r, now) for r in rows] or ["  Nothing found yet."]
     L += ["", "TRADERS ASKING FOR A BROKER (Telegram groups you are in)"]
     L += [line(r, now) for r in traders] or ["  None yet."]
-    L += ["", "!leads 12 approve | reject <why> | contacted | partner    !leads draft 12    !leads add <link> <note>",
+    L += ["", "!leads 12 approve | contacted | replied | meeting | partner | funded | reject <why>",
+          "!leads draft 12   !leads add <link> <note>   !leads stats (conversion and quality)",
           "!leads run   !leads sources   !leads linkedin   !leads flagged   !crm (CRM lead backlog)"]
     return "\n".join(L)
 
@@ -359,18 +402,78 @@ def draft(pid: int) -> str:
                    f"CFDs are complex instruments and carry a high risk of losing money rapidly due to leverage.")
 
 
-def update(pid: int, status: str, note: str = "") -> str:
-    status = {"approve": "approved", "reject": "rejected"}.get(status, status)
+def update(pid: int, status: str, note: str = "", now: datetime | None = None) -> str:
+    status = {"approve": "approved", "reject": "rejected", "won": "partner", "signed": "partner",
+              "deposited": "funded", "meet": "meeting", "reply": "replied", "contact": "contacted"}.get(status, status)
     if status not in STATUSES:
-        return "Use approve, reject <why>, contacted or partner."
-    if status == "rejected" and not note.strip():
-        return "Say why it was rejected - it keeps the list honest: !leads 12 reject <why>"
+        return ("Steps: approve, contacted, replied, meeting, partner (IB signed) or funded (trader deposited); "
+                "or reject <why> / lost <why>.")
+    if status in ("rejected", "lost") and not note.strip():
+        return f"Say why - it keeps the list honest: !leads {pid} {'reject' if status == 'rejected' else 'lost'} <why>"
     with _db() as db:
         n = db.execute("UPDATE lead_prospects SET status = ?, note = COALESCE(NULLIF(?, ''), note) WHERE id = ?",
                        (status, note[:300], pid)).rowcount
+        if n:
+            db.execute("INSERT INTO lead_events VALUES (?,?,?,?)", (pid, status, _now(now), note[:300]))
     if n:
         audit.log("officer", f"lead_{status}", {"prospect": pid})
-    return f"Prospect #{pid}: {status}." if n else f"No prospect #{pid}."
+    nxt = {"approved": f"next: !leads draft {pid}, send it, then !leads {pid} contacted",
+           "contacted": f"when they answer: !leads {pid} replied", "replied": f"call booked: !leads {pid} meeting",
+           "meeting": f"signed: !leads {pid} partner   (trader deposited: !leads {pid} funded)"}.get(status, "")
+    return (f"Prospect #{pid}: {status}." + (f" {nxt}" if nxt else "")) if n else f"No prospect #{pid}."
+
+
+def stats(days: int = 90, now: datetime | None = None) -> dict[str, Any]:
+    """Funnel by source and kind: how far each prospect got (from the steps logged), and its score."""
+    now = now or datetime.now(timezone.utc)
+    since = _now(now - timedelta(days=days))
+    with _db() as db:
+        rows = [dict(r) for r in db.execute("SELECT id, source, kind, score, status FROM lead_prospects WHERE first_seen >= ?",
+                                            (since,))]
+        ev = [dict(r) for r in db.execute("SELECT prospect, status, ts FROM lead_events")]
+    reached: dict[int, int] = {}
+    for e in ev:
+        reached[e["prospect"]] = max(reached.get(e["prospect"], 0), RANK.get(e["status"], 0))
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in rows:
+        g = groups.setdefault((r["kind"], SOURCE_TAG.get(r["source"], r["source"])),
+                              {"found": 0, "rejected": 0, "scores": [], "won_scores": [], **{s: 0 for s in STAGES[1:]}})
+        g["found"] += 1
+        g["scores"].append(r["score"] or 0)
+        g["rejected"] += r["status"] == "rejected"
+        k = reached.get(r["id"], 0)
+        for i, stage in enumerate(STAGES[1:], start=1):
+            g[stage] += k >= i
+        if k >= 5:
+            g["won_scores"].append(r["score"] or 0)
+    return {"days": days, "groups": groups}
+
+
+def stats_text(days: int = 90, now: datetime | None = None) -> str:
+    s = stats(days, now)
+    if not s["groups"]:
+        return f"LEAD STATS: nothing found in the last {days} days yet."
+    pct = lambda a, b: f"{a / b * 100:.0f}%" if b else "-"  # noqa: E731
+    L = [f"D.O.N.N.A | LEAD STATS - last {days} days (from the steps you log with !leads 12 contacted etc.)",
+         "", "Source   Found  Approved  Contacted  Replied  Meeting  Won   Reply rate  Win rate  Avg score"]
+    for kind in ("ib", "trader"):
+        rows = [(src, g) for (k, src), g in sorted(s["groups"].items()) if k == kind]
+        if not rows:
+            continue
+        L.append("IBs / PARTNERS" if kind == "ib" else "TRADERS")
+        for src, g in rows:
+            avg = sum(g["scores"]) / len(g["scores"]) if g["scores"] else 0
+            L.append(f" {src:<7}{g['found']:>6}{g['approved']:>10}{g['contacted']:>11}{g['replied']:>9}{g['meeting']:>9}"
+                     f"{g['won']:>5}   {pct(g['replied'], g['contacted']):>10}{pct(g['won'], g['contacted']):>10}{avg:>11.0f}")
+    allg = list(s["groups"].values())
+    judged = sum(g["approved"] for g in allg) + sum(g["rejected"] for g in allg)
+    won = [x for g in allg for x in g["won_scores"]]
+    L += ["", "Lead quality:",
+          f" You approved {pct(sum(g['approved'] for g in allg), judged)} of the prospects you reviewed "
+          f"({judged} reviewed) - low means the search words or score need tuning.",
+          f" Average score of wins: {sum(won) / len(won):.0f}" if won else " No wins logged yet - log them with !leads 12 partner / funded.",
+          " Win = IB signed (partner) or trader funded. Rates count from 'contacted'."]
+    return "\n".join(L)
 
 
 def command(cmd: str, rest: str) -> str | None:
@@ -396,6 +499,8 @@ def command(cmd: str, rest: str) -> str | None:
         found = ", ".join(f"{k} {v}" for k, v in r["found"].items()) or "no search source on yet"
         warn = ("\nProblems: " + "; ".join(r["problems"])) if r["problems"] else ""
         return f"Searched {', '.join(r['countries'])}: {found}.{warn}\n\n" + shortlist_text()
+    if sub in ("stats", "funnel"):
+        return stats_text(int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 90)
     if sub == "linkedin":
         code = parts[1].upper() if len(parts) > 1 and parts[1].upper() in radar.COUNTRIES else None
         return linkedin_links(code)
@@ -409,7 +514,8 @@ def command(cmd: str, rest: str) -> str | None:
     if sub.lstrip("#").isdigit() and len(parts) > 1:
         return update(int(sub.lstrip("#")), parts[1].lower(), " ".join(parts[2:]))
     return ("!leads   !leads run   !leads sources   !leads linkedin [KE]   !leads add <link> [KE] <note>\n"
-            "!leads 12 approve|reject <why>|contacted|partner   !leads draft 12   !leads flagged   !crm")
+            "!leads 12 approve|contacted|replied|meeting|partner|funded|reject <why>|lost <why>\n"
+            "!leads draft 12   !leads stats [days]   !leads flagged   !crm")
 
 
 def weekly(send: bool = True, today: datetime | None = None) -> dict[str, Any]:
