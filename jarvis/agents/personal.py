@@ -1,6 +1,7 @@
 """Personal trading journal and cBot monitor.
 
-Inputs arrive through the same inbox as the back-office exports (see backoffice.ingest):
+Closed trades arrive by themselves from the live cTrader feed (jarvis/adapters/ctrader_feed.py) once it is
+connected. Statements and logs can still be sent through the same inbox as the back-office exports (see backoffice.ingest):
   cTrader account statement   cT_<account>_<date>.xlsx  (sheet "Records": Symbol, Opening direction,
                               Closing time, Entry price, Closing price, Closing Quantity, Net $, Balance $)
   cTrader cBot log            <date>_-_<BotName>_Instance_<id>.log  (cTrader Automate log export)
@@ -71,6 +72,18 @@ def store_statement(d: pd.DataFrame, path: Path) -> tuple[str, int]:
     return account, added
 
 
+def store_trades(account: str, trades: list[dict[str, Any]]) -> int:
+    """Closed trades from the live cTrader feed -> the journal. Returns how many were new."""
+    if not trades:
+        return 0
+    rows = [(account, t["closed_utc"], t["symbol"], t["side"], t["entry"], t["exit"], t["qty"], t["net"], t["balance"])
+            for t in trades]
+    with _db() as c:
+        before = c.execute("SELECT COUNT(*) FROM pt_trades").fetchone()[0]
+        c.executemany("INSERT OR IGNORE INTO pt_trades VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        return c.execute("SELECT COUNT(*) FROM pt_trades").fetchone()[0] - before
+
+
 def _session(h: int) -> str:
     return next(name for lo, hi, name in SESSIONS if lo <= h < hi)
 
@@ -82,7 +95,7 @@ def journal(account: str = "", days: int = 30) -> dict[str, Any]:
             account = os.getenv("JARVIS_PERSONAL_ACCOUNT") or (row[0] if row else "")
         d = pd.read_sql_query("SELECT * FROM pt_trades WHERE account = ? ORDER BY closed_utc", c, params=(account,))
     if d.empty:
-        return {"error": "NO DATA - no cTrader account statement ingested"}
+        return {"error": "NO DATA - no closed trades yet (cTrader feed not connected and no statement uploaded)"}
     d["t"] = pd.to_datetime(d.closed_utc)
     d = d[d.t >= d.t.max() - pd.Timedelta(days=days)].reset_index(drop=True)
     n = d.net

@@ -5,6 +5,17 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-06 · Trading journal fills itself from cTrader
+
+**What was done:**
+- The read-only cTrader connection now also reads your closed trades, not just open positions. The first run reaches back 90 days (`DONNA_CTRADER_HISTORY_DAYS`). After that, every 5-minute check picks up anything closed since the last run.
+- Each closed trade goes into the same journal that statements fill: time, symbol, buy/sell, entry, exit, size, net result after swap and commission, and balance. `!journal`, the big-loss warnings, the session and symbol breakdowns and the evening personal report all use it straight away.
+- It still only sends read requests (the deal list is a read). The trading-permission refusal is unchanged.
+
+**Why:** SH asked whether statements still need uploading now that cTrader is connected. They no longer do for this account. Statements and cBot logs can still be sent in #donna, for example for another account, and a trade already read from the feed is not counted twice.
+
+**Recommendation:** none. Type `!journal` about 30 minutes after this goes live.
+
 ## 2026-11-06 · Daily wrap and morning markets in plain words
 
 **What was done:**
