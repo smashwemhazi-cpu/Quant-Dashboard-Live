@@ -596,6 +596,12 @@ def ingest_lead(lead: LeadIn, bg: BackgroundTasks, actor: str = Depends(require_
         row = c.execute("SELECT lead_id, status, contacted_at FROM leads WHERE handle = ?", (handle,)).fetchone()
         if row["status"] != "DISCOVERED" or row["contacted_at"] or lead.intent_score < LEAD_MIN_SCORE:
             return {"status": row["status"], "lead_id": row["lead_id"], "staged": False}
+        if os.getenv("DONNA_LEAD_AUTOSEND", "0") != "1":
+            # draft-only (default): the trader goes on the Lead Finder list; any message is written and sent by hand
+            pid = _prospect({"source": "telegram-group", "ext_id": handle, "kind": "trader",
+                             "name": f"@{lead.handle} in {lead.source_chat}"[:120], "url": f"https://t.me/{lead.handle}",
+                             "about": lead.snippet})
+            return {"status": "LISTED", "lead_id": row["lead_id"], "prospect": pid, "staged": False}
         c.execute("UPDATE leads SET status = 'OUTREACH_STAGED' WHERE handle = ?", (handle,))
     text = consent_request(lead)
     action_id = stage_action("lead_monitor", "DISPATCH_OUTREACH", f"@{handle}",
@@ -603,6 +609,42 @@ def ingest_lead(lead: LeadIn, bg: BackgroundTasks, actor: str = Depends(require_
     bg.add_task(notify_admin, action_id, "DISPATCH_OUTREACH", f"@{handle}",
                 f"{text}\n\nContext: {lead.snippet}\nScore {lead.intent_score}: {', '.join(lead.matched_terms)}")
     return {"status": "OUTREACH_STAGED", "lead_id": row["lead_id"], "action_id": action_id, "staged": True}
+
+
+def _prospect(cand: dict[str, Any]) -> Any:
+    from jarvis.agents import leadfinder  # the Lead Finder list lives in the JARVIS state database
+
+    try:
+        return leadfinder.add(cand)
+    except Exception as e:  # a full disk or locked db must not lose the listener's request
+        log.error("lead finder add failed: %s", e)
+        return None
+
+
+class ProspectIn(BaseModel):
+    """A public Telegram channel or group found by the lead monitor's search (business information only)."""
+    username: str = Field(pattern=r"^[A-Za-z0-9_]{4,32}$")
+    title: str = Field(max_length=200)
+    about: str = Field(default="", max_length=600)
+    members: Optional[int] = Field(default=None, ge=0)
+    country: str = Field(pattern=r"^[A-Z]{2}$")
+
+
+@app.get("/api/prospects/queries")
+def prospect_queries(actor: str = Depends(require_service)) -> dict[str, list[str]]:
+    """What the lead monitor should search Telegram for: only countries cleared for marketing."""
+    from jarvis.agents import leadfinder, radar
+
+    return {code: leadfinder.telegram_queries(code) for code in radar.permitted()}
+
+
+@app.post("/api/prospects")
+def add_prospects(items: list[ProspectIn], actor: str = Depends(require_service)) -> dict[str, int]:
+    n = sum(1 for p in items[:200] if _prospect({
+        "source": "telegram", "ext_id": p.username, "kind": "ib", "country": p.country, "name": p.title,
+        "url": f"https://t.me/{p.username}", "about": p.about, "audience": p.members}) is not None)
+    audit("lead_monitor", "prospects", {"received": len(items), "stored": n})
+    return {"stored": n}
 
 
 @app.get("/api/outreach/approved")

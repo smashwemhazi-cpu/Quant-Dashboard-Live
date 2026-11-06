@@ -1017,3 +1017,54 @@ def test_bridge_script_watchdog_and_backup_are_wired():
     assert "var VERSION = 3;" in gs and "newTrigger('watchdog')" in gs and "function watchdog()" in gs
     assert "q.action === 'heartbeat'" in gs and "q.action === 'backup'" in gs and "BACKUPS_KEPT = 14" in gs
     assert "MailApp.sendEmail(Session.getEffectiveUser().getEmail()" in gs   # alerts go only to the owner
+
+
+def test_lead_finder_web_search_keeps_business_pages_and_drops_personal_profiles(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    from jarvis.agents import leadfinder, radar
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    for k in ("JARVIS_YOUTUBE_API_KEY", "JARVIS_BRAVE_API_KEY", "TG_API_ID", "TG_API_HASH"):
+        monkeypatch.delenv(k, raising=False)
+    assert "no countries cleared" in leadfinder.run()["error"]
+    radar.set_permitted(["KE"])
+    assert "no source switched on" in leadfinder.run()["error"]
+    assert leadfinder.classify_url("https://ke.linkedin.com/in/jane-doe") is None        # a person: never stored
+    assert leadfinder.classify_url("https://www.linkedin.com/company/nairobi-fx/") == ("linkedin", "nairobi-fx")
+    assert leadfinder.classify_url("https://t.me/s/kenyaforex") == ("telegram", "kenyaforex")
+    assert leadfinder.classify_url("https://en.wikipedia.org/wiki/Forex") is None
+    monkeypatch.setenv("JARVIS_BRAVE_API_KEY", "k" * 30)
+    results = [
+        {"url": "https://www.linkedin.com/company/nairobi-fx/", "title": "Nairobi FX Academy | LinkedIn",
+         "description": "Forex trading education and mentorship community in Nairobi"},
+        {"url": "https://ke.linkedin.com/in/jane-doe", "title": "Jane Doe - forex mentor", "description": "forex"},
+        {"url": "https://kenyatraders.co.ke/about", "title": "Kenya Traders Club", "description": "A forex community"},
+        {"url": "https://kenyatraders.co.ke/join", "title": "Join Kenya Traders", "description": "forex course"},
+        {"url": "https://www.cookingke.com", "title": "Cooking in Kenya", "description": "recipes"},
+    ]
+    calls = []
+
+    def fake_get(url, params, timeout, headers):
+        calls.append((params["q"], headers["X-Subscription-Token"]))
+        return type("R", (), {"status_code": 200, "raise_for_status": lambda self: None,
+                              "json": lambda self: {"web": {"results": results}}})()
+
+    monkeypatch.setattr(leadfinder.requests, "get", fake_get)
+    r = leadfinder.run(now=datetime(2026, 11, 6, tzinfo=timezone.utc))
+    assert r["problems"] == [] and len(calls) == len(leadfinder.web_queries("KE"))
+    names = {p["name"] for p in leadfinder.shortlist("ib")}
+    assert names == {"Nairobi FX Academy", "Kenya Traders Club"}            # one entry per website
+    text = leadfinder.command("!leads", "")
+    assert "LEAD FINDER" in text and "KENYA" in text and "nobody has been contacted" in text
+    pid = leadfinder.shortlist("ib")[0]["id"]
+    assert "high risk of losing money" in leadfinder.draft(pid) and "not sent" in leadfinder.draft(pid)
+    assert "Say why" in leadfinder.command("!leads", f"{pid} reject")
+    assert "approved" in leadfinder.command("!leads", f"{pid} approve")
+    assert "linkedin.com/search/results/companies/?keywords=forex+academy+Kenya" in leadfinder.command("!leads", "linkedin")
+    assert "Added #" in leadfinder.command("!leads", "add https://www.linkedin.com/company/mombasa-pips KE runs a 3k academy")
+    assert "isn't cleared" in leadfinder.command("!leads", "add https://x.com/y ZA note")
+    assert "LEADS" in leadfinder.command("!crm", "")                                    # the CRM backlog moved here
+    # retention: never-actioned prospects go after 180 days; the approved one stays
+    assert leadfinder.purge(datetime(2027, 6, 1, tzinfo=timezone.utc)) == 2
+    assert [p["id"] for p in leadfinder.shortlist("ib")] == [pid]
