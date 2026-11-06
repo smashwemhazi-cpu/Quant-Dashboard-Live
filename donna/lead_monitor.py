@@ -180,10 +180,10 @@ async def main() -> None:
                         except Exception as e:  # private, deleted or restricted: keep the title only
                             log.info("no details for @%s: %s", f["username"], type(e).__name__)
                         await asyncio.sleep(random.uniform(3, 6))
-                    if hits:
-                        res = await api.call("POST", "/api/prospects",
-                                             json=[{k: v for k, v in f.items() if k != "_entity"} for f in hits])
-                        log.info("telegram search %s: %d found, %d stored", country, len(hits), res.get("stored", 0))
+                    # reported even when empty, so !leads can say the search finished
+                    res = await api.call("POST", "/api/prospects",
+                                         json=[{k: v for k, v in f.items() if k != "_entity"} for f in hits])
+                    log.info("telegram search %s: %d found, %d stored", country, len(hits), res.get("stored", 0))
             except errors.FloodWaitError as e:
                 log.warning("telegram search flood wait %ss", e.seconds)
                 await asyncio.sleep(e.seconds + 5)

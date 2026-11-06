@@ -1119,3 +1119,29 @@ def test_lead_pipeline_steps_stats_and_telegram_search_on_request(tmp_path, monk
     assert (g["found"], g["approved"], g["contacted"], g["replied"], g["won"], g["rejected"]) == (4, 2, 2, 1, 1, 1)
     text = leadfinder.command("!leads", "stats")
     assert "LEAD STATS" in text and "50%" in text and "Average score of wins" in text
+
+
+def test_lead_finder_says_how_the_telegram_search_is_going(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from jarvis.agents import leadfinder, radar
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("TG_API_ID", "123")
+    monkeypatch.setenv("TG_API_HASH", "a" * 32)
+    t0 = datetime(2026, 11, 6, 22, 0, tzinfo=timezone.utc)
+    radar.set_permitted(["KE"])
+    assert "first search not run" in leadfinder.telegram_status(t0)
+    leadfinder.request_telegram(t0)
+    assert "starts within 5 minutes" in leadfinder.telegram_status(t0 + timedelta(minutes=2))
+    assert "systemctl restart vertex1-leads" in leadfinder.telegram_status(t0 + timedelta(minutes=20))
+    leadfinder.telegram_plan(t0 + timedelta(minutes=3))
+    assert "results in about 10 minutes" in leadfinder.telegram_status(t0 + timedelta(minutes=5))
+    assert "sent nothing back" in leadfinder.telegram_status(t0 + timedelta(hours=2))
+    leadfinder.telegram_result(3)
+    leadfinder.telegram_result(2)
+    assert "found 5 channels" in leadfinder.telegram_status(t0 + timedelta(hours=2))
+    leadfinder.add({"source": "telegram", "ext_id": "vipke", "kind": "ib", "country": "KE", "name": "VIP Signals KE",
+                    "url": "https://t.me/vipke", "about": "guaranteed 100% win vip signals forex"})
+    text = leadfinder.shortlist_text()
+    assert "1 more hidden for red flags" in text and "Telegram: last search" in text

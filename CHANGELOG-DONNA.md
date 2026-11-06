@@ -5,6 +5,12 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-06 · Lead Finder shows what the Telegram search is doing
+
+**What was done:** `!leads` now has a Telegram line. It says whether a search is queued, running (results in about 10 minutes) or finished, and how many channels and groups it found. If the lead monitor doesn't pick a search up, the line gives the one command that fixes it. Countries with prospects hidden for red flags now say how many, so an empty country no longer looks broken. See them with `!leads flagged`.
+
+**Why:** SH's `!leads` showed "Nothing found yet" everywhere with no way to tell whether the search had run.
+
 ## 2026-11-06 · Lead pipeline, conversion and quality; Telegram search on demand
 
 **What was done:**

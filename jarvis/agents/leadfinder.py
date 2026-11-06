@@ -163,6 +163,35 @@ def telegram_plan(now: datetime | None = None) -> dict[str, list[str]]:
     return {code: telegram_queries(code) for code in codes}
 
 
+def telegram_result(stored: int, now: datetime | None = None) -> None:
+    """The lead monitor reports what one country's search stored; totals are kept per search."""
+    last = _setting("tg_last")
+    total = int(_setting("tg_found") or 0) if _setting("tg_found_for") == last else 0
+    _set("tg_found_for", last)
+    _set("tg_found", str(total + stored))
+    _set("tg_reported", _now(now))
+
+
+def telegram_status(now: datetime | None = None) -> str:
+    now = now or datetime.now(timezone.utc)
+    req, last = _setting("tg_requested"), _setting("tg_last")
+    if req:
+        mins = (now - datetime.fromisoformat(req)).total_seconds() / 60
+        if mins > 15:
+            return ("on, but the search asked for at " + req[11:16] + " UTC hasn't started - the lead monitor may be "
+                    "stopped. On the server: systemctl restart vertex1-leads")
+        return "on - search queued, starts within 5 minutes"
+    if not last:
+        return "on - first search not run yet (!leads run)"
+    if _setting("tg_found_for") == last:
+        return f"on - last search {last[:16].replace('T', ' ')} UTC found {_setting('tg_found')} channels/groups"
+    mins = (now - datetime.fromisoformat(last)).total_seconds() / 60
+    if mins < 30:
+        return f"on - searching since {last[11:16]} UTC, results in about 10 minutes"
+    return (f"on, but the search at {last[:16].replace('T', ' ')} UTC sent nothing back - check the lead monitor: "
+            "systemctl status vertex1-leads")
+
+
 def sources() -> dict[str, str]:
     """Which sources are on, in plain words."""
     yt = bool(os.getenv("JARVIS_YOUTUBE_API_KEY", "").strip())
@@ -170,9 +199,7 @@ def sources() -> dict[str, str]:
     tg = bool(os.getenv("TG_API_ID", "").strip() and os.getenv("TG_API_HASH", "").strip())
     return {
         "YouTube": "on" if yt else "off - free key: vertex1-connect radar",
-        "Telegram": (f"on - last search {_setting('tg_last')[:16].replace('T', ' ') or 'not yet'} UTC"
-                     + (", a new one is queued" if _setting("tg_requested") else "")) if tg
-        else "off - Telegram login: vertex1-connect telegram",
+        "Telegram": telegram_status() if tg else "off - Telegram login: vertex1-connect telegram",
         "Web": "on" if web else "off - Brave Search key: vertex1-connect leads",
         "LinkedIn": "you search, I log it (!leads linkedin)",
     }
@@ -331,10 +358,17 @@ def shortlist_text(now: datetime | None = None) -> str:
     L = ["D.O.N.N.A | LEAD FINDER - public sources only, nobody has been contacted",
          "Sources: " + " | ".join(f"{k} {v.split(' ')[0]}" for k, v in sources().items() if k != "LinkedIn")
          + " | LinkedIn: !leads linkedin", "Score 0-100 · YT YouTube · TG Telegram · WEB website · LI LinkedIn company"]
+    if sources()["Telegram"].startswith("on"):
+        L.append("Telegram: " + sources()["Telegram"][5:])
+    with _db() as db:
+        hidden = dict(db.execute("SELECT country, COUNT(*) FROM lead_prospects WHERE kind = 'ib' AND flags != '' "
+                                 "AND status IN ('new','approved') GROUP BY country").fetchall())
     for code in codes:
         rows = [r for r in ibs if r["country"] == code]
         L += ["", f"POSSIBLE IBs / PARTNERS - {radar.COUNTRIES[code][0].upper()}"]
-        L += [line(r, now) for r in rows] or ["  Nothing found yet."]
+        L += [line(r, now) for r in rows] or ["  Nothing clean found yet."]
+        if hidden.get(code):
+            L.append(f"  ({hidden[code]} more hidden for red flags such as paid signals or promised returns: !leads flagged)")
     L += ["", "TRADERS ASKING FOR A BROKER (Telegram groups you are in)"]
     L += [line(r, now) for r in traders] or ["  None yet."]
     L += ["", "!leads 12 approve | contacted | replied | meeting | partner | funded | reject <why>",
