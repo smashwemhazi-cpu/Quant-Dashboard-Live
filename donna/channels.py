@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import smtplib
 import sys
 import time
@@ -107,13 +108,150 @@ def _discord_post(url: str, payload: dict) -> dict:
     raise ChannelError("discord: still rate limited after 3 attempts")
 
 
+# ------------------------------------------------------------------ Discord layout
+# DONNA_DISCORD_STYLE=rich (default): each report section becomes its own titled block, tables stay monospace,
+# news and notes wrap as normal text, status tags become coloured dots, and every "NO DATA" section folds into
+# one "Not connected yet" line. DONNA_DISCORD_STYLE=mono: the old single code block.
+STATUS_DOTS = [(r"\[\s*GREEN\s*\]", "\U0001F7E2"), (r"\[\s*AMBER\s*\]", "\U0001F7E0"),
+               (r"\[\s*RED\s*\]", "\U0001F534"), (r"\[\s*NO DATA\s*\]", "\u26AA")]
+FIELD_LIMIT = 1024
+ACRONYMS = {"CRM", "KPI", "KPIS", "KRI", "KRIS", "PAD", "AML", "KYC", "LP", "LPS", "ATR", "UTC", "IB", "IBS", "PEP",
+            "MI", "STR", "FX", "USD", "BTC", "EOD", "DONNA"}
+
+
+def _is_rule(line: str) -> bool:
+    return len(line.strip()) >= 5 and set(line.strip()) <= set("-=_")
+
+
+def _heading(line: str) -> tuple[str, str] | None:
+    """'CLOSES' / 'TOP MOVERS: a, b' / '24H NEWS RECAP (ranked...)' -> (heading, rest of the line)."""
+    m = re.match(r"^([A-Z0-9][A-Za-z0-9 '&/.-]{1,40}?)\s*(\([^)]*\))?\s*(?::\s*(.*))?$", line.strip())
+    if not m:
+        return None
+    letters = [c for c in m.group(1) if c.isalpha()]
+    if not letters or sum(c.isupper() for c in letters) < 0.75 * len(letters):
+        return None
+    words = [w if not w.isupper() or w in ACRONYMS or any(c.isdigit() for c in w) else w.capitalize()
+             for w in m.group(1).split()]
+    head = " ".join(words) + (f" {m.group(2)}" if m.group(2) else "")
+    return head, (m.group(3) or "").strip()
+
+
+def _tabular(lines: list[str]) -> bool:
+    return any(re.search(r"\S {2,}\S|^\s{2,}\S.* {2,}", ln) for ln in lines) or any(" | " in ln for ln in lines)
+
+
+def _md_escape(s: str) -> str:
+    s = re.sub(r"([*_~`|])", r"\\\1", s)
+    s = re.sub(r"^!!\s*", "\u26a0\ufe0f ", s)  # the reports' "needs attention" marker
+    return "\\" + s if s.startswith((">", "#", "-# ")) else s
+
+
+def _field_values(lines: list[str]) -> list[str]:
+    """Body lines -> one or more field values under Discord's 1024-character limit."""
+    if _tabular(lines):
+        body = "\n".join(lines).replace(FENCE, "\u02cb" * 3)
+        return [f"{FENCE}\n{p.rstrip()}\n{FENCE}" for p in chunks(body, FIELD_LIMIT - 10)]
+    out = []
+    for ln in lines:
+        t = ln.strip()
+        if t.startswith(("- ", "* ")):
+            out.append("\u2022 " + _md_escape(t[2:]))
+        elif t.endswith(":") and len(t) < 40:
+            out.append(f"**{_md_escape(t[:-1])}**")
+        else:
+            out.append(_md_escape(t))
+    return chunks("\n".join(out), FIELD_LIMIT)
+
+
+def rich_embeds(text: str, title: str, colour: int) -> list[dict]:
+    """A plain-text report -> Discord embeds: a field per section, at most 25 fields / ~5500 characters each."""
+    for pat, dot in STATUS_DOTS:
+        text = re.sub(pat, dot, text)
+    lines = ["" if _is_rule(ln) else ln.rstrip() for ln in text.splitlines()]  # a rule ends a section
+    while lines and not lines[-1].strip():
+        lines.pop()
+    desc = ""
+    if lines and " | " in lines[0]:  # the report's own title line, e.g. "VERTEX 1 | DAILY WRAP | Fri 06 Nov"
+        desc = _md_escape(lines.pop(0).strip())
+    footer = lines.pop().strip() if lines and lines[-1].strip().lower().startswith(("internal use", "more:")) else ""
+    sections: list[list[str]] = [[]]
+    for ln in lines:
+        if not ln.strip():
+            sections.append([])
+        else:
+            sections[-1].append(ln)
+    sections = [x for x in sections if x]
+    fields: list[dict] = []
+    missing: list[str] = []
+    for sec in sections:
+        h = _heading(sec[0])
+        head, body = (h[0], ([h[1]] if h[1] else []) + sec[1:]) if h else ("", sec)
+        flat = " ".join(body).strip()
+        if head.lower().startswith(("not set up", "not connected")):
+            missing.append(re.split(r"\s+-\s+type", flat)[0])
+            continue
+        if re.match(r"^(NO DATA|not connected|not set up)", flat, re.I) or (h and "NO DATA" in h[1]):
+            missing.append(head or flat[:40])
+            continue
+        keep = []
+        for ln in body:  # "CRM KPIs: NO DATA - ..." inside a section: name it once at the end instead
+            nd = re.match(r"^\s*([^:]{2,40}):\s*NO DATA\b", ln)
+            if nd:
+                missing.append(nd.group(1).strip())
+            else:
+                keep.append(ln)
+        if not keep and body:
+            continue
+        body = keep
+        if not head and fields:  # an untitled paragraph continues the section above it
+            fields[-1]["value"] += "\n" + "\n".join(_field_values(body))[:FIELD_LIMIT - len(fields[-1]["value"]) - 1]
+            continue
+        for n, v in enumerate(_field_values(body) or ["\u2014"]):
+            fields.append({"name": (head or "\u200b")[:240] + (" (cont.)" if n else ""),
+                           "value": v, "inline": False})
+    if missing:
+        fields.append({"name": "\u26AA Not connected yet", "value": " \u00b7 ".join(missing)[:900]
+                       + "\nType !status to see what each one needs.", "inline": False})
+    embeds, cur, size = [], [], len(desc) + len(title)
+    for f in fields:
+        if cur and (len(cur) == 25 or size + len(f["name"]) + len(f["value"]) > 5500):
+            embeds.append(cur)
+            cur, size = [], 0
+        cur.append(f)
+        size += len(f["name"]) + len(f["value"])
+    embeds.append(cur)
+    out = []
+    for n, fs in enumerate(embeds):
+        e: dict = {"color": colour, "fields": fs}
+        if n == 0:
+            e["title"] = title[:256]
+            if desc:
+                e["description"] = desc[:4096]
+        if n == len(embeds) - 1:
+            e["footer"] = {"text": (footer + " | " if footer else "") + "DONNA | internal"}
+            e["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        out.append(e)
+    return out
+
+
 def send_discord(text: str, title: str = "DONNA", webhook: str = "", colour: str = "default") -> str:
-    """Post as embeds with a monospace body so report columns line up. `webhook` picks a named
-    webhook (DONNA_DISCORD_WEBHOOK_<NAME>); blank uses DONNA_DISCORD_WEBHOOK_URL."""
+    """Post a report as embeds (see rich_embeds). `webhook` picks a named webhook
+    (DONNA_DISCORD_WEBHOOK_<NAME>); blank uses DONNA_DISCORD_WEBHOOK_URL."""
     name = f"DONNA_DISCORD_WEBHOOK_{webhook.upper()}" if webhook else "DONNA_DISCORD_WEBHOOK_URL"
     url = _env(name)
     if not url.startswith(("https://discord.com/api/webhooks/", "https://discordapp.com/api/webhooks/")):
         raise ChannelError(f"{name} is not a Discord webhook URL (must start with https://discord.com/api/webhooks/)")
+    who = os.getenv("DONNA_DISCORD_NAME", "D.O.N.N.A")
+    if os.getenv("DONNA_DISCORD_STYLE", "rich").lower() != "mono":
+        try:
+            embeds = rich_embeds(text, title, DISCORD_COLOURS.get(colour, DISCORD_COLOURS["default"]))
+        except Exception:  # a layout bug must never cost a report: fall back to the plain block
+            embeds = []
+        if embeds:
+            ids = [str(_discord_post(url, {"username": who, "embeds": [e], "allowed_mentions": {"parse": []}})
+                       .get("id", "?")) for e in embeds]
+            return f"discord{':' + webhook if webhook else ''} msg {','.join(ids)}"
     body = text.replace(FENCE, "\u02cb" * 3)  # look-alike so text can't break out of the code block
     parts = chunks(body, DISCORD_EMBED_LIMIT)
     ids = []

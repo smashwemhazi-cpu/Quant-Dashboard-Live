@@ -233,15 +233,17 @@ def render_wrap() -> tuple[str, dict[str, Any]]:
     nw, rec = news(hours=24, per_cat=5), predictor.track_record(60)
     L = [f"VERTEX 1 | DAILY WRAP | {now:%a %d %b %Y} (data to last close)", LINE, "CLOSES"]
     ok = [r for r in rows if not r.get("error")]
+    L.append(f"{'':<7}{'Close':>11}{'Day':>8}{'5 days':>8}{'Range':>7}")  # narrow enough not to wrap on a phone
     for r in rows:
         i = r["inst"]
         if r.get("error"):
-            L.append(f"{i.label}: {r['source']}")
+            L.append(f"{i.key:<7}{'no data':>11}")
             continue
         ra = r["range_atr"]
-        flag = "  << unusual range" if ra is not None and ra == ra and ra > 1.5 else ""
-        L.append(f"{i.label}: {fmt(i, r['close'])} | day {sp(r['chg_pct'])} | 5d {sp(r['chg_5d_pct'])} "
-                 f"| range {sp(ra, '.1f', 'x ATR')}{flag}" + ("  [STALE]" if r["stale"] else ""))
+        flag = " \u26a0" if ra is not None and ra == ra and ra > 1.5 else ""
+        L.append(f"{i.key:<7}{r['close']:>11,.{i.decimals}f}{sp(r['chg_pct']):>8}{sp(r['chg_5d_pct']):>8}"
+                 f"{sp(ra, '.1f', 'x'):>7}{flag}" + (" stale" if r["stale"] else ""))
+    L.append("Range = today's high-low vs a normal day (ATR); \u26a0 = over 1.5x")
     if ok:
         movers = sorted([r for r in ok if r["chg_pct"] == r["chg_pct"]], key=lambda r: -abs(r["chg_pct"]))[:3]
         L += ["", "TOP MOVERS: " + ", ".join(f"{r['inst'].label} {r['chg_pct']:+.2f}%" for r in movers)]

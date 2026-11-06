@@ -165,6 +165,7 @@ def test_discord_embeds_named_webhook_and_rate_limit(monkeypatch):
 
     monkeypatch.setattr(channels.requests, "post", fake_post)
     monkeypatch.setattr(channels.time, "sleep", lambda s: None)
+    monkeypatch.setenv("DONNA_DISCORD_STYLE", "mono")
     text = "\n".join(f"Gold (XAU): $4,2{i:02d}.00 | day +0.40%" for i in range(300)) + "\n```evil```"
     out = channels.broadcast(text, ["discord:reports"], title="Vertex 1 daily_wrap")
     assert out["discord:reports"].startswith("discord:reports msg")
@@ -307,3 +308,54 @@ def test_console_reply_routes_commands_and_chat(monkeypatch):
     assert console.reply("any complaints open?") == "cmd !complaints in console"
     q = "should we widen gold spreads before the FOMC given our B-book exposure?"
     assert console.reply(q) == f"chat {q} console False"
+
+
+WRAP = """VERTEX 1 | DAILY WRAP | Fri 06 Nov 2026 (data to last close)
+----------------------------------
+CLOSES
+              Close     Day  5 days  Range
+XAUUSD     4,073.70  -0.97%  +4.48%   0.9x
+EURUSD      1.11570  -0.69%  -0.23%   1.6x \u26a0
+
+TOP MOVERS: GER40 (DAX) -1.92%, NAS100 (Nasdaq) +1.90%
+
+24H NEWS RECAP (ranked by market relevance)
+Macro:
+ - U.S. economy added 165,000 jobs in October
+ - Nasdaq drops into *correction* territory
+
+BUSINESS (back office)
+CRM KPIs: NO DATA - no Syntellicore KPI export ingested
+
+BOOK: NO DATA - no cTrader end-of-day report ingested
+
+COMPLIANCE
+ [GREEN ] Open high-severity cases: 0
+ [RED   ] Overdue cases: 2
+----------------------------------
+Internal use only."""
+
+
+def test_rich_layout_sections_tables_and_missing_data():
+    from donna import channels
+
+    es = channels.rich_embeds(WRAP, "Vertex 1 daily_wrap", 1)
+    assert len(es) == 1 and es[0]["title"] == "Vertex 1 daily_wrap" and "DAILY WRAP" in es[0]["description"]
+    f = {x["name"]: x["value"] for x in es[0]["fields"]}
+    assert f["Closes"].startswith("```") and "XAUUSD" in f["Closes"]              # tables stay monospace
+    assert f["Top Movers"].startswith("GER40")                                     # one-liners keep their heading
+    news = f["24H News Recap (ranked by market relevance)"]
+    assert "\u2022 U.S. economy" in news and "**Macro**" in news and "\\*correction\\*" in news
+    assert "CRM KPIs" in f["\u26AA Not connected yet"] and "Book" in f["\u26AA Not connected yet"]
+    assert "\U0001F7E2" in f["Compliance"] and "\U0001F534" in f["Compliance"]
+    assert "Internal use only." in es[0]["footer"]["text"]
+    assert all(len(x["value"]) <= 1024 for x in es[0]["fields"])
+
+
+def test_rich_layout_splits_long_reports():
+    from donna import channels
+
+    text = "NEWS\n" + "\n".join(f" - headline number {i} " + "x" * 80 for i in range(200))
+    es = channels.rich_embeds(text, "t", 1)
+    assert len(es) > 1 and all(len(e["fields"]) <= 25 for e in es)
+    assert all(sum(len(x["name"]) + len(x["value"]) for x in e["fields"]) <= 6000 for e in es)
