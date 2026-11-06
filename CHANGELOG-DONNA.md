@@ -5,6 +5,28 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-06 · Trading journal fills itself from cTrader
+
+**What was done:**
+- The read-only cTrader connection now also reads your closed trades, not just open positions. The first run reaches back 90 days (`DONNA_CTRADER_HISTORY_DAYS`). After that, every 5-minute check picks up anything closed since the last run.
+- Each closed trade goes into the same journal that statements fill: time, symbol, buy/sell, entry, exit, size, net result after swap and commission, and balance. `!journal`, the big-loss warnings, the session and symbol breakdowns and the evening personal report all use it straight away.
+- It still only sends read requests (the deal list is a read). The trading-permission refusal is unchanged.
+
+**Why:** SH asked whether statements still need uploading now that cTrader is connected. They no longer do for this account. Statements and cBot logs can still be sent in #donna, for example for another account, and a trade already read from the feed is not counted twice.
+
+**Recommendation:** none. Type `!journal` about 30 minutes after this goes live.
+
+## 2026-11-06 · Daily wrap and morning markets in plain words
+
+**What was done:**
+- The daily wrap's markets block is one short row per market (Price, Today, 5 days) that fits a phone without wrapping. The morning dispatch uses the same table.
+- "range 0.9x ATR" is gone. Markets that swung far more than on a normal day are named in their own line, "Unusually big swings today" (the test is still today's high-low over 1.5x the 14-day average range).
+- Headings are now plain: Markets at the close, Biggest moves, News (last 24 hours), Prediction track record ("58% right out of 12 calls, a coin flip gets 50%").
+- The Discord title reads "Vertex 1 daily wrap" instead of "daily_wrap".
+
+**Why:** SH's screenshot of the Fri 06 Nov wrap still showed the old single code block. That wrap was sent at 17:01 UTC, three hours before the new layout went live (20:46 UTC), so the next wrap is the first one in the new layout. This change finishes the job by replacing the remaining jargon.
+
+**Recommendation:** none. If you prefer the old look, set `DONNA_DISCORD_STYLE=mono` on the server.
 ## 2026-11-06 · Send to a lead after you confirm it
 
 **What was done:** SH chose "draft, then ask me before sending".

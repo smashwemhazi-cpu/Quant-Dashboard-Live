@@ -11,6 +11,7 @@ class FakeCTrader:
 
     def __init__(self, scope="SCOPE_VIEW", token_ok=True, login=5551234):
         self.sent, self.queue, self.scope, self.token_ok, self.login = [], [], scope, token_ok, login
+        self.windows, self.deals = [], []
 
     async def send(self, text):
         m = json.loads(text)
@@ -50,6 +51,10 @@ class FakeCTrader:
         elif pt == f.SYMBOLS_LIST_REQ:
             reply(f.SYMBOLS_LIST_RES, {"ctidTraderAccountId": 99, "symbol": [
                 {"symbolId": 7, "symbolName": "USDJPY"}, {"symbolId": 9, "symbolName": "XAUUSD"}]})
+        elif pt == f.DEAL_LIST_REQ:
+            self.windows.append((p["fromTimestamp"], p["toTimestamp"]))
+            deals = [d for d in self.deals if p["fromTimestamp"] <= d["executionTimestamp"] < p["toTimestamp"]]
+            reply(f.DEAL_LIST_RES, {"ctidTraderAccountId": 99, "deal": deals, "hasMore": False})
         elif pt == f.SUBSCRIBE_SPOTS_REQ:
             reply(f.SUBSCRIBE_SPOTS_RES, {"ctidTraderAccountId": 99})
             self.queue.append({"payloadType": f.SPOT_EVENT, "payload": {"ctidTraderAccountId": 99, "symbolId": 7,
@@ -82,7 +87,7 @@ def test_snapshot_reads_positions_prices_and_converts_currency():
     # only read requests went out - nothing that can place, amend or close
     assert set(fake.sent) <= {f.APP_AUTH_REQ, f.ACCOUNTS_BY_TOKEN_REQ, f.ACCOUNT_AUTH_REQ, f.TRADER_REQ,
                               f.RECONCILE_REQ, f.UNREALIZED_PNL_REQ, f.SYMBOLS_LIST_REQ,
-                              f.SUBSCRIBE_SPOTS_REQ, f.UNSUBSCRIBE_SPOTS_REQ}
+                              f.SUBSCRIBE_SPOTS_REQ, f.UNSUBSCRIBE_SPOTS_REQ, f.DEAL_LIST_REQ}
 
 
 def test_refuses_a_token_with_trading_permission():
@@ -161,3 +166,47 @@ def test_new_env_tokens_replace_a_refreshed_pair(tmp_path, monkeypatch):
     monkeypatch.setenv("DONNA_CTRADER_ACCESS_TOKEN", "new-access")
     monkeypatch.setenv("DONNA_CTRADER_REFRESH_TOKEN", "new-refresh")
     assert f.tokens()[:2] == ("new-access", "new-refresh")
+
+
+NOW = 1_762_466_400_000   # 2025-11-06 22:00 UTC, in ms
+DAY = 24 * 3600 * 1000
+
+
+def _deal(i, t, side, close=None):
+    d = {"dealId": i, "orderId": i, "positionId": i, "volume": 1_000, "filledVolume": 1_000, "symbolId": 9,
+         "createTimestamp": t, "executionTimestamp": t, "executionPrice": 2410.0, "tradeSide": side,
+         "dealStatus": 2, "moneyDigits": 2}
+    if close:
+        d["closePositionDetail"] = close
+    return d
+
+
+def test_closed_trades_flow_into_the_journal(monkeypatch):
+    from jarvis.agents import personal
+
+    fake = FakeCTrader()
+    fake.deals = [
+        _deal(1, NOW - 3 * DAY, 1),                                                   # opening buy: not a trade
+        _deal(2, NOW - 2 * DAY, 2, {"entryPrice": 2400.0, "grossProfit": 10_000, "swap": -150, "commission": -70,
+                                    "balance": 1_009_780, "closedVolume": 1_000, "moneyDigits": 2}),
+        {**_deal(3, NOW - DAY, 1, {"entryPrice": 2420.0, "grossProfit": -5_000, "swap": 0, "commission": 70,
+                                   "balance": 1_004_710, "closedVolume": 1_000, "moneyDigits": 2}),
+         "dealStatus": 4},                                                            # rejected: ignored
+    ]
+    snap = asyncio.run(f.snapshot(fake, "5551234", "a", "r", "cid", "sec", now_ms=NOW))
+    # first sync reaches back HISTORY_DAYS, a week per request
+    assert fake.windows[0][0] == NOW - f.HISTORY_DAYS * DAY and fake.windows[-1][1] == NOW
+    assert all(b - a <= f.WEEK_MS for a, b in fake.windows)
+    (t,) = snap["closed"]
+    assert t["symbol"] == "XAUUSD" and t["side"] == "buy" and t["entry"] == 2400.0 and t["exit"] == 2410.0
+    assert t["net"] == pytest.approx(97.80) and t["balance"] == pytest.approx(10_097.80) and t["qty"] == 10
+    assert personal.store_trades("5551234", snap["closed"]) == 1
+    assert personal.store_trades("5551234", snap["closed"]) == 0                  # overlap is de-duplicated
+    monkeypatch.setenv("JARVIS_PERSONAL_ACCOUNT", "5551234")
+    j = personal.journal()
+    assert j["trades"] == 1 and j["net"] == pytest.approx(97.80)
+    # the next sync only asks from the last one (minus an hour of overlap)
+    f._mark_synced("5551234", NOW)
+    fake2 = FakeCTrader()
+    asyncio.run(f.snapshot(fake2, "5551234", "a", "r", "cid", "sec", now_ms=NOW + 300_000))
+    assert fake2.windows == [(NOW - 3600_000, NOW + 300_000)]

@@ -3,6 +3,8 @@
 What it does, every few minutes (scheduler job "ctrader_positions"):
   connect (JSON over WebSocket) -> authorise the app -> authorise the account -> read balance, open
   positions, unrealised P&L and current prices -> store one snapshot via rhythm.store_positions().
+  It also reads the closed trades since the last run (ProtoOADealListReq; the first run reaches back
+  DONNA_CTRADER_HISTORY_DAYS) into the trading journal, so !journal needs no statement upload.
 It only ever sends read requests. On top of that it refuses to run with a token that has trading
 permission (SCOPE_TRADE), so even a wrongly issued token cannot be used to trade from this server.
 
@@ -35,6 +37,9 @@ from jarvis.core.config import settings
 HOSTS = {True: "wss://live.ctraderapi.com:5036", False: "wss://demo.ctraderapi.com:5036"}
 TIMEOUT = float(os.getenv("DONNA_CTRADER_TIMEOUT", "20"))
 REFRESH_DAYS = float(os.getenv("DONNA_CTRADER_REFRESH_DAYS", "20"))   # access tokens last about 30 days
+HISTORY_DAYS = int(os.getenv("DONNA_CTRADER_HISTORY_DAYS", "90"))      # closed trades fetched on the first sync
+WEEK_MS = 7 * 24 * 3600 * 1000                                         # one deal-list request covers at most a week
+FILLED = {2, 3, "FILLED", "PARTIALLY_FILLED"}                          # ProtoOADealStatus
 
 # payload types (OpenApiModelMessages.proto / OpenApiCommonModelMessages.proto)
 HEARTBEAT = 51
@@ -43,6 +48,7 @@ ACCOUNT_AUTH_REQ, ACCOUNT_AUTH_RES = 2102, 2103
 SYMBOLS_LIST_REQ, SYMBOLS_LIST_RES = 2114, 2115
 TRADER_REQ, TRADER_RES = 2121, 2122
 RECONCILE_REQ, RECONCILE_RES = 2124, 2125
+DEAL_LIST_REQ, DEAL_LIST_RES = 2133, 2134
 SUBSCRIBE_SPOTS_REQ, SUBSCRIBE_SPOTS_RES = 2127, 2128
 UNSUBSCRIBE_SPOTS_REQ = 2129
 SPOT_EVENT = 2131
@@ -74,6 +80,7 @@ def _db() -> sqlite3.Connection:
     c = sqlite3.connect(path)
     c.execute("CREATE TABLE IF NOT EXISTS ctrader_tokens (id INTEGER PRIMARY KEY CHECK (id = 1), access TEXT, "
               "refresh TEXT, issued TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS ctrader_sync (login TEXT PRIMARY KEY, deals_to_ms INTEGER)")
     if "origin" not in {r[1] for r in c.execute("PRAGMA table_info(ctrader_tokens)")}:
         c.execute("ALTER TABLE ctrader_tokens ADD COLUMN origin TEXT")
     return c
@@ -193,8 +200,49 @@ def _rate(gross_pnl: float, side: str, units: float, entry: float, close: float,
     return quote_to_account(symbol.replace("/", ""), close)
 
 
+def _synced_to(login: str) -> int | None:
+    with _db() as c:
+        row = c.execute("SELECT deals_to_ms FROM ctrader_sync WHERE login = ?", (login,)).fetchone()
+    return int(row[0]) if row else None
+
+
+def _mark_synced(login: str, to_ms: int) -> None:
+    with _db() as c:
+        c.execute("INSERT OR REPLACE INTO ctrader_sync (login, deals_to_ms) VALUES (?,?)", (login, to_ms))
+
+
+def closed_trade(d: dict[str, Any], symbol: str) -> dict[str, Any] | None:
+    """A closing deal -> one journal row (same columns as a cTrader statement line). None for opening deals."""
+    cp = d.get("closePositionDetail")
+    if not cp or d.get("dealStatus") not in FILLED:
+        return None
+    scale = 10 ** int(cp.get("moneyDigits", d.get("moneyDigits", 2)))
+    # commission and conversion fee are costs; swap can go either way
+    net = (cp.get("grossProfit", 0) + cp.get("swap", 0) - abs(cp.get("commission", 0))
+           - abs(cp.get("pnlConversionFee", 0))) / scale
+    t = datetime.fromtimestamp(int(d["executionTimestamp"]) / 1000, timezone.utc)
+    return {"closed_utc": t.strftime("%Y-%m-%d %H:%M:%S.%f"), "symbol": symbol,
+            "side": "sell" if _side(d["tradeSide"]) == "buy" else "buy",   # a closing buy closes a sell
+            "entry": float(cp.get("entryPrice") or 0), "exit": float(d.get("executionPrice") or 0),
+            "qty": int(cp.get("closedVolume") or d.get("filledVolume") or 0) / 100, "net": net,
+            "balance": cp.get("balance", 0) / scale}
+
+
+async def deals(s: Session, acct: int, from_ms: int, to_ms: int) -> list[dict[str, Any]]:
+    """Every deal between two times, a week per request (the API's limit for one deal-list call)."""
+    out: list[dict[str, Any]] = []
+    start = from_ms
+    while start < to_ms:
+        end = min(start + WEEK_MS, to_ms)
+        r = await s.ask(DEAL_LIST_REQ, {"ctidTraderAccountId": acct, "fromTimestamp": start, "toTimestamp": end},
+                        DEAL_LIST_RES)
+        out += r.get("deal", [])
+        start = end
+    return out
+
+
 async def snapshot(transport: Any, login: str, access: str, refresh: str, client_id: str, client_secret: str,
-                   refresh_due: bool = False) -> dict[str, Any]:
+                   refresh_due: bool = False, now_ms: int | None = None) -> dict[str, Any]:
     s = Session(transport)
     await s.ask(APP_AUTH_REQ, {"clientId": client_id, "clientSecret": client_secret}, APP_AUTH_RES)
     if refresh_due and refresh:
@@ -220,8 +268,13 @@ async def snapshot(transport: Any, login: str, access: str, refresh: str, client
     pnl_scale = 10 ** pnl_res.get("moneyDigits", 2)
     pnl = {int(p["positionId"]): (p["grossUnrealizedPnL"] / pnl_scale, p["netUnrealizedPnL"] / pnl_scale)
            for p in pnl_res.get("positionUnrealizedPnL", [])}
+    now_ms = now_ms or int(datetime.now(timezone.utc).timestamp() * 1000)
+    last = _synced_to(login)
+    # an hour of overlap so a trade closed while the last sync ran is not missed; rows are de-duplicated on insert
+    from_ms = last - 3600_000 if last else now_ms - HISTORY_DAYS * 24 * 3600_000
+    history = await deals(s, acct, from_ms, now_ms)
     names: dict[int, str] = {}
-    if positions:
+    if positions or history:
         lst = await s.ask(SYMBOLS_LIST_REQ, {"ctidTraderAccountId": acct}, SYMBOLS_LIST_RES)
         names = {int(x["symbolId"]): x.get("symbolName", str(x["symbolId"])) for x in lst.get("symbol", [])}
     ids = sorted({int(p["tradeData"]["symbolId"]) for p in positions})
@@ -242,8 +295,9 @@ async def snapshot(transport: Any, login: str, access: str, refresh: str, client
                     "stop": p.get("stopLoss") or None, "price": close,
                     "quote_to_account": _rate(gross, side, units, entry, close, symbol)})
     equity = balance + sum(n for _, n in pnl.values())
+    closed = [t for t in (closed_trade(d, names.get(int(d["symbolId"]), str(d["symbolId"]))) for d in history) if t]
     return {"login": login, "balance": balance, "equity": equity, "positions": out, "unpriced": unpriced,
-            "token_refreshed": refresh_due}
+            "closed": closed, "synced_to_ms": now_ms, "token_refreshed": refresh_due}
 
 
 async def _run(login: str) -> dict[str, Any]:
@@ -298,9 +352,15 @@ def poll() -> dict[str, Any]:
         return {"error": f"cTrader unreachable ({type(e).__name__})"}
     from jarvis.agents import rhythm
 
+    from jarvis.agents import personal
+
     rhythm.store_positions(snap["positions"], snap["equity"], None, source=f"ctrader:{login}")
-    audit.log("ctrader_feed", "snapshot", {"positions": len(snap["positions"]), "unpriced": snap["unpriced"]})
-    return {k: v for k, v in snap.items() if k != "positions"} | {"positions": len(snap["positions"])}
+    added = personal.store_trades(login, snap["closed"])
+    _mark_synced(login, snap["synced_to_ms"])
+    audit.log("ctrader_feed", "snapshot", {"positions": len(snap["positions"]), "unpriced": snap["unpriced"],
+                                           "closed_trades_added": added})
+    return ({k: v for k, v in snap.items() if k not in ("positions", "closed")}
+            | {"positions": len(snap["positions"]), "closed_trades_added": added})
 
 
 if __name__ == "__main__":
