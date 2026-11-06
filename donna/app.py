@@ -643,6 +643,12 @@ def add_prospects(items: list[ProspectIn], actor: str = Depends(require_service)
     n = sum(1 for p in items[:200] if _prospect({
         "source": "telegram", "ext_id": p.username, "kind": "ib", "country": p.country, "name": p.title,
         "url": f"https://t.me/{p.username}", "about": p.about, "audience": p.members}) is not None)
+    from jarvis.agents import leadfinder
+
+    try:
+        leadfinder.telegram_result(n)   # !leads shows when the search finished and what it found
+    except Exception as e:
+        log.error("lead finder status: %s", e)
     audit("lead_monitor", "prospects", {"received": len(items), "stored": n})
     return {"stored": n}
 
@@ -682,10 +688,59 @@ class LeadReply(BaseModel):
     text: str = Field(max_length=2000)
 
 
+@app.get("/api/leads/outbox")
+def lead_outbox(actor: str = Depends(require_service)) -> list[dict[str, Any]]:
+    """First messages SH confirmed one by one in Discord (!leads send / !leads confirm), minus do-not-contact."""
+    from jarvis.agents import leadfinder
+
+    with db() as c:
+        dnc = {r["handle"] for r in c.execute("SELECT handle FROM do_not_contact")}
+    out = []
+    for item in leadfinder.outbox_queue():
+        if item["handle"].lower() in dnc:
+            leadfinder.outbox_result(item["prospect"], False, "on the do-not-contact list")
+        else:
+            out.append(item)
+    return out
+
+
+class OutboxResult(BaseModel):
+    ok: bool
+    detail: str = Field(default="", max_length=500)
+
+
+@app.post("/api/leads/outbox/{prospect}/result")
+def lead_outbox_result(prospect: int, res: OutboxResult, actor: str = Depends(require_service)) -> dict[str, str]:
+    from jarvis.agents import leadfinder
+
+    leadfinder.outbox_result(prospect, res.ok, res.detail)
+    audit("lead_monitor", "lead_sent" if res.ok else "lead_send_failed", {"prospect": prospect, "detail": res.detail})
+    return {"status": "SENT" if res.ok else "FAILED"}
+
+
+def _tell_sh(text: str) -> None:
+    targets = [t for t in os.getenv("JARVIS_PERSONAL_TARGETS", "").split(",") if t]
+    if targets:
+        channels.broadcast(text, targets, title="D.O.N.N.A lead reply")
+
+
 @app.post("/api/leads/reply")
 def lead_reply(r: LeadReply, bg: BackgroundTasks, actor: str = Depends(require_service)) -> dict[str, str]:
     """A DM reply from a contacted lead. STOP -> do-not-contact forever; YES -> hand to a human."""
     handle, t = r.handle.lower(), r.text.strip().lower()
+    from jarvis.agents import leadfinder
+
+    hit = leadfinder.reply_from(handle, r.text)
+    if hit:  # someone DONNA messaged after SH confirmed it
+        if hit["status"] == "opted_out":
+            with db() as c:
+                c.execute("INSERT OR REPLACE INTO do_not_contact VALUES (?,?,?)", (handle, "opt-out reply", _now().isoformat()))
+            bg.add_task(_tell_sh, f"@{handle} (lead #{hit['prospect']}) replied STOP - marked lost, never contacted again.")
+        else:
+            bg.add_task(_tell_sh, f"@{handle} (lead #{hit['prospect']}) replied:\n\"{r.text[:500]}\"\n\nAnswer them "
+                                  f"yourself in Telegram. When a call is booked: !leads {hit['prospect']} meeting")
+        audit("lead_monitor", "lead_reply", {"handle": handle, "status": hit["status"]})
+        return {"status": hit["status"].upper()}
     with db() as c:
         lead = c.execute("SELECT status FROM leads WHERE handle = ?", (handle,)).fetchone()
         if lead is None or lead["status"] not in ("CONSENT_REQUESTED", "CONSENTED", "NEEDS_HUMAN"):

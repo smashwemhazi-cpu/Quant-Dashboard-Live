@@ -394,3 +394,47 @@ def test_rich_layout_splits_long_reports():
     es = channels.rich_embeds(text, "t", 1)
     assert len(es) > 1 and all(len(e["fields"]) <= 25 for e in es)
     assert all(sum(len(x["name"]) + len(x["value"]) for x in e["fields"]) <= 6000 for e in es)
+
+
+def test_lead_message_is_sent_only_after_confirmation_once(client, tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    from jarvis.agents import leadfinder as lf
+
+    lead = {"handle": "Big_Trader", "source_chat": "FX Pros", "snippet": "looking for a broker with FIX API",
+            "matched_terms": ["fix api"], "intent_score": 5}
+    pid = client.post("/api/leads", headers=SVC, json=lead).json()["prospect"]
+    assert "Approve #" in lf.command("!leads", f"send {pid}")                    # approved leads only
+    lf.command("!leads", f"{pid} approve")
+    assert "Nothing waiting" in lf.command("!leads", f"confirm {pid}")           # confirm needs a send first
+    ask = lf.command("!leads", f"send {pid}")
+    assert "READY TO SEND to @Big_Trader" in ask and "STOP" in ask and f"!leads confirm {pid}" in ask
+    assert client.get("/api/leads/outbox", headers=SVC).json() == []             # still nothing to send
+    assert "Confirmed" in lf.command("!leads", f"confirm {pid}")
+    q = client.get("/api/leads/outbox", headers=SVC).json()
+    assert [i["handle"] for i in q] == ["Big_Trader"]
+    client.post(f"/api/leads/outbox/{pid}/result", headers=SVC, json={"ok": True})
+    assert lf.shortlist("trader")[0]["status"] == "contacted"
+    assert "already had its one first message" in lf.command("!leads", f"send {pid}")
+    r = client.post("/api/leads/reply", headers=SVC, json={"handle": "Big_Trader", "text": "yes please"}).json()
+    assert r["status"] == "REPLIED" and lf.shortlist("trader")[0]["status"] == "replied"
+    r = client.post("/api/leads/reply", headers=SVC, json={"handle": "big_trader", "text": "STOP"}).json()
+    assert r["status"] == "OPTED_OUT"
+    assert client.post("/api/leads", headers=SVC, json=lead).json()["status"] == "DO_NOT_CONTACT"
+    # an expired confirmation and the daily cap
+    t = datetime(2026, 11, 7, 9, 0, tzinfo=timezone.utc)
+    ids = [lf.add({"source": "manual", "ext_id": f"https://t.me/person{i}", "kind": "trader", "country": "",
+                   "name": f"p{i}", "url": f"https://t.me/person{i}"}) for i in range(12)]
+    for i in ids:
+        lf.update(i, "approved")
+    lf.ask_send(ids[0], t)
+    assert "expired" in lf.confirm_send(ids[0], t + timedelta(minutes=11))
+    monkeypatch.setattr(lf, "SEND_CAP", 3)   # the first lead above counts too
+    for i in ids[1:3]:
+        lf.ask_send(i, t)
+        assert "Confirmed" in lf.confirm_send(i, t)
+    assert "limit of 3" in lf.ask_send(ids[3], t)
+    ch = lf.add({"source": "telegram", "ext_id": "kefx", "kind": "ib", "country": "", "name": "KE FX",
+                 "url": "https://t.me/kefx"})
+    assert "can't take a direct message" in lf.ask_send(ch)                     # channels: you send by hand

@@ -6,8 +6,9 @@ Rewrite of the "Telegram Hunter". What changed and why:
   * Word-boundary intent scoring with weights. The old substring match flagged 'ib' in
     "possible"/"visible", 'lots' in "pilots", 'mam' in "mama".
   * Self-promoters, signal sellers and bots are skipped; one lead per handle (DB UNIQUE).
-  * Draft-only by default: a trader who asks for a broker goes on the Lead Finder list (!leads) and
-    nothing is sent. Only with DONNA_LEAD_AUTOSEND=1 does this process send the single, approved
+  * Nothing is sent on its own: a trader who asks for a broker goes on the Lead Finder list (!leads).
+    A first message goes out only after SH types !leads send 12 and then !leads confirm 12 in Discord
+    (one per person, at most DONNA_LEAD_DAILY_CAP a day, 90-240 s apart; replies and STOP come back). Only with DONNA_LEAD_AUTOSEND=1 does this process send the single, approved
     consent request (no pitch), with pacing and flood handling; STOP is honoured permanently.
   * Once a day it also searches Telegram's public channels and groups (Telegram's own search,
     contacts.Search) for trading communities in the countries cleared for marketing, and hands
@@ -149,6 +150,32 @@ async def main() -> None:
                 log.error("outreach worker: %s", e)
             await asyncio.sleep(60)
 
+    async def confirmed_sender() -> None:
+        """Sends only the first messages SH confirmed one by one in Discord. Slow on purpose: Telegram limits
+        accounts that message many strangers, and a restricted account can't be used for anything."""
+        while True:
+            try:
+                for item in await api.call("GET", "/api/leads/outbox"):
+                    try:
+                        await client.send_message(item["handle"], item["text"], link_preview=False)
+                        await api.call("POST", f"/api/leads/outbox/{item['prospect']}/result", json={"ok": True})
+                    except errors.FloodWaitError as e:
+                        log.warning("flood wait %ss", e.seconds)
+                        await asyncio.sleep(e.seconds + 5)
+                        break
+                    except errors.PeerFloodError:
+                        await api.call("POST", f"/api/leads/outbox/{item['prospect']}/result",
+                                       json={"ok": False, "detail": "Telegram is limiting this account - paused 24h"})
+                        await asyncio.sleep(86400)
+                        break
+                    except Exception as e:  # privacy settings, a channel, a deleted account
+                        await api.call("POST", f"/api/leads/outbox/{item['prospect']}/result",
+                                       json={"ok": False, "detail": type(e).__name__})
+                    await asyncio.sleep(random.uniform(90, 240))
+            except Exception as e:
+                log.error("confirmed sender: %s", e)
+            await asyncio.sleep(60)
+
     async def discovery_worker() -> None:
         """Daily: search Telegram's public directory for trading communities in the cleared countries."""
         from telethon.tl.functions.channels import GetFullChannelRequest
@@ -180,10 +207,10 @@ async def main() -> None:
                         except Exception as e:  # private, deleted or restricted: keep the title only
                             log.info("no details for @%s: %s", f["username"], type(e).__name__)
                         await asyncio.sleep(random.uniform(3, 6))
-                    if hits:
-                        res = await api.call("POST", "/api/prospects",
-                                             json=[{k: v for k, v in f.items() if k != "_entity"} for f in hits])
-                        log.info("telegram search %s: %d found, %d stored", country, len(hits), res.get("stored", 0))
+                    # reported even when empty, so !leads can say the search finished
+                    res = await api.call("POST", "/api/prospects",
+                                         json=[{k: v for k, v in f.items() if k != "_entity"} for f in hits])
+                    log.info("telegram search %s: %d found, %d stored", country, len(hits), res.get("stored", 0))
             except errors.FloodWaitError as e:
                 log.warning("telegram search flood wait %ss", e.seconds)
                 await asyncio.sleep(e.seconds + 5)
@@ -201,6 +228,7 @@ async def main() -> None:
     if AUTOSEND:
         client.loop.create_task(outreach_worker())
     client.loop.create_task(discovery_worker())
+    client.loop.create_task(confirmed_sender())
     await client.run_until_disconnected()
 
 

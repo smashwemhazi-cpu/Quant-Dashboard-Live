@@ -27,6 +27,27 @@ or keys, and nothing paid is signed up for without your OK.
 **Why:** SH's screenshot of the Fri 06 Nov wrap still showed the old single code block. That wrap was sent at 17:01 UTC, three hours before the new layout went live (20:46 UTC), so the next wrap is the first one in the new layout. This change finishes the job by replacing the remaining jargon.
 
 **Recommendation:** none. If you prefer the old look, set `DONNA_DISCORD_STYLE=mono` on the server.
+## 2026-11-06 · Send to a lead after you confirm it
+
+**What was done:** SH chose "draft, then ask me before sending".
+- `!leads send 12` shows exactly what DONNA would send, and to whom. Nothing is sent yet.
+- `!leads confirm 12`, within 10 minutes, sends it from the lead-finder Telegram account within about 5 minutes and marks the lead contacted.
+- Safeguards:
+  - Approved leads only.
+  - One first message per person, ever.
+  - At most 10 a day (`DONNA_LEAD_DAILY_CAP`), spaced 1.5 to 4 minutes apart.
+  - The do-not-contact list is checked before every send.
+  - Trader messages are a consent request only.
+- Replies come back to your private channel. A reply marks the lead "replied". STOP marks it lost and puts it on do-not-contact for good.
+- Public channels and groups can't take direct messages. For those, `!leads draft 12` gives you the text to send yourself.
+
+**Recommendation:** answer replies yourself in Telegram, and keep `!leads stats` in the weekly review.
+
+## 2026-11-06 · Lead Finder shows what the Telegram search is doing
+
+**What was done:** `!leads` now has a Telegram line. It says whether a search is queued, running (results in about 10 minutes) or finished, and how many channels and groups it found. If the lead monitor doesn't pick a search up, the line gives the one command that fixes it. Countries with prospects hidden for red flags now say how many, so an empty country no longer looks broken. See them with `!leads flagged`.
+
+**Why:** SH's `!leads` showed "Nothing found yet" everywhere with no way to tell whether the search had run.
 
 ## 2026-11-06 · Lead pipeline, conversion and quality; Telegram search on demand
 
