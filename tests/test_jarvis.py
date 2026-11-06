@@ -795,7 +795,7 @@ def test_partner_radar_only_searches_cleared_countries_and_scores_channels(tmp_p
     assert "not set up" in radar.run()["error"]
     monkeypatch.setenv("JARVIS_YOUTUBE_API_KEY", "AIza" + "x" * 35)
     assert "no countries cleared" in radar.run()["error"]
-    assert radar.command("!radar", "countries ke, xx ZA").startswith("Cleared for marketing: KE Kenya, ZA South Africa")
+    assert radar.command("!radar", "countries ke, xx ZA").startswith("Cleared for marketing: Kenya (KE), South Africa (ZA)")
     assert radar.permitted() == ["KE", "ZA"]                                 # unknown codes are dropped
     calls = []
     chans = {
@@ -835,7 +835,7 @@ def test_partner_radar_only_searches_cleared_countries_and_scores_channels(tmp_p
     assert "Say why" in radar.command("!radar", f"{good['id']} reject")
     assert "approved" in radar.command("!radar", f"{good['id']} approve")
     assert "high risk of losing money" in radar.command("!radar", f"draft {good['id']}")
-    assert "PARTNER RADAR" in radar.command("!radar", "")
+    assert "LEAD FINDER" in radar.command("!radar", "")
 
 
 def test_campaign_engine_only_for_cleared_countries_with_warnings_and_tracking(tmp_path, monkeypatch):
@@ -1029,7 +1029,7 @@ def test_lead_finder_web_search_keeps_business_pages_and_drops_personal_profiles
         monkeypatch.delenv(k, raising=False)
     assert "no countries cleared" in leadfinder.run()["error"]
     radar.set_permitted(["KE"])
-    assert "no source switched on" in leadfinder.run()["error"]
+    assert "no search source switched on" in leadfinder.run()["error"]
     assert leadfinder.classify_url("https://ke.linkedin.com/in/jane-doe") is None        # a person: never stored
     assert leadfinder.classify_url("https://www.linkedin.com/company/nairobi-fx/") == ("linkedin", "nairobi-fx")
     assert leadfinder.classify_url("https://t.me/s/kenyaforex") == ("telegram", "kenyaforex")
@@ -1068,3 +1068,18 @@ def test_lead_finder_web_search_keeps_business_pages_and_drops_personal_profiles
     # retention: never-actioned prospects go after 180 days; the approved one stays
     assert leadfinder.purge(datetime(2027, 6, 1, tzinfo=timezone.utc)) == 2
     assert [p["id"] for p in leadfinder.shortlist("ib")] == [pid]
+
+
+def test_radar_countries_take_names_as_well_as_codes(tmp_path, monkeypatch):
+    from jarvis.agents import radar
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    for k in ("JARVIS_YOUTUBE_API_KEY", "JARVIS_BRAVE_API_KEY", "TG_API_ID", "TG_API_HASH"):
+        monkeypatch.delenv(k, raising=False)
+    r = radar.command("!radar", "countries South Africa, Zimbabwe, Nigeria, Ghana, UAE, Kenya,")
+    assert radar.permitted() == ["ZA", "ZW", "NG", "GH", "AE", "KE"] and "South Africa (ZA)" in r
+    assert radar.parse_countries("south africa kenya dubai") == (["ZA", "KE", "AE"], [])
+    assert radar.parse_countries("Kenya, Atlantis") == (["KE"], ["Atlantis"])
+    r = radar.command("!radar", "countries Atlantis")
+    assert "didn't recognise" in r and radar.permitted() == ["ZA", "ZW", "NG", "GH", "AE", "KE"]  # unchanged
+    assert "vertex1-connect telegram" in radar.command("!radar", "run")      # no YouTube key: say what to do next
