@@ -69,6 +69,7 @@ class FakeCTrader:
 @pytest.fixture(autouse=True)
 def db(tmp_path, monkeypatch):
     monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setattr(f, "HISTORY_GAP", 0)
 
 
 def run(fake, **kw):
@@ -193,10 +194,12 @@ def test_closed_trades_flow_into_the_journal(monkeypatch):
                                    "balance": 1_004_710, "closedVolume": 1_000, "moneyDigits": 2}),
          "dealStatus": 4},                                                            # rejected: ignored
     ]
+    monkeypatch.setattr(f, "HISTORY_GAP", 0)
+    monkeypatch.setattr(f, "HISTORY_REQUESTS", 100)
     snap = asyncio.run(f.snapshot(fake, "5551234", "a", "r", "cid", "sec", now_ms=NOW))
     # first sync reaches back HISTORY_DAYS, a week per request
     assert fake.windows[0][0] == NOW - f.HISTORY_DAYS * DAY and fake.windows[-1][1] == NOW
-    assert all(b - a <= f.WEEK_MS for a, b in fake.windows)
+    assert all(b - a <= f.WEEK_MS for a, b in fake.windows) and snap["synced_to_ms"] == NOW
     (t,) = snap["closed"]
     assert t["symbol"] == "XAUUSD" and t["side"] == "buy" and t["entry"] == 2400.0 and t["exit"] == 2410.0
     assert t["net"] == pytest.approx(97.80) and t["balance"] == pytest.approx(10_097.80) and t["qty"] == 10
@@ -210,3 +213,42 @@ def test_closed_trades_flow_into_the_journal(monkeypatch):
     fake2 = FakeCTrader()
     asyncio.run(f.snapshot(fake2, "5551234", "a", "r", "cid", "sec", now_ms=NOW + 300_000))
     assert fake2.windows == [(NOW - 3600_000, NOW + 300_000)]
+
+
+def test_history_backfill_is_paced_and_survives_rate_limits(monkeypatch):
+    monkeypatch.setattr(f, "HISTORY_GAP", 0)
+    start = NOW - f.HISTORY_DAYS * DAY
+    # a few requests per run: the backfill resumes where it stopped, and positions still come through
+    fake = FakeCTrader()
+    snap = asyncio.run(f.snapshot(fake, "5551234", "a", "r", "cid", "sec", now_ms=NOW))
+    assert len(fake.windows) == f.HISTORY_REQUESTS and len(snap["positions"]) == 2
+    assert snap["synced_to_ms"] == start + f.HISTORY_REQUESTS * f.WEEK_MS
+
+    class Limited(FakeCTrader):   # cTrader refuses the second history request
+        async def send(self, text):
+            import json as j
+            m = j.loads(text)
+            if m["payloadType"] == f.DEAL_LIST_REQ and self.windows:
+                self.sent.append(m["payloadType"])
+                self.queue.append({"clientMsgId": m["clientMsgId"], "payloadType": f.ERROR_RES, "payload": {
+                    "errorCode": "BLOCKED_PAYLOAD_TYPE", "description": "You are being rate limited"}})
+                return
+            await super().send(text)
+
+    fake = Limited()
+    snap = asyncio.run(f.snapshot(fake, "5551234", "a", "r", "cid", "sec", now_ms=NOW))
+    assert len(fake.windows) == 1 and snap["synced_to_ms"] == start + f.WEEK_MS and len(snap["positions"]) == 2
+
+
+def test_rate_limit_skips_the_run_quietly(monkeypatch):
+    monkeypatch.setenv("DONNA_CTRADER_CLIENT_ID", "c")
+    monkeypatch.setenv("DONNA_CTRADER_CLIENT_SECRET", "s")
+    monkeypatch.setenv("DONNA_CTRADER_ACCESS_TOKEN", "a")
+    monkeypatch.setenv("DONNA_CTRADER_LOGIN", "5551234")
+
+    async def limited(login):
+        raise f.FeedError("BLOCKED_PAYLOAD_TYPE: You are being rate limited")
+
+    monkeypatch.setattr(f, "_run", limited)
+    r = f.poll()
+    assert "error" not in r and "rate limited" in r["skipped"]

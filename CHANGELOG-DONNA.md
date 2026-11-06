@@ -5,6 +5,17 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-06 · cTrader "rate limited" fix
+
+**What was done:**
+- The first read of 90 days of closed trades sent 13 requests in a row. cTrader only allows a few history requests per second, so it answered "You are being rate limited" and the whole cTrader check failed.
+- DONNA now sends at most 4 history requests per check (`DONNA_CTRADER_HISTORY_REQUESTS`), one second apart (`DONNA_CTRADER_HISTORY_GAP`). The 90-day backfill finishes over about four checks (20 minutes), and each check picks up where the last one stopped.
+- If cTrader still says "rate limited", DONNA keeps the open positions and equity it already read, saves how far the history got, and carries on next time. No failure alert is sent for a rate limit.
+
+**Why:** SH got a "ctrader_positions job failed: BLOCKED_PAYLOAD_TYPE" alert right after the journal update went live.
+
+**Recommendation:** nothing to do. `!journal` fills within about 30 minutes of this update.
+
 ## 2026-11-06 · Trading journal fills itself from cTrader
 
 **What was done:**
