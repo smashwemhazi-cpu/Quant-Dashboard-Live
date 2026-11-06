@@ -5,6 +5,15 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-06 · Countries by name; !radar runs the Lead Finder
+
+**What was done:**
+- `!radar countries` now takes names as well as codes, for example `South Africa, Zimbabwe, Nigeria, Ghana, UAE, Kenya`. Cities like Dubai also work. Anything it doesn't recognise is listed back, and nothing is wiped by a typo.
+- `!radar run` and `!radar` now run and show the Lead Finder, the same as `!leads run` and `!leads`. They no longer stop at "YouTube key missing".
+- With no search source switched on, the reply lists the one command for each source, Telegram (free) first.
+
+**Why:** SH's `!radar countries South Africa, ...` was saved as "none", and `!radar run` asked for a YouTube key.
+
 ## 2026-11-06 · Lead Finder: Telegram, web and LinkedIn, one list
 
 **What was done:**

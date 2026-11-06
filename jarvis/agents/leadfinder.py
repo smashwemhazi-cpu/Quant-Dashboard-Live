@@ -219,7 +219,12 @@ def run(now: datetime | None = None) -> dict[str, Any]:
         return {"error": "NO DATA - no countries cleared for marketing yet: !radar countries ZA,MU,KE"}
     on = {k for k, v in sources().items() if v.startswith("on")}
     if not on:
-        return {"error": "NO DATA - Lead Finder has no source switched on yet (!leads sources)"}
+        return {"error": "NO DATA - Lead Finder has no search source switched on yet. Countries are set ("
+                + ", ".join(codes) + "). Next, on the server (one command each, any one is enough to start):\n"
+                " 1. vertex1-connect telegram   free - api_id and api_hash from my.telegram.org, then a login code\n"
+                " 2. vertex1-connect radar      free - YouTube Data API key from console.cloud.google.com\n"
+                " 3. vertex1-connect leads      web search - Brave key (asks for a card, $5/month free credit)\n"
+                "Meanwhile: !leads linkedin gives you LinkedIn searches to do yourself, and !leads add logs a find."}
     found, problems = {}, []
     if "YouTube" in on:
         try:

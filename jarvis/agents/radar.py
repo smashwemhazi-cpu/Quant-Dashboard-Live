@@ -67,8 +67,42 @@ def permitted() -> list[str]:
     return [x for x in (r["value"].split(",") if r and r["value"] else []) if x in COUNTRIES]
 
 
+NAMES = {**{k.lower(): k for k in COUNTRIES}, **{v[0].lower(): k for k, v in COUNTRIES.items()},
+         **{city.lower(): k for k, v in COUNTRIES.items() for city in v[1]},
+         "uae": "AE", "emirates": "AE", "saudi": "SA", "ksa": "SA", "rsa": "ZA", "s africa": "ZA"}
+
+
+def country_code(name: str) -> str | None:
+    """'Kenya', 'ke', 'UAE', 'Dubai', 'South Africa' -> ISO code; None if unknown."""
+    return NAMES.get(re.sub(r"\s+", " ", name.strip().strip(".").lower()))
+
+
+def parse_countries(text: str) -> tuple[list[str], list[str]]:
+    """Comma or space separated names or codes -> (codes, what wasn't recognised). Multi-word names need commas
+    only when they're ambiguous: 'South Africa Kenya' also works."""
+    ok, bad = [], []
+    for part in [p for p in re.split(r"[,;/]+|\band\b", text) if p.strip()]:
+        code = country_code(part)
+        if code:
+            ok.append(code)
+            continue
+        words = part.split()
+        i = 0
+        while i < len(words):  # greedy: longest known name first ("south africa" before "south")
+            for j in range(len(words), i, -1):
+                code = country_code(" ".join(words[i:j]))
+                if code:
+                    ok.append(code)
+                    i = j
+                    break
+            else:
+                bad.append(words[i])
+                i += 1
+    return list(dict.fromkeys(ok)), bad
+
+
 def set_permitted(codes: list[str]) -> list[str]:
-    ok = [x.upper() for x in codes if x.upper() in COUNTRIES]
+    ok = list(dict.fromkeys(c for c in (country_code(x) for x in codes) if c))
     with _db() as c:
         c.execute("INSERT OR REPLACE INTO radar_settings VALUES ('countries', ?)", (",".join(ok),))
     audit.log("officer", "radar_countries", {"countries": ok})
@@ -219,17 +253,26 @@ def command(cmd: str, rest: str) -> str | None:
         return None
     parts = rest.split()
     if not parts:
-        return shortlist_text()
+        from jarvis.agents import leadfinder
+
+        return leadfinder.shortlist_text()
     if parts[0] == "countries":
         if len(parts) == 1:
-            return "Cleared for marketing: " + (", ".join(permitted()) or "none") + \
-                ". Change with !radar countries ZA,MU,KE (only countries where Vertex 1 may market)."
-        ok = set_permitted(re.split(r"[,\s]+", " ".join(parts[1:])))
-        return "Cleared for marketing: " + (", ".join(f"{k} {COUNTRIES[k][0]}" for k in ok) or "none") + \
-            ". The radar searches only these. Run it now with !radar run."
+            return "Cleared for marketing: " + (", ".join(f"{k} {COUNTRIES[k][0]}" for k in permitted()) or "none") + \
+                ". Change with !radar countries South Africa, Kenya, UAE (names or codes; only where Vertex 1 may market)."
+        codes, bad = parse_countries(rest.split(None, 1)[1])
+        if bad and not codes:
+            return (f"I didn't recognise: {', '.join(bad)}. Nothing changed - still cleared: "
+                    f"{', '.join(permitted()) or 'none'}.\nCountries I know: "
+                    + ", ".join(f"{v[0]} ({k})" for k, v in COUNTRIES.items()))
+        ok = set_permitted(codes)
+        return ("Cleared for marketing: " + ", ".join(f"{COUNTRIES[k][0]} ({k})" for k in ok)
+                + (f"\nNot recognised, left out: {', '.join(bad)}" if bad else "")
+                + "\nThe Lead Finder searches only these. Run it now with !leads run.")
     if parts[0] == "run":
-        r = run()
-        return r["error"] if "error" in r else f"Radar searched {', '.join(r['countries'])}: {r['channels']} channels scored.\n\n" + shortlist_text()
+        from jarvis.agents import leadfinder  # the radar is now one source of the Lead Finder
+
+        return leadfinder.command("!leads", "run")
     if parts[0] == "flagged":
         sl = shortlist(include_flagged=True)
         rows = [r for v in sl.values() for r in v if r["flags"]]
