@@ -372,7 +372,7 @@ def shortlist_text(now: datetime | None = None) -> str:
     L += ["", "TRADERS ASKING FOR A BROKER (Telegram groups you are in)"]
     L += [line(r, now) for r in traders] or ["  None yet."]
     L += ["", "!leads 12 approve | contacted | replied | meeting | partner | funded | reject <why>",
-          "!leads draft 12   !leads add <link> <note>   !leads stats (conversion and quality)",
+          "!leads draft 12   !leads send 12 (asks you to confirm)   !leads add <link> <note>   !leads stats",
           "!leads run   !leads sources   !leads linkedin   !leads flagged   !crm (CRM lead backlog)"]
     return "\n".join(L)
 
@@ -414,26 +414,136 @@ def add_manual(rest: str) -> str:
     return f"Added #{pid} ({radar.COUNTRIES[code][0]}). !leads draft {pid} for a first message."
 
 
-def draft(pid: int) -> str:
+def _prospect(pid: int) -> dict[str, Any] | None:
     with _db() as db:
         r = db.execute("SELECT * FROM lead_prospects WHERE id = ?", (pid,)).fetchone()
+    return dict(r) if r else None
+
+
+def draft(pid: int) -> str:
+    r = _prospect(pid)
     if not r:
         return f"No prospect #{pid}."
+    how = (f"To have DONNA send it from the lead-finder Telegram account: !leads send {pid}"
+           if telegram_handle(r) else "Send it yourself from your own account, then: !leads " + str(pid) + " contacted")
+    return f"DRAFT for {r['name']} ({r['url']}) - not sent. Check it with !review.\n{how}\n\n" + draft_body(r)
+
+
+def draft_body(r: dict[str, Any]) -> str:
     firm = os.getenv("DONNA_FIRM_DISCLOSURE", "Vertex 1 Brokers")
     rep = os.getenv("DONNA_REP_NAME", "SH")
     country = radar.COUNTRIES.get(r["country"], ("your market",))[0]
-    head = f"DRAFT for {r['name']} ({r['url']}) - not sent. Check it with !review, then send it yourself.\n\n"
     if r["kind"] == "trader":
         # an unsolicited first message may only ask for consent: no pitch, no prices, a clear way out
-        return head + (f"Hi, this is {rep} from {firm}. I saw your post asking about brokers. Would you like us to "
-                       f"send you information about our trading accounts? Reply YES if so. If not, reply STOP and we "
-                       f"won't contact you again.")
-    return head + (f"Hi, I lead partnerships at {firm}. I came across {r['name']} - your audience clearly values "
+        return (f"Hi, this is {rep} from {firm}. I saw your post asking about brokers. Would you like us to "
+                f"send you information about our trading accounts? Reply YES if so. If not, reply STOP and we "
+                f"won't contact you again.")
+    return (f"Hi, I lead partnerships at {firm}. I came across {r['name']} - your audience clearly values "
                    f"careful, educational trading content.\n\nWe're building a small partner group in {country}: "
                    f"transparent per-lot rebates paid weekly, a live partner dashboard and fast client withdrawals. "
                    f"Would a 15-minute call next week make sense? If this isn't of interest, just say so and I won't "
                    f"follow up.\n\nKind regards,\n{rep}\n\n"
                    f"CFDs are complex instruments and carry a high risk of losing money rapidly due to leverage.")
+
+
+# ------------------------------------------------------------------ sending, only after SH confirms each one
+SEND_CAP = int(os.getenv("DONNA_LEAD_DAILY_CAP", "10"))       # first messages a day, across all leads
+CONFIRM_MINUTES = 10
+
+
+def _outbox() -> sqlite3.Connection:
+    db = _db()
+    db.execute("""CREATE TABLE IF NOT EXISTS lead_outbox (prospect INTEGER PRIMARY KEY, handle TEXT, text TEXT,
+                  status TEXT, asked TEXT, confirmed TEXT, sent TEXT, detail TEXT)""")
+    return db
+
+
+def telegram_handle(r: dict[str, Any]) -> str | None:
+    """A Telegram username DONNA can message: a trader's handle, or a person's t.me link you added yourself.
+    Public channels and groups can't receive a direct message, so those are sent by you."""
+    if r["source"] == "telegram":
+        return None
+    m = re.match(r"https?://(?:t\.me|telegram\.me)/([A-Za-z0-9_]{5,32})/?$", r.get("url") or "")
+    return m.group(1) if m else None
+
+
+def _sent_today(now: datetime) -> int:
+    with _outbox() as db:
+        return db.execute("SELECT COUNT(*) FROM lead_outbox WHERE status IN ('queued', 'sent') AND confirmed >= ?",
+                          (_now(now - timedelta(hours=24)),)).fetchone()[0]
+
+
+def ask_send(pid: int, now: datetime | None = None) -> str:
+    """Step 1: show exactly what would be sent, and to whom. Nothing is sent yet."""
+    now = now or datetime.now(timezone.utc)
+    r = _prospect(pid)
+    if not r:
+        return f"No prospect #{pid}."
+    handle = telegram_handle(r)
+    if not handle:
+        return (f"#{pid} is a public channel or website, which can't take a direct message. Use !leads draft {pid}, "
+                f"send it yourself, then !leads {pid} contacted.")
+    with _outbox() as db:
+        done = db.execute("SELECT status FROM lead_outbox WHERE prospect = ?", (pid,)).fetchone()
+    if done and done["status"] in ("queued", "sent"):
+        return f"#{pid} already had its one first message ({done['status']}). Follow up yourself, by hand."
+    if r["status"] != "approved":
+        return f"Approve #{pid} first (!leads {pid} approve) - only approved leads can be messaged."
+    with _outbox() as db:
+        if _sent_today(now) >= SEND_CAP:
+            return f"Today's limit of {SEND_CAP} first messages is reached - it protects the Telegram account. Try tomorrow."
+        db.execute("INSERT OR REPLACE INTO lead_outbox (prospect, handle, text, status, asked) VALUES (?,?,?,?,?)",
+                   (pid, handle, draft_body(r), "asked", _now(now)))
+    return (f"READY TO SEND to @{handle} ({r['name']}) - exactly this:\n\n{draft_body(r)}\n\n"
+            f"To send it, reply within {CONFIRM_MINUTES} minutes:  !leads confirm {pid}\n"
+            f"Anything else cancels. One first message per person; replies come back here.")
+
+
+def confirm_send(pid: int, now: datetime | None = None) -> str:
+    """Step 2: SH confirmed - queue it for the lead monitor, which sends it within a few minutes."""
+    now = now or datetime.now(timezone.utc)
+    with _outbox() as db:
+        o = db.execute("SELECT * FROM lead_outbox WHERE prospect = ?", (pid,)).fetchone()
+        if not o or o["status"] != "asked":
+            return f"Nothing waiting for #{pid}. Start with !leads send {pid}."
+        if datetime.fromisoformat(o["asked"]) < now - timedelta(minutes=CONFIRM_MINUTES):
+            db.execute("DELETE FROM lead_outbox WHERE prospect = ?", (pid,))
+            return f"That confirmation expired. Look at it again with !leads send {pid}."
+        if _sent_today(now) >= SEND_CAP:
+            return f"Today's limit of {SEND_CAP} first messages is reached. Try tomorrow."
+        db.execute("UPDATE lead_outbox SET status = 'queued', confirmed = ? WHERE prospect = ?", (_now(now), pid))
+    audit.log("officer", "lead_send_confirmed", {"prospect": pid})
+    return f"Confirmed. DONNA sends it to @{o['handle']} within about 5 minutes and marks #{pid} contacted."
+
+
+def outbox_queue() -> list[dict[str, Any]]:
+    with _outbox() as db:
+        return [dict(r) for r in db.execute("SELECT prospect, handle, text FROM lead_outbox WHERE status = 'queued' "
+                                            "ORDER BY confirmed LIMIT 5")]
+
+
+def outbox_result(pid: int, ok: bool, detail: str = "", now: datetime | None = None) -> None:
+    with _outbox() as db:
+        db.execute("UPDATE lead_outbox SET status = ?, sent = ?, detail = ? WHERE prospect = ? AND status = 'queued'",
+                   ("sent" if ok else "failed", _now(now), detail[:200], pid))
+    if ok:
+        update(pid, "contacted", "first message sent by DONNA after your confirmation", now)
+
+
+def reply_from(handle: str, text: str, now: datetime | None = None) -> dict[str, Any] | None:
+    """A direct-message reply from someone DONNA messaged. STOP -> lost and never contacted again."""
+    with _outbox() as db:
+        o = db.execute("SELECT prospect FROM lead_outbox WHERE lower(handle) = ? AND status = 'sent'",
+                       (handle.lower(),)).fetchone()
+    if not o:
+        return None
+    pid = o["prospect"]
+    if re.search(r"\b(stop|unsubscribe|no thanks|not interested|remove me)\b", text, re.I):
+        update(pid, "lost", "opted out (STOP) - never contact again", now)
+        return {"prospect": pid, "status": "opted_out"}
+    if (_prospect(pid) or {}).get("status") == "contacted":
+        update(pid, "replied", text[:200], now)
+    return {"prospect": pid, "status": "replied"}
 
 
 def update(pid: int, status: str, note: str = "", now: datetime | None = None) -> str:
@@ -543,6 +653,9 @@ def command(cmd: str, rest: str) -> str | None:
     if sub == "flagged":
         rows = [r for k in ("ib", "trader") for r in shortlist(k, 50, include_flagged=True) if r["flags"]]
         return "\n".join(line(r) for r in rows) or "No flagged prospects."
+    if sub in ("send", "confirm") and len(parts) > 1 and parts[1].lstrip("#").isdigit():
+        pid = int(parts[1].lstrip("#"))
+        return ask_send(pid) if sub == "send" else confirm_send(pid)
     if sub == "draft" and len(parts) > 1 and parts[1].lstrip("#").isdigit():
         return draft(int(parts[1].lstrip("#")))
     if sub.lstrip("#").isdigit() and len(parts) > 1:
