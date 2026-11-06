@@ -5,6 +5,18 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-06 · Daily wrap and morning markets in plain words
+
+**What was done:**
+- The daily wrap's markets block is one short row per market (Price, Today, 5 days) that fits a phone without wrapping. The morning dispatch uses the same table.
+- "range 0.9x ATR" is gone. Markets that swung far more than on a normal day are named in their own line, "Unusually big swings today" (the test is still today's high-low over 1.5x the 14-day average range).
+- Headings are now plain: Markets at the close, Biggest moves, News (last 24 hours), Prediction track record ("58% right out of 12 calls, a coin flip gets 50%").
+- The Discord title reads "Vertex 1 daily wrap" instead of "daily_wrap".
+
+**Why:** SH's screenshot of the Fri 06 Nov wrap still showed the old single code block. That wrap was sent at 17:01 UTC, three hours before the new layout went live (20:46 UTC), so the next wrap is the first one in the new layout. This change finishes the job by replacing the remaining jargon.
+
+**Recommendation:** none. If you prefer the old look, set `DONNA_DISCORD_STYLE=mono` on the server.
+
 ## 2026-11-06 · Lead pipeline, conversion and quality; Telegram search on demand
 
 **What was done:**

@@ -4,7 +4,7 @@ morning_dispatch  forward-looking, sent before London open (~06:00 UTC):
                   system & data health, live tickers vs previous close, predictor outlook,
                   overnight macro/crypto headlines, CRM, desk priorities.
 daily_wrap        backward-looking, sent after the NY close (~22:00 UTC):
-                  closes, daily/5-day change, range vs ATR (unusual-move flag), top movers,
+                  closes, daily/5-day change, unusually big swings (range vs ATR), biggest moves,
                   24h news recap ranked by market relevance, predictor scorecard.
 
 Rule: a section with no data says NO DATA. It never says "normal".
@@ -56,6 +56,19 @@ def pct(a: float, b: float) -> float:
 
 def sp(v: float | None, spec: str = "+.2f", suffix: str = "%") -> str:
     return "n/a" if v is None or v != v else f"{v:{spec}}{suffix}"
+
+
+def price_table(rows: list[dict[str, Any]], five_day: bool) -> list[str]:
+    """One short row per market, narrow enough (35 characters) not to wrap on a phone."""
+    L = [f"{'':<7}{'Price':>12}{'Today':>8}" + (f"{'5 days':>8}" if five_day else "")]
+    for r in rows:
+        i = r["inst"]
+        if r.get("error"):
+            L.append(f"{i.key:<7}{'no data':>12}")
+            continue
+        L.append(f"{i.key:<7}{r['close']:>12,.{i.decimals}f}{sp(r['chg_pct']):>8}"
+                 + (f"{sp(r['chg_5d_pct']):>8}" if five_day else "") + (" (old)" if r["stale"] else ""))
+    return L
 
 
 # ------------------------------------------------------------------ data gathering
@@ -208,11 +221,7 @@ def render_morning() -> tuple[str, dict[str, Any]]:
              + (f" | DONNA {t['donna']}" if "donna" in t else ""))
     stale = [r["inst"].label for r in rows if r.get("error") or r.get("stale")]
     L.append("Market data: " + ("all current" if not stale else "STALE/MISSING: " + ", ".join(stale)))
-    L += ["", "MARKETS (last vs previous close)"]
-    for r in rows:
-        i = r["inst"]
-        L.append(f"{i.label}: {r['source']}" if r.get("error") else
-                 f"{i.label}: {fmt(i, r['close'])} ({sp(r['chg_pct'])})  [{r['date']}, {r['source'].split(' ')[0]}]")
+    L += ["", "MARKETS (last price vs the previous close)"] + price_table(rows, five_day=False)
     L += ["", "PREDICTOR OUTLOOK (next session, daily close direction)"]
     L += [f"{o['label']}: {o['text']}" for o in ol]
     L += ["", "OVERNIGHT HEADLINES"]
@@ -231,30 +240,22 @@ def render_wrap() -> tuple[str, dict[str, Any]]:
         if not r.get("error"):
             predictor.score_predictions(r["inst"].key, predictor.completed(r["df"]))
     nw, rec = news(hours=24, per_cat=5), predictor.track_record(60)
-    L = [f"VERTEX 1 | DAILY WRAP | {now:%a %d %b %Y} (data to last close)", LINE, "CLOSES"]
-    ok = [r for r in rows if not r.get("error")]
-    L.append(f"{'':<7}{'Close':>11}{'Day':>8}{'5 days':>8}{'Range':>7}")  # narrow enough not to wrap on a phone
-    for r in rows:
-        i = r["inst"]
-        if r.get("error"):
-            L.append(f"{i.key:<7}{'no data':>11}")
-            continue
-        ra = r["range_atr"]
-        flag = " \u26a0" if ra is not None and ra == ra and ra > 1.5 else ""
-        L.append(f"{i.key:<7}{r['close']:>11,.{i.decimals}f}{sp(r['chg_pct']):>8}{sp(r['chg_5d_pct']):>8}"
-                 f"{sp(ra, '.1f', 'x'):>7}{flag}" + (" stale" if r["stale"] else ""))
-    L.append("Range = today's high-low vs a normal day (ATR); \u26a0 = over 1.5x")
+    L = [f"VERTEX 1 | DAILY WRAP | {now:%a %d %b %Y} | prices at the last close", LINE]
+    L += ["MARKETS AT THE CLOSE"] + price_table(rows, five_day=True)
+    busy = [r["inst"].key for r in rows if not r.get("error") and (r["range_atr"] or 0) > 1.5]
+    L += ["", "UNUSUALLY BIG SWINGS TODAY: " + (", ".join(busy) if busy else "none, a normal day everywhere")]
+    ok = [r for r in rows if not r.get("error") and r["chg_pct"] == r["chg_pct"]]
     if ok:
-        movers = sorted([r for r in ok if r["chg_pct"] == r["chg_pct"]], key=lambda r: -abs(r["chg_pct"]))[:3]
-        L += ["", "TOP MOVERS: " + ", ".join(f"{r['inst'].label} {r['chg_pct']:+.2f}%" for r in movers)]
-    L += ["", "24H NEWS RECAP (ranked by market relevance)"]
+        movers = sorted(ok, key=lambda r: -abs(r["chg_pct"]))[:3]
+        L += ["", "BIGGEST MOVES: " + ", ".join(f"{r['inst'].key} {r['chg_pct']:+.2f}%" for r in movers)]
+    L += ["", "NEWS (last 24 hours, most market-moving first)"]
     for cat, items in nw.items():
         L.append(f"{cat.title()}:")
-        L += [f" - {x['title']}" for x in items] or [" - none"]
+        L += [f" - {x['title']}" for x in items] or [" - nothing new"]
     L += ["", "BUSINESS (back office)"] + business()
-    L += ["", "PREDICTOR SCORECARD (last 60 days, live predictions only)"]
-    L += [f"{x['symbol']}: {x['scored']} scored | hit {x['hit_rate']:.0%} | Brier {x['brier']:.3f} (coin flip = 0.250)"
-          for x in rec] or ["No scored predictions yet - the track record starts with the first morning dispatch."]
+    L += ["", "PREDICTION TRACK RECORD (last 60 days)"]
+    L += [f"{x['symbol']}: {x['hit_rate']:.0%} right out of {x['scored']} calls (a coin flip gets 50%)"
+          for x in rec] or ["Nothing scored yet - the record starts with the first morning dispatch."]
     L += ["", LINE, "Internal use only."]
     return "\n".join(L), {"news": nw, "track_record": rec}
 
@@ -272,7 +273,7 @@ class BriefingAgent(Agent):
             else:
                 from donna.channels import broadcast
 
-                res["delivery"] = broadcast(text, TARGETS, title=f"Vertex 1 {kind}")
+                res["delivery"] = broadcast(text, TARGETS, title=f"Vertex 1 {kind.replace('_', ' ')}")
         audit.log("briefing", kind, {"chars": len(text), "delivery": res.get("delivery")})
         return res
 
