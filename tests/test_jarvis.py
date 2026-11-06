@@ -1083,3 +1083,39 @@ def test_radar_countries_take_names_as_well_as_codes(tmp_path, monkeypatch):
     r = radar.command("!radar", "countries Atlantis")
     assert "didn't recognise" in r and radar.permitted() == ["ZA", "ZW", "NG", "GH", "AE", "KE"]  # unchanged
     assert "vertex1-connect telegram" in radar.command("!radar", "run")      # no YouTube key: say what to do next
+
+
+def test_lead_pipeline_steps_stats_and_telegram_search_on_request(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from jarvis.agents import leadfinder, radar
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    for k in ("JARVIS_YOUTUBE_API_KEY", "JARVIS_BRAVE_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("TG_API_ID", "123")
+    monkeypatch.setenv("TG_API_HASH", "a" * 32)
+    t0 = datetime(2026, 11, 6, 21, 0, tzinfo=timezone.utc)
+    assert leadfinder.telegram_plan(t0) == {}                         # no countries yet: nothing to search
+    radar.set_permitted(["KE"])
+    assert "KE" in leadfinder.telegram_plan(t0)                        # first search is due at once
+    assert leadfinder.telegram_plan(t0 + timedelta(hours=1)) == {}     # then daily...
+    assert "searching now" in leadfinder.command("!leads", "run")      # ...or now, when asked (Telegram-only works)
+    assert "KE" in leadfinder.telegram_plan(t0 + timedelta(hours=2))
+    assert "KE" in leadfinder.telegram_plan(t0 + timedelta(hours=27))
+
+    ids = [leadfinder.add({"source": "telegram", "ext_id": f"fx{i}", "kind": "ib", "country": "KE",
+                           "name": f"Kenya Forex Academy {i}", "url": f"https://t.me/fx{i}",
+                           "about": "forex education community", "audience": 5000}, t0) for i in range(4)]
+    assert "next: !leads draft" in leadfinder.command("!leads", f"{ids[0]} approve")
+    for step in ("contacted", "replied", "meeting", "partner"):
+        leadfinder.command("!leads", f"{ids[0]} {step}")
+    for step in ("approve", "contacted"):
+        leadfinder.command("!leads", f"{ids[1]} {step}")
+    assert "Say why" in leadfinder.command("!leads", f"{ids[1]} lost")
+    leadfinder.command("!leads", f"{ids[1]} lost went quiet")
+    leadfinder.command("!leads", f"{ids[2]} reject sells signals")
+    g = leadfinder.stats(90, t0 + timedelta(days=1))["groups"][("ib", "TG")]
+    assert (g["found"], g["approved"], g["contacted"], g["replied"], g["won"], g["rejected"]) == (4, 2, 2, 1, 1, 1)
+    text = leadfinder.command("!leads", "stats")
+    assert "LEAD STATS" in text and "50%" in text and "Average score of wins" in text

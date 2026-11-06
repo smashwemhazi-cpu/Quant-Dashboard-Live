@@ -633,9 +633,9 @@ class ProspectIn(BaseModel):
 @app.get("/api/prospects/queries")
 def prospect_queries(actor: str = Depends(require_service)) -> dict[str, list[str]]:
     """What the lead monitor should search Telegram for: only countries cleared for marketing."""
-    from jarvis.agents import leadfinder, radar
+    from jarvis.agents import leadfinder
 
-    return {code: leadfinder.telegram_queries(code) for code in radar.permitted()}
+    return leadfinder.telegram_plan()  # empty unless a search is due (daily, or asked for with !leads run)
 
 
 @app.post("/api/prospects")

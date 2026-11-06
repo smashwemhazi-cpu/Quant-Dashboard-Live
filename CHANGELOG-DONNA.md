@@ -5,6 +5,16 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-06 · Lead pipeline, conversion and quality; Telegram search on demand
+
+**What was done:**
+- Each lead now moves through steps you log from Discord: `!leads 12 approve`, then `contacted`, `replied`, `meeting`, and `partner` (IB signed) or `funded` (trader deposited). `reject <why>` and `lost <why>` close it. Every step is time-stamped, and DONNA tells you the next step after each one.
+- `!leads stats` (or `!leads stats 30`) shows the funnel by source (Telegram, YouTube, web, LinkedIn, your own adds): found, approved, contacted, replied, meeting, won, reply rate, win rate and average score. **Lead quality** shows how many of the prospects you reviewed were worth approving, and the average score of the ones that converted.
+- `!leads run` now starts a Telegram search straight away, with results in about 10 minutes. Before this, the first search only ran once a day. The lead monitor checks with DONNA every 5 minutes, so a search also starts within 5 minutes of clearing countries.
+- `!leads sources` shows when Telegram last searched.
+
+**Why:** SH asked how to see the leads and how to track conversion and lead quality. Telegram was connected before the countries were set, so the daily search found nothing to do.
+
 ## 2026-11-06 · Countries by name; !radar runs the Lead Finder
 
 **What was done:**
