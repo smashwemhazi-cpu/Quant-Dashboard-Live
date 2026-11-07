@@ -179,7 +179,8 @@ Schedule the cTrader and Syntellicore reports to be emailed to simba@vertex1brok
 
 Double-click **DONNA-Console.bat** on your PC and type your server password. A window opens with:
 - her animated orb;
-- your calendar, inbox highlights, tasks and risk panels, refreshed every minute.
+- your calendar, inbox highlights, tasks and risk panels, refreshed every minute;
+- **Your agents**: the seven duties from her mandate, each with a light (green running, amber waiting on setup, red needs a fix). Click a duty for the `!hq` view, or **details** for every agent. Ask "what can you do?" for her mandate.
 
 How to use it:
 - **Hold the button or the space bar** to talk, and let go when you are done. She answers on screen and out loud.
