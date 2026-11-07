@@ -1014,9 +1014,10 @@ def test_bridge_script_watchdog_and_backup_are_wired():
     from pathlib import Path
 
     gs = (Path(__file__).resolve().parents[1] / "deploy" / "google-bridge.gs").read_text()
-    assert "var VERSION = 3;" in gs and "newTrigger('watchdog')" in gs and "function watchdog()" in gs
+    assert "var VERSION = 4;" in gs and "newTrigger('watchdog')" in gs and "function watchdog()" in gs
     assert "q.action === 'heartbeat'" in gs and "q.action === 'backup'" in gs and "BACKUPS_KEPT = 14" in gs
     assert "MailApp.sendEmail(Session.getEffectiveUser().getEmail()" in gs   # alerts go only to the owner
+    assert "q.action === 'event'" in gs and "guests" not in gs.split("function event_")[1].split("}")[0]
 
 
 def test_lead_finder_web_search_keeps_business_pages_and_drops_personal_profiles(tmp_path, monkeypatch):

@@ -134,6 +134,8 @@ Version 2 adds two things:
 - **Reports from email:** cTrader and Syntellicore reports that arrive as attachments are loaded automatically.
 - **Draft replies:** `!draft 12` writes a reply to task 12's email and saves it in your Gmail **Drafts**. It is never sent; you review it and press send yourself.
 
+Version 4 also reads **all new inbox mail, not just unread**, so mail you opened on your phone first still counts. Mail you've opened or answered is counted for `!workflow` but isn't chased. Version 4 adds **your diary** too: `!diary add <title> | YYYY-MM-DD HH:MM | 45m` and `!diary block 12` put events in your own Google Calendar. They are created with no guests, so nobody is invited, and DONNA never changes or deletes an event that is already there. After pasting version 4, choose **setup** in the function list and click **Run** once, then **Allow**: Google needs your OK for DONNA to add calendar events. `!diary` (reading) and `!workflow` work without this update.
+
 ## Reports by email (no more uploading)
 
 Schedule the cTrader and Syntellicore reports to be emailed to simba@vertex1brokers.com. Every 30 minutes DONNA looks for new spreadsheet attachments (.csv, .xlsx, .xls) from the last 3 days.

@@ -155,6 +155,57 @@ def classify(subject: str, sender_domain: str, body: str, client: Any = None) ->
     return json.loads(next(b.text for b in resp.content if b.type == "text"))
 
 
+# ------------------------------------------------------------------ triage without Claude
+# When the Claude credit runs out (or the key is missing) the inbox is still sorted, by plain rules, so urgent
+# mail, replies owed and the workflow numbers keep coming. Rule-sorted emails are marked "[rules]" in the summary.
+_RULES: list[tuple[str, re.Pattern[str]]] = [
+    ("regulator", re.compile(r"\b(fsca|fsc|fca|cysec|asic|dfsa|vfsc|fic|regulator|regulatory return|"
+                             r"supervisory|inspection|licen[cs]e condition)\b", re.I)),
+    ("kyc_compliance", re.compile(r"\b(kyc|aml|cft|due diligence|proof of (address|residence|identity)|"
+                                  r"sanction|pep\b|onboarding|verification|compliance|str\b|suspicious)", re.I)),
+    ("payments", re.compile(r"\b(withdraw\w*|deposit\w*|payment|refund|chargeback|invoice|psp|bank transfer|"
+                            r"remittance|payout)\b", re.I)),
+    ("liquidity_provider", re.compile(r"\b(liquidity|lp\b|bridge|prime broker|margin call|swap rates?|"
+                                      r"price feed|quotes?)\b", re.I)),
+    ("client", re.compile(r"\b(client|customer|account (no|number)|my account|complain\w*|trading account|"
+                          r"login|password reset)\b", re.I)),
+    ("newsletter", re.compile(r"\b(newsletter|unsubscribe|webinar|digest|weekly update|view in browser)\b", re.I)),
+    ("vendor_marketing", re.compile(r"\b(offer|discount|promo\w*|free trial|demo|partnership opportunity|"
+                                    r"book a call)\b", re.I)),
+]
+_URGENT = re.compile(r"\b(urgent|asap|immediately|today|deadline|overdue|final notice|complain\w*|ombud\w*|"
+                     r"stop[- ]?out|margin call|outage|down\b|fraud|breach|regulator|escalat\w*)", re.I)
+_ASKS = re.compile(r"\?|\b(please|kindly|could you|can you|would you|let me know|confirm|advise|"
+                   r"awaiting your|request)\b", re.I)
+_NOREPLY = re.compile(r"no-?reply|do-?not-?reply|notifications?@|mailer", re.I)
+
+
+def classify_rules(subject: str, sender_domain: str, body: str, sender: str = "") -> dict[str, Any]:
+    """Claude-free triage: category, urgency and 'needs a reply' from keywords. Never raises."""
+    text = f"{subject}\n{body[:3000]}"
+    category = next((cat for cat, rx in _RULES if rx.search(text)), "internal" if not sender_domain else "other")
+    bulk = category in ("newsletter", "vendor_marketing") or bool(_NOREPLY.search(sender))
+    urgency = "high" if _URGENT.search(subject) or (category == "regulator" and not bulk) else (
+        "low" if bulk else "medium")
+    needs_reply = not bulk and bool(_ASKS.search(text))
+    tasks = ([{"title": f"Reply: {subject[:80] or '(no subject)'}", "due": date.today().isoformat()
+               if urgency == "high" else "", "priority": urgency}] if needs_reply and urgency != "low" else [])
+    summary = re.sub(r"\s+", " ", body).strip()[:200] or subject
+    return {"category": category, "urgency": urgency, "summary": f"[rules] {summary}", "needs_reply": needs_reply,
+            "tasks": tasks}
+
+
+def _claude_unusable(e: Exception) -> str | None:
+    """Plain reason if Claude can't be used at all right now (credit, key), so the rest of the inbox
+    should be sorted by rules instead of failing one email at a time."""
+    msg = str(e).lower()
+    if "credit balance" in msg:
+        return "Claude credit used up"
+    if "authentication" in msg or "x-api-key" in msg or "permission" in msg:
+        return "Claude key refused"
+    return None
+
+
 def inbox_connected() -> bool:
     return google_bridge.configured() or bool(settings.imap_host and settings.imap_user and settings.imap_password)
 
@@ -187,17 +238,19 @@ def _bridge_mail(c: sqlite3.Connection, max_messages: int) -> Iterator[dict[str,
     for m in r.get("messages", []):
         raw_id = str(m.get("id") or "").strip()
         if raw_id and not c.execute("SELECT 1 FROM email_seen WHERE msg_id = ?", (raw_id,)).fetchone():
+            # bridge v4 also sends read mail; one you've opened or answered is counted, not chased
             yield {"id": raw_id, "received": str(m.get("date") or _now()), "from": str(m.get("from", "")),
-                   "subject": str(m.get("subject", "")), "body": str(m.get("body", ""))}
+                   "subject": str(m.get("subject", "")), "body": str(m.get("body", "")),
+                   "handled": m.get("unread") is False or bool(m.get("answered")),
+                   "answered": bool(m.get("answered"))}
 
 
 def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
     if not inbox_connected():
         return {"error": "NO DATA - inbox not connected (Google bridge, or JARVIS_IMAP_HOST / _USER / _PASSWORD)"}
-    if client is None and not os.getenv("ANTHROPIC_API_KEY"):
-        return {"error": "ANTHROPIC_API_KEY not set - email analysis needs the Claude API"}
     import anthropic
 
+    claude_off = None if client is not None or os.getenv("ANTHROPIC_API_KEY") else "no Claude key"
     done: list[dict[str, Any]] = []
     source = _bridge_mail if google_bridge.configured() else _imap_mail
     with _db() as c:
@@ -205,17 +258,28 @@ def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
             for m in source(c, max_messages):
                 subject = mask(m["subject"])
                 domain = parseaddr(m["from"])[1].rpartition("@")[2].lower() or "unknown"
-                try:
-                    r = classify(subject, domain, mask(m["body"])[:MAX_BODY_CHARS], client)
-                except (anthropic.APIError, json.JSONDecodeError, StopIteration) as e:
-                    done.append({"subject": subject, "error": f"{type(e).__name__}: {e}"})
-                    continue  # not marked seen - retried next run
+                body = mask(m["body"])[:MAX_BODY_CHARS]
+                r = None
+                if not claude_off:
+                    try:
+                        r = classify(subject, domain, body, client)
+                    except (anthropic.APIError, json.JSONDecodeError, StopIteration) as e:
+                        claude_off = _claude_unusable(e)
+                        if not claude_off:
+                            done.append({"subject": subject, "error": f"{type(e).__name__}: {e}"})
+                            continue  # not marked seen - retried next run
+                if r is None:
+                    r = classify_rules(subject, domain, body, m["from"])
+                if m.get("answered"):
+                    r["needs_reply"] = False
                 c.execute("INSERT INTO email_seen VALUES (?,?,?,?,?,?,?,?,?)",
                           (m["id"], m["received"], domain, subject[:300], r["category"], r["urgency"],
                            r["summary"][:500], int(r["needs_reply"]), _now()))
-                ids = [add_task(t["title"], t["due"], t["priority"], f"From email: {subject}", "email", m["id"], conn=c)
-                       for t in r["tasks"]]
-                entry = {"subject": subject, "from_domain": domain, **r, "task_ids": [i for i in ids if i]}
+                ids = [] if m.get("handled") else [
+                    add_task(t["title"], t["due"], t["priority"], f"From email: {subject}", "email", m["id"], conn=c)
+                    for t in r["tasks"]]
+                entry = {"subject": subject, "from_domain": domain, **r, "task_ids": [i for i in ids if i],
+                         **({"handled": True} if m.get("handled") else {})}
                 try:
                     from jarvis.agents import complaints
 
@@ -227,8 +291,8 @@ def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
                 done.append(entry)
         except ConnectionError as e:
             return {"error": str(e), "processed": done}
-    audit.log("assistant", "inbox_triage", {"processed": len(done)})
-    return {"processed": done}
+    audit.log("assistant", "inbox_triage", {"processed": len(done), "rules_only": claude_off})
+    return {"processed": done, **({"rules_only": claude_off} if claude_off else {})}
 
 
 DRAFT_PROMPT = """You draft email replies for SH, Compliance & Risk Officer at Vertex 1 Brokers (a retail FX/CFD broker).
