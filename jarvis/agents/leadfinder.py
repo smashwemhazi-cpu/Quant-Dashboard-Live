@@ -346,6 +346,9 @@ def line(r: dict[str, Any], now: datetime | None = None) -> str:
     tail = f"\n            {r['url']}" + (f"  ({meta})" if meta else "")
     if r["kind"] == "trader" and r.get("about"):
         tail += f'\n            "{r["about"][:110]}"'
+    from jarvis.agents import kpi
+
+    tail += f"\n            {kpi.lead_tag(r, now)}"
     return head + tail + (f"\n            !! {r['flags']}" if r.get("flags") else "")
 
 
@@ -360,6 +363,10 @@ def shortlist_text(now: datetime | None = None) -> str:
          + " | LinkedIn: !leads linkedin", "Score 0-100 · YT YouTube · TG Telegram · WEB website · LI LinkedIn company"]
     if sources()["Telegram"].startswith("on"):
         L.append("Telegram: " + sources()["Telegram"][5:])
+    from jarvis.agents import kpi
+
+    q = sum(kpi.qualify(r, now)[0] for r in ibs + traders)
+    L.append(f"Qualified (meet the lead quality bar, count toward KPIs): {q} of {len(ibs) + len(traders)} listed - !kpi leads")
     with _db() as db:
         hidden = dict(db.execute("SELECT country, COUNT(*) FROM lead_prospects WHERE kind = 'ib' AND flags != '' "
                                  "AND status IN ('new','approved') GROUP BY country").fetchall())
@@ -568,12 +575,14 @@ def update(pid: int, status: str, note: str = "", now: datetime | None = None) -
 
 
 def stats(days: int = 90, now: datetime | None = None) -> dict[str, Any]:
-    """Funnel by source and kind: how far each prospect got (from the steps logged), and its score."""
+    """Funnel by source and kind: how far each prospect got (from the steps logged), its score, and how many
+    meet the lead quality bar (kpi.qualify)."""
+    from jarvis.agents import kpi
+
     now = now or datetime.now(timezone.utc)
     since = _now(now - timedelta(days=days))
     with _db() as db:
-        rows = [dict(r) for r in db.execute("SELECT id, source, kind, score, status FROM lead_prospects WHERE first_seen >= ?",
-                                            (since,))]
+        rows = [dict(r) for r in db.execute("SELECT * FROM lead_prospects WHERE first_seen >= ?", (since,))]
         ev = [dict(r) for r in db.execute("SELECT prospect, status, ts FROM lead_events")]
     reached: dict[int, int] = {}
     for e in ev:
@@ -581,8 +590,10 @@ def stats(days: int = 90, now: datetime | None = None) -> dict[str, Any]:
     groups: dict[tuple[str, str], dict[str, Any]] = {}
     for r in rows:
         g = groups.setdefault((r["kind"], SOURCE_TAG.get(r["source"], r["source"])),
-                              {"found": 0, "rejected": 0, "scores": [], "won_scores": [], **{s: 0 for s in STAGES[1:]}})
+                              {"found": 0, "qualified": 0, "rejected": 0, "scores": [], "won_scores": [],
+                               **{s: 0 for s in STAGES[1:]}})
         g["found"] += 1
+        g["qualified"] += kpi.qualify(r, now)[0]
         g["scores"].append(r["score"] or 0)
         g["rejected"] += r["status"] == "rejected"
         k = reached.get(r["id"], 0)
@@ -599,7 +610,7 @@ def stats_text(days: int = 90, now: datetime | None = None) -> str:
         return f"LEAD STATS: nothing found in the last {days} days yet."
     pct = lambda a, b: f"{a / b * 100:.0f}%" if b else "-"  # noqa: E731
     L = [f"D.O.N.N.A | LEAD STATS - last {days} days (from the steps you log with !leads 12 contacted etc.)",
-         "", "Source   Found  Approved  Contacted  Replied  Meeting  Won   Reply rate  Win rate  Avg score"]
+         "", "Source   Found  Qualified  Approved  Contacted  Replied  Meeting  Won   Reply rate  Win rate  Avg score"]
     for kind in ("ib", "trader"):
         rows = [(src, g) for (k, src), g in sorted(s["groups"].items()) if k == kind]
         if not rows:
@@ -607,7 +618,7 @@ def stats_text(days: int = 90, now: datetime | None = None) -> str:
         L.append("IBs / PARTNERS" if kind == "ib" else "TRADERS")
         for src, g in rows:
             avg = sum(g["scores"]) / len(g["scores"]) if g["scores"] else 0
-            L.append(f" {src:<7}{g['found']:>6}{g['approved']:>10}{g['contacted']:>11}{g['replied']:>9}{g['meeting']:>9}"
+            L.append(f" {src:<7}{g['found']:>6}{g['qualified']:>11}{g['approved']:>10}{g['contacted']:>11}{g['replied']:>9}{g['meeting']:>9}"
                      f"{g['won']:>5}   {pct(g['replied'], g['contacted']):>10}{pct(g['won'], g['contacted']):>10}{avg:>11.0f}")
     allg = list(s["groups"].values())
     judged = sum(g["approved"] for g in allg) + sum(g["rejected"] for g in allg)
@@ -616,7 +627,12 @@ def stats_text(days: int = 90, now: datetime | None = None) -> str:
           f" You approved {pct(sum(g['approved'] for g in allg), judged)} of the prospects you reviewed "
           f"({judged} reviewed) - low means the search words or score need tuning.",
           f" Average score of wins: {sum(won) / len(won):.0f}" if won else " No wins logged yet - log them with !leads 12 partner / funded.",
-          " Win = IB signed (partner) or trader funded. Rates count from 'contacted'."]
+          " Win = IB signed (partner) or trader funded. Rates count from 'contacted'.",
+          " Qualified = passes the lead quality bar (cleared country, no red flags, public link, active, about "
+          "trading, big enough, score). Check one: !kpi lead 12"]
+    from jarvis.agents import kpi
+
+    L += ["", "AGAINST TARGET"] + [kpi._line(r) for r in kpi.scorecard("leads", now)]
     return "\n".join(L)
 
 

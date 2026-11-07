@@ -44,6 +44,7 @@ LIMIT = 1900  # Discord allows 2000 characters per message; leave room for the c
 HELP = ("D.O.N.N.A commands:\n"
         "!mandate                   what I do for you, how you can tell, and what I never do\n"
         "!hq  !agents  !run <job>   one view across all agents / each agent's state / run one now\n"
+        "!kpi  !kpi leads|trading|compliance|...   KPI scorecard (grow and protect); !kpi targets, !kpi set <name> <n>\n"
         "!tasks                     open tasks\n"
         "!done 12 13                mark tasks done\n"
         "!add <title> | YYYY-MM-DD | high/medium/low\n"
@@ -309,12 +310,12 @@ def handle(text: str, channel: str = "") -> str | None:
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
     from jarvis.agents import complaints, ib, str_pack
 
-    from jarvis.agents import attribution, campaigns, hq, leadfinder, radar, screening, workflow
+    from jarvis.agents import attribution, campaigns, hq, kpi, leadfinder, radar, screening, workflow
 
     reply = (complaints.command(cmd, rest) or str_pack.command(cmd, rest) or ib.command(cmd, rest)
              or leadfinder.command(cmd, rest) or radar.command(cmd, rest) or campaigns.command(cmd, rest) or attribution.command(cmd, rest)
              or screening.command(cmd, rest) or workflow.command(cmd, rest)
-             or hq.command(cmd, rest))
+             or hq.command(cmd, rest) or kpi.command(cmd, rest))
     if reply is not None:
         return reply
     reply = compliance_commands(cmd, rest)

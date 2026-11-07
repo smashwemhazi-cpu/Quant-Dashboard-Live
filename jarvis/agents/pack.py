@@ -56,6 +56,12 @@ def _growth_lines() -> list[str]:
     return f.splitlines() if f else ["No leads export received yet."]
 
 
+def _kpi_lines() -> list[str]:
+    from jarvis.agents import kpi
+
+    return kpi.pack_lines()
+
+
 def _audit_lines() -> list[str]:
     v = audit.verify()
     return [f"Audit trail: {'INTACT' if v['ok'] else 'BROKEN at entry #' + str(v.get('first_bad_id'))}, "
@@ -69,6 +75,7 @@ def sections(days: int = 7) -> list[tuple[str, list[str]]]:
         ("Regulatory calendar (next 30 days)", _oblig_lines),
         ("Open cases", _open_case_lines),
         ("Business growth", _growth_lines),
+        ("KPI scorecard (grow and protect)", _kpi_lines),
         ("Controls", _audit_lines),
     ]
     out = []
