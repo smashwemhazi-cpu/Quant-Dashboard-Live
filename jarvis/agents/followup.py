@@ -165,13 +165,16 @@ def awaiting_others(today: date | None = None) -> dict[str, Any]:
 def waiting_text(today: date | None = None, everything: bool = False) -> str:
     today = today or datetime.now(LOCAL_TZ).date()
     owed, hidden = _owed(today, everything)
-    L = [f"D.O.N.N.A | WAITING | {today:%a %d %b}", "-" * 34, f"YOU OWE A REPLY ({len(owed)})"]
-    for r in owed[:12]:
-        task = f"  task #{r['open_task']} (!draft {r['open_task']})" if r["open_task"] else ""
-        old = "  OVER 5 DAYS" if r["days"] > 5 else ""
-        times = f"  x{r['count']}" if r["count"] > 1 else ""
-        L.append(f" E{r['ref']}  {r['days']}d  {_PREFIX.sub('', r['subject'] or '')[:60]} "
-                 f"({r['sender_domain']}){times}{task}{old}")
+    L = [f"D.O.N.N.A | WAITING | {today:%a %d %b}", "-" * 34, f"YOU OWE A REPLY ({len(owed)}) - oldest first"]
+    for n, r in enumerate(owed[:12], 1):
+        days = "today" if r["days"] == 0 else f"{r['days']} day{'s' if r['days'] != 1 else ''}"
+        details = [f"from {r['sender_domain']}", ("arrived today" if r["days"] == 0 else f"waiting {days}") + (" - OVER 5 DAYS" if r["days"] > 5 else "")]
+        if r["count"] > 1:
+            details.append(f"x{r['count']} emails in this thread")
+        do = [f"write the reply: !draft {r['open_task']}"] if r["open_task"] else []
+        do.append(f"already handled: !waiting done E{r['ref']}")
+        L += ["", f" {n}. {_PREFIX.sub('', r['subject'] or '')[:70]}", "    " + " | ".join(details),
+              "    " + " | ".join(do)]
     if not owed:
         L.append(" Nothing - every email that asked you something has an answer.")
     elif len(owed) > 12:
@@ -188,9 +191,10 @@ def waiting_text(today: date | None = None, everything: bool = False) -> str:
     elif "error" in aw:
         L.append(f" Can't check: {aw['error']}")
     else:
-        L += [f" {a['days']}d  {a['subject'][:60]} -> {a['to']}" for a in aw["items"][:12]] or [" Nothing outstanding."]
+        L += [f" - {a['subject'][:60]} -> {a['to']} | sent {a['days']} days ago" for a in aw["items"][:12]] \
+            or [" Nothing outstanding."]
     if owed:
-        L += ["", "Dealt with one another way? !waiting done E12   Never from this sender? !waiting mute example.com"]
+        L += ["", "Stop seeing a sender for good: !waiting mute example.com"]
     return "\n".join(L)
 
 
