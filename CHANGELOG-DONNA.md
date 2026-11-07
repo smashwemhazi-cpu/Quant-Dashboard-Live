@@ -5,6 +5,23 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-07 · Private charts dashboard
+
+**What was done:** a new Charts page next to the DONNA Console, with four tabs:
+- **My account:** equity over the last 14 days with today's daily-loss stop drawn on it, drawdown from the peak, open risk at stops against your 3% limit, room left before the daily-loss stop, and your open positions (a position with no stop is shown in red).
+- **Closed trades:** cumulative net P&L, P&L per day and per symbol, win rate, profit factor, expectancy and max drawdown for the last 90 days.
+- **Markets:** daily charts of the report watchlist (gold, silver, oil, US30, NAS100, GER40, BTC, EUR/USD, GBP/USD) with 20- and 50-day averages, 1/5/20-day moves, volatility and trend. If you hold a position in one of them, its entry and stop are drawn on the chart.
+- **PAD & KPIs:** PAD flags in the last 30 days and your trading KPIs with their red/amber/green status.
+Red banners at the top warn when open risk is over the limit, a position has no stop, or the daily-loss stop is hit.
+
+**Why:** SH approved the "private charts dashboard" planned for DONNA.
+
+**What you'll notice:** a "📈 Charts" link at the top of the Console. It opens at http://localhost:8765/charts while the DONNA-Console window is open.
+
+**Limits:** it only reads. It never places, changes or closes a trade. It is not on the public internet: it answers only through your private SSH link, the same as the Console. It needs no Claude credit. Market prices come from TradingView exports when you have them, otherwise Yahoo, fetched at most once an hour. Your Market Toolkit (edgescore) stays on your PC and is not duplicated: trade ideas, bias and signals stay there.
+
+**Recommendations:** (1) If you want the Toolkit's trade ideas and volatility regime on this page too, send Claude the edgescore folder and they can be added as a fifth tab. (2) Add any symbol you trade often to the watchlist so its chart shows your entry and stop.
+
 ## 2026-11-07 · Send preview checks the protect KPIs
 
 **What was done:** `!leads send 12` now warns at the top of the preview when any protect KPI is red, for example open high-severity cases, so you see it before you confirm a growth message. If `DONNA_KPI_BRAKE=block` is set, it refuses to queue the message until those KPIs are fixed.

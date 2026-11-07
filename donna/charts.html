@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DONNA Charts</title>
+<style>
+  :root {
+    --bg: #060b16; --panel: rgba(18, 30, 54, 0.72); --line: rgba(120, 170, 255, 0.16); --grid: rgba(142, 163, 196, .14);
+    --text: #e6eefc; --muted: #8ea3c4; --accent: #2de2c4; --warn: #f5b942; --bad: #ff6b7d; --ok: #38d996;
+    --s1: #2de2c4; --s2: #f5b942; --s3: #9b8cff;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  html, body { margin: 0; color: var(--text);
+    font: 15px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  body { padding: 16px; max-width: 1500px; margin: 0 auto; min-height: 100vh;
+    background: radial-gradient(ellipse at 50% 0%, #0d1b33 0%, var(--bg) 60%); }
+  header { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+  header h1 { margin: 0; font-size: 18px; letter-spacing: .3em; font-weight: 600; color: var(--accent); }
+  header .tools { display: flex; gap: 10px; align-items: baseline; color: var(--muted); font-size: 13px; }
+  a, button { color: var(--accent); }
+  button { background: rgba(45, 226, 196, .1); border: 1px solid rgba(45, 226, 196, .4); border-radius: 8px; padding: 5px 12px;
+    font: inherit; font-size: 13px; cursor: pointer; }
+  button:hover { background: rgba(45, 226, 196, .2); }
+  .note { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+  nav { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 14px; flex-wrap: wrap; }
+  nav button { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted);
+    padding: 8px 14px; font-size: 14px; }
+  nav button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+  section[hidden] { display: none; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; margin-bottom: 14px; }
+  .tile, .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 16px; min-width: 0; }
+  .tile .k { font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  .tile .v { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .s { font-size: 12.5px; color: var(--muted); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 14px; margin-bottom: 14px; }
+  .panel h2 { margin: 0 0 6px; font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .panel .sub { font-size: 12.5px; color: var(--muted); margin: -2px 0 6px; }
+  .chart { position: relative; width: 100%; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .tip { position: absolute; pointer-events: none; background: #0b1426; border: 1px solid var(--line); border-radius: 8px;
+    padding: 5px 8px; font-size: 12px; white-space: nowrap; transform: translate(-50%, -110%); display: none; z-index: 2; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+  .markets { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 14px; }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .card-head b { font-size: 15px; }
+  .card-head .px { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 2px 0 4px; }
+  .up { color: var(--ok); } .down { color: var(--bad); } .warn { color: var(--warn); }
+  .pill { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+  #pos-table, #kpi-table, #pad-table { overflow-x: auto; }   /* a wide table scrolls inside its panel on a phone */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.n, th.n { text-align: right; }
+  .empty { color: var(--muted); font-size: 13.5px; padding: 18px 0; }
+  .banner { background: rgba(255, 107, 125, .1); border: 1px solid rgba(255, 107, 125, .45); border-radius: 10px; padding: 8px 12px;
+    margin-bottom: 12px; font-size: 13.5px; }
+  .banner.amber { background: rgba(245, 185, 66, .1); border-color: rgba(245, 185, 66, .45); }
+  @media (max-width: 520px) { .grid2, .markets { grid-template-columns: 1fr; } body { padding: 12px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>DONNA · CHARTS</h1>
+  <span class="tools"><span id="updated">Loading…</span><button type="button" id="reload">Refresh</button><a href="/console">Console</a></span>
+</header>
+<p class="note">Private: this page only opens through your DONNA link and only reads data. It never places, changes or closes a trade.
+Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
+<div id="banners"></div>
+<nav role="tablist">
+  <button role="tab" data-tab="account" aria-selected="true">My account</button>
+  <button role="tab" data-tab="trades" aria-selected="false">Closed trades</button>
+  <button role="tab" data-tab="markets" aria-selected="false">Markets</button>
+  <button role="tab" data-tab="compliance" aria-selected="false">PAD &amp; KPIs</button>
+</nav>
+
+<section id="tab-account">
+  <div class="tiles" id="acct-tiles"></div>
+  <div class="grid2">
+    <div class="panel"><h2>Equity, last 14 days</h2><p class="sub" id="eq-sub"></p><div class="chart" id="eq-chart"></div>
+      <div class="legend"><span><i style="background:var(--s1)"></i>Equity</span><span><i style="background:var(--bad)"></i>Today's daily-loss stop</span></div></div>
+    <div class="panel"><h2>Drawdown from the peak</h2><p class="sub" id="dd-sub"></p><div class="chart" id="dd-chart"></div></div>
+  </div>
+  <div class="panel"><h2>Open positions</h2><div id="pos-table"></div></div>
+</section>
+
+<section id="tab-trades" hidden>
+  <div class="tiles" id="tr-tiles"></div>
+  <div class="grid2">
+    <div class="panel"><h2>Cumulative net P&amp;L</h2><p class="sub" id="cum-sub"></p><div class="chart" id="cum-chart"></div></div>
+    <div class="panel"><h2>Net P&amp;L per day</h2><div class="chart" id="day-chart"></div></div>
+  </div>
+  <div class="panel"><h2>Net P&amp;L per symbol</h2><div class="chart" id="sym-chart"></div></div>
+</section>
+
+<section id="tab-markets" hidden>
+  <p class="note" id="mk-note">Daily closes with 20- and 50-day averages. Where you have an open position, its entry and stop are drawn on the chart.</p>
+  <div class="markets" id="mk-cards"><div class="empty">Loading market data…</div></div>
+</section>
+
+<section id="tab-compliance" hidden>
+  <div class="tiles" id="co-tiles"></div>
+  <div class="grid2">
+    <div class="panel"><h2>Your trading KPIs</h2><div id="kpi-table"></div></div>
+    <div class="panel"><h2>PAD flags, last 30 days</h2><div class="chart" id="pad-chart"></div><div id="pad-table"></div></div>
+  </div>
+</section>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const fin = (v) => typeof v === "number" && isFinite(v);
+  const money = (v, d = 2) => !fin(v) ? "–" : (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+  const pct = (v, d = 2, plus = true) => !fin(v) ? "–" : (plus && v > 0 ? "+" : "") + v.toFixed(d) + "%";
+  const num = (v, d = 2) => !fin(v) ? "–" : v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+  const cls = (v) => !fin(v) || v === 0 ? "" : v > 0 ? "up" : "down";
+  const day = (iso) => { const d = new Date(iso.length <= 10 ? iso + "T00:00:00Z" : iso.replace(" ", "T") + (/[zZ+]/.test(iso.slice(10)) ? "" : "Z"));
+    return isNaN(d) ? iso : d.toLocaleDateString(undefined, { day: "numeric", month: "short" }); };
+  const when = (iso) => { const d = new Date(iso.replace(" ", "T") + (/[zZ+]/.test(iso.slice(10)) ? "" : "Z"));
+    return isNaN(d) ? iso : d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); };
+  const api = (path) => fetch(path, { headers: { "X-Donna": "console" }, cache: "no-store" }).then((r) => {
+    if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
+  const tile = (k, v, s = "", c = "") => `<div class="tile"><div class="k">${esc(k)}</div><div class="v ${c}">${v}</div><div class="s">${s}</div></div>`;
+  const empty = (msg) => `<div class="empty">${esc(msg)}</div>`;
+
+  function ticks(lo, hi, n = 4) {
+    const span = hi - lo || Math.abs(hi) || 1, raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) || raw;
+    const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(+v.toFixed(10));
+    return out;
+  }
+  const short = (v) => Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + "M" : Math.abs(v) >= 1e4 ? (v / 1e3).toFixed(0) + "k"
+    : Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2).replace(/\.?0+$/, "") : v.toPrecision(3);
+
+  const usd = (v) => (v < 0 ? "-$" : "$") + short(Math.abs(v));
+  // drawn at the element's real width so the labels stay readable on small cards
+  const width = (el) => Math.max(300, Math.round(el.clientWidth || 640));
+
+  // A line chart in plain SVG: series [{values, color, width, dash}], hlines [{y, color, label}], hover tooltip.
+  function lineChart(el, { x, series, hlines = [], fmt = short, h = 230, area = false, tip }) {
+    const W = width(el), H = h, L = 52, R = 12, T = 10, B = 24;
+    const vals = series.flatMap((s) => s.values).concat(hlines.map((l) => l.y)).filter(fin);
+    if (!x.length || !vals.length) { el.innerHTML = empty("No data yet"); return; }
+    let lo = Math.min(...vals), hi = Math.max(...vals); if (lo === hi) { lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
+    const n = x.length, X = (i) => L + (n === 1 ? (W - L - R) / 2 : i * (W - L - R) / (n - 1)), Y = (v) => T + (hi - v) * (H - T - B) / (hi - lo);
+    let g = "";
+    for (const v of ticks(lo, hi)) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css("--grid")}"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${esc(fmt(v))}</text>`;
+    const xi = n < 3 ? [0, n - 1] : [0, Math.floor((n - 1) / 2), n - 1];
+    xi.forEach((i, k) => { g += `<text x="${X(i)}" y="${H - 6}" text-anchor="${k === 0 ? "start" : k === xi.length - 1 ? "end" : "middle"}">${esc(day(x[i]))}</text>`; });
+    for (const l of hlines) if (fin(l.y)) g += `<line x1="${L}" x2="${W - R}" y1="${Y(l.y)}" y2="${Y(l.y)}" stroke="${l.color}" stroke-dasharray="5 4" stroke-width="1.3"/>`
+      + (l.label ? `<text x="${l.left ? L + 4 : W - R - 2}" y="${Y(l.y) - 4}" text-anchor="${l.left ? "start" : "end"}" style="fill:${l.color}">${esc(l.label)}</text>` : "");
+    series.forEach((s, si) => {
+      let d = "", pen = false;
+      s.values.forEach((v, i) => { if (!fin(v)) { pen = false; return; } d += (pen ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1); pen = true; });
+      if (area && si === 0 && d) {
+        const base = Y(Math.max(lo, Math.min(hi, s.base ?? lo)));
+        const first = s.values.findIndex(fin), last = s.values.length - 1 - [...s.values].reverse().findIndex(fin);
+        g += `<path d="${d} L${X(last)} ${base} L${X(first)} ${base} Z" fill="${s.color}" opacity=".12"/>`;
+      }
+      g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2}" ${s.dash ? `stroke-dasharray="${s.dash}"` : ""} stroke-linejoin="round"/>`;
+    });
+    g += `<line class="cross" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="${css("--muted")}" stroke-width="1" visibility="hidden"/>`;
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img">${g}</svg><div class="tip"></div>`;
+    const svg = el.querySelector("svg"), tipEl = el.querySelector(".tip"), cross = el.querySelector(".cross");
+    svg.addEventListener("mousemove", (e) => {
+      const r = svg.getBoundingClientRect(), sx = (e.clientX - r.left) * W / r.width;
+      const i = Math.max(0, Math.min(n - 1, Math.round((sx - L) / ((W - L - R) / Math.max(1, n - 1)))));
+      cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("visibility", "visible");
+      tipEl.innerHTML = tip ? tip(i) : `${esc(day(x[i]))}: ${esc(fmt(series[0].values[i]))}`;
+      tipEl.style.display = "block"; tipEl.style.left = (X(i) * r.width / W) + "px"; tipEl.style.top = (Y(series[0].values[i] ?? lo) * r.height / H) + "px";
+    });
+    svg.addEventListener("mouseleave", () => { tipEl.style.display = "none"; cross.setAttribute("visibility", "hidden"); });
+  }
+
+  // Vertical bars around zero (green up, red down).
+  function barChart(el, { labels, values, fmt = short, h = 230, tip }) {
+    const W = width(el), H = h, L = 52, R = 12, T = 10, B = 24;
+    if (!values.length) { el.innerHTML = empty("No data yet"); return; }
+    let lo = Math.min(0, ...values), hi = Math.max(0, ...values); if (lo === hi) hi = 1;
+    const pad = (hi - lo) * 0.06; lo -= lo < 0 ? pad : 0; hi += hi > 0 ? pad : 0;
+    const n = values.length, bw = (W - L - R) / n, Y = (v) => T + (hi - v) * (H - T - B) / (hi - lo);
+    let g = "";
+    for (const v of ticks(lo, hi)) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css("--grid")}"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${esc(fmt(v))}</text>`;
+    values.forEach((v, i) => { const y0 = Y(Math.max(0, v)), y1 = Y(Math.min(0, v));
+      g += `<rect data-i="${i}" x="${L + i * bw + bw * 0.15}" y="${y0}" width="${Math.max(1, bw * 0.7)}" height="${Math.max(1, y1 - y0)}" rx="2" fill="${v >= 0 ? css("--ok") : css("--bad")}"/>`; });
+    const xi = n < 3 ? [0, n - 1] : [0, Math.floor((n - 1) / 2), n - 1];
+    xi.forEach((i, k) => { g += `<text x="${L + i * bw + bw / 2}" y="${H - 6}" text-anchor="${k === 0 ? "start" : k === xi.length - 1 ? "end" : "middle"}">${esc(day(labels[i]))}</text>`; });
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img">${g}</svg><div class="tip"></div>`;
+    hover(el, W, H, (i) => tip ? tip(i) : `${esc(day(labels[i]))}: ${esc(money(values[i]))}`);
+  }
+
+  // Horizontal bars, one row per label.
+  function hBars(el, { labels, values, fmt = (v) => money(v, Math.abs(v) < 10 ? 2 : 0), tip }) {
+    if (!values.length) { el.innerHTML = empty("No data yet"); return; }
+    const rowH = 26, W = width(el), L = 110 + 64, R = 64, H = values.length * rowH + 8;   // 64px each side for the values
+    const m = Math.max(...values.map(Math.abs), 1), mid = values.some((v) => v < 0) ? L + (W - L - R) / 2 : L;
+    const sc = (values.some((v) => v < 0) ? (W - L - R) / 2 : (W - L - R)) / m;
+    let g = `<line x1="${mid}" x2="${mid}" y1="0" y2="${H}" stroke="${css("--grid")}"/>`;
+    values.forEach((v, i) => { const y = 4 + i * rowH, w = Math.abs(v) * sc;
+      g += `<text x="${L - 72}" y="${y + 16}" text-anchor="end" style="fill:${css("--text")}">${esc(labels[i])}</text>`
+        + `<rect data-i="${i}" x="${v >= 0 ? mid : mid - w}" y="${y + 4}" width="${Math.max(1, w)}" height="${rowH - 10}" rx="3" fill="${v >= 0 ? css("--ok") : css("--bad")}"/>`
+        + `<text x="${v >= 0 ? mid + w + 6 : mid - w - 6}" y="${y + 16}" text-anchor="${v >= 0 ? "start" : "end"}">${esc(fmt(v))}</text>`; });
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img">${g}</svg><div class="tip"></div>`;
+    if (tip) hover(el, W, H, tip);
+  }
+
+  function hover(el, W, H, text) {
+    const svg = el.querySelector("svg"), tipEl = el.querySelector(".tip");
+    svg.addEventListener("mousemove", (e) => { const i = e.target.dataset && e.target.dataset.i;
+      if (i === undefined) { tipEl.style.display = "none"; return; }
+      const r = svg.getBoundingClientRect(), b = e.target.getBoundingClientRect();
+      tipEl.innerHTML = text(+i); tipEl.style.display = "block"; tipEl.style.left = (b.left - r.left + b.width / 2) + "px"; tipEl.style.top = (b.top - r.top) + "px"; });
+    svg.addEventListener("mouseleave", () => { tipEl.style.display = "none"; });
+  }
+
+  // ------------------------------------------------------------ sections
+  function renderAccount(a, r) {
+    const tiles = [];
+    if (a.error && r.error) { $("acct-tiles").innerHTML = ""; $("eq-chart").innerHTML = empty(a.error); $("dd-chart").innerHTML = ""; $("pos-table").innerHTML = empty(r.error); return; }
+    if (!r.error) {
+      const over = fin(r.open_risk_pct) && r.open_risk_pct > r.open_risk_limit_pct;
+      tiles.push(tile("Equity", money(r.equity), r.stale ? `<span class="warn">Data ${Math.round(r.age_hours)}h old</span>` : "as of " + esc(when(r.asof))));
+      tiles.push(tile("Today", money(r.day_pnl), fin(r.day_pnl) && r.equity ? pct(r.day_pnl / (r.equity - r.day_pnl) * 100) : "", cls(r.day_pnl)));
+      tiles.push(tile("Open risk at stops", pct(r.open_risk_pct, 2, false), `${money(r.open_risk)} · limit ${r.open_risk_limit_pct}%`, over ? "down" : ""));
+      tiles.push(tile("Room before daily-loss stop", money(r.daily_loss_room), fin(r.daily_loss_limit) ? `daily limit ${money(r.daily_loss_limit)}` : "",
+        fin(r.daily_loss_room) && r.daily_loss_room <= 0 ? "down" : ""));
+      tiles.push(tile("Floating P&L", money(r.floating), `${r.positions.length} open position${r.positions.length === 1 ? "" : "s"}`, cls(r.floating)));
+    }
+    if (!a.error) tiles.push(tile("14-day change", pct(a.change_pct), `worst drawdown ${pct(a.max_drawdown_pct, 2, false)}`, cls(a.change_pct)));
+    $("acct-tiles").innerHTML = tiles.join("");
+    if (a.error) { $("eq-chart").innerHTML = empty(a.error); $("dd-chart").innerHTML = ""; }
+    else {
+      $("eq-sub").textContent = `${money(a.start)} → ${money(a.now)}`;
+      lineChart($("eq-chart"), { x: a.t, series: [{ values: a.equity, color: css("--s1") }], area: true,
+        hlines: fin(a.daily_stop_level) ? [{ y: a.daily_stop_level, color: css("--bad"), label: "daily-loss stop " + money(a.daily_stop_level, 0) }] : [],
+        fmt: usd, tip: (i) => `${esc(when(a.t[i]))}<br><b>${esc(money(a.equity[i]))}</b>` });
+      $("dd-sub").textContent = `Worst ${pct(a.max_drawdown_pct, 2, false)} in the last 14 days`;
+      lineChart($("dd-chart"), { x: a.t, series: [{ values: a.drawdown, color: css("--bad"), base: 0 }], area: true, h: 180,
+        fmt: (v) => v.toFixed(1) + "%", tip: (i) => `${esc(when(a.t[i]))}<br>${esc(pct(a.drawdown[i], 2, false))} from the peak` });
+    }
+    if (r.error) { $("pos-table").innerHTML = empty(r.error); return; }
+    if (!r.positions.length) { $("pos-table").innerHTML = empty("Flat: no open positions."); return; }
+    $("pos-table").innerHTML = `<table><tr><th>Symbol</th><th>Side</th><th class="n">Units</th><th class="n">Floating</th><th class="n">Risk at stop</th><th>Stop</th></tr>`
+      + r.positions.map((p) => `<tr><td>${esc(p.symbol)}</td><td>${esc(p.side)}</td><td class="n">${num(p.units, 0)}</td>`
+        + `<td class="n ${cls(p.floating)}">${p.converted ? money(p.floating) : num(p.floating) + " (quote ccy)"}</td>`
+        + `<td class="n">${p.no_stop ? '<span class="down">whole position</span>' : p.stop_in_profit ? '<span class="up">none, locked in profit</span>' : money(p.risk_at_stop)}</td>`
+        + `<td>${p.no_stop ? '<span class="pill down">NO STOP</span>' : p.stop_in_profit ? '<span class="pill up">in profit</span>' : '<span class="pill">set</span>'}</td></tr>`).join("") + "</table>";
+  }
+
+  function renderTrades(t) {
+    if (t.error) { $("tr-tiles").innerHTML = ""; $("cum-chart").innerHTML = empty(t.error); $("day-chart").innerHTML = ""; $("sym-chart").innerHTML = ""; return; }
+    $("tr-tiles").innerHTML = [
+      tile("Net P&L", money(t.net), `${t.trades} trades · ${esc(day(t.from))} to ${esc(day(t.to))}`, cls(t.net)),
+      tile("Win rate", pct(t.win_rate, 0, false), `avg win ${money(t.avg_win)} · avg loss ${money(t.avg_loss)}`),
+      tile("Profit factor", fin(t.profit_factor) ? t.profit_factor.toFixed(2) : "–", "gross wins ÷ gross losses", fin(t.profit_factor) ? (t.profit_factor >= 1 ? "up" : "down") : ""),
+      tile("Expectancy", money(t.expectancy), "average net per trade", cls(t.expectancy)),
+      tile("Max drawdown", money(t.max_drawdown), t.big_losses ? `<span class="warn">${t.big_losses} oversized loss${t.big_losses === 1 ? "" : "es"}</span>` : "on closed trades", "down"),
+    ].join("");
+    $("cum-sub").textContent = `Last ${t.trades} closed trades`;
+    lineChart($("cum-chart"), { x: t.t, series: [{ values: t.cumulative, color: t.net >= 0 ? css("--ok") : css("--bad"), base: 0 }], area: true,
+      hlines: [{ y: 0, color: css("--muted") }], fmt: usd, tip: (i) => `${esc(when(t.t[i]))}<br>trade ${i + 1}: <b>${esc(money(t.cumulative[i]))}</b>` });
+    barChart($("day-chart"), { labels: t.days, values: t.day_net, fmt: usd });
+    const s = [...t.by_symbol].sort((a, b) => b.net - a.net);
+    hBars($("sym-chart"), { labels: s.map((x) => x.symbol), values: s.map((x) => x.net),
+      tip: (i) => `${esc(s[i].symbol)}: ${esc(money(s[i].net))} · ${s[i].trades} trades · ${pct(s[i].win_rate, 0, false)} won` });
+  }
+
+  function renderCompliance(c) {
+    const pad = c.pad || {}, kpi = c.kpi || {}, k = kpi.counts || {};
+    $("co-tiles").innerHTML = [
+      tile("PAD flags (30 days)", pad.error ? "–" : String(pad.flags_30d), pad.error ? esc(pad.error) : pad.flags_30d ? "see the list" : "clean", pad.flags_30d ? "warn" : "up"),
+      tile("KPIs red", kpi.error ? "–" : String(k.RED ?? 0), "all departments", k.RED ? "down" : ""),
+      tile("KPIs amber", kpi.error ? "–" : String(k.AMBER ?? 0), "", k.AMBER ? "warn" : ""),
+      tile("KPIs green", kpi.error ? "–" : String(k.GREEN ?? 0), `${k["NO DATA"] ?? 0} with no data yet`, "up"),
+    ].join("");
+    if (kpi.error) $("kpi-table").innerHTML = empty(kpi.error);
+    else $("kpi-table").innerHTML = !kpi.trading.length ? empty("No trading KPIs") : `<table><tr><th>KPI</th><th class="n">Now</th><th class="n">Target</th><th>Status</th></tr>`
+      + kpi.trading.map((r) => { const c2 = { RED: "down", AMBER: "warn", GREEN: "up" }[r.status] || "";
+        const u = (v) => !fin(v) ? "–" : r.unit === "$" ? money(v, 0) : r.unit === "%" ? num(v, 1) + "%" : r.unit === "yes" ? (v >= 1 ? "yes" : "no") : num(v, Number.isInteger(v) ? 0 : 2) + (r.unit && r.unit !== "n" ? " " + r.unit : "");
+        return `<tr><td>${esc(r.name)}${r.note ? `<div class="s" style="color:var(--muted);font-size:12px">${esc(r.note)}</div>` : ""}</td><td class="n">${esc(u(r.value))}</td><td class="n">${esc(u(r.target))}</td><td><span class="pill ${c2}">${esc(r.status)}</span></td></tr>`; }).join("") + "</table>";
+    if (pad.error) { $("pad-chart").innerHTML = ""; $("pad-table").innerHTML = empty(pad.error); return; }
+    const by = Object.entries(pad.by_check || {}).sort((a, b) => b[1] - a[1]);
+    if (by.length) hBars($("pad-chart"), { labels: by.map((x) => x[0]), values: by.map((x) => x[1]), fmt: (v) => String(v) });
+    else $("pad-chart").innerHTML = "";
+    $("pad-table").innerHTML = !pad.latest.length ? empty("No PAD flags in the last 30 days.")
+      : `<table><tr><th>When (UTC)</th><th>Symbol</th><th>Check</th><th>Detail</th></tr>` + pad.latest.map((f) =>
+        `<tr><td>${esc(f.when)}</td><td>${esc(f.symbol)}</td><td>${esc(f.check)}</td><td>${esc(f.detail)}</td></tr>`).join("") + "</table>";
+  }
+
+  function renderBanners(r) {
+    const b = [];
+    if (!r.error) {
+      if (fin(r.daily_loss_room) && r.daily_loss_room <= 0) b.push(`<div class="banner"><b>Kill switch:</b> today's loss has reached the daily limit. No new risk today.</div>`);
+      if (fin(r.open_risk_pct) && r.open_risk_pct > r.open_risk_limit_pct) b.push(`<div class="banner"><b>Open risk ${pct(r.open_risk_pct, 2, false)}</b> is above your ${r.open_risk_limit_pct}% limit.</div>`);
+      if (r.no_stop && r.no_stop.length) b.push(`<div class="banner"><b>No hard stop</b> on ${esc(r.no_stop.join(", "))}: the risk is the whole position.</div>`);
+      if (r.stale) b.push(`<div class="banner amber">Position data is ${Math.round(r.age_hours)} hours old. Check the cTrader connection with !status.</div>`);
+    }
+    $("banners").innerHTML = b.join("");
+  }
+
+  function renderMarkets(m) {
+    const cards = m.cards || [];
+    $("mk-note").textContent = "Daily closes with 20- and 50-day averages. Where you have an open position, its entry and stop are drawn on the chart. "
+      + `Prices loaded ${when(m.loaded)}; they refresh at most once an hour.`;
+    $("mk-cards").innerHTML = cards.map((c, i) => c.error
+      ? `<div class="panel"><div class="card-head"><b>${esc(c.label)}</b></div>${empty("No prices: " + c.error)}</div>`
+      : `<div class="panel"><div class="card-head"><b>${esc(c.label)}</b><span class="px">${num(c.last, c.decimals)} <span class="${cls(c.chg_1d)}">${pct(c.chg_1d)}</span></span></div>`
+        + `<div class="stats"><span>5d <span class="${cls(c.chg_5d)}">${pct(c.chg_5d, 1)}</span></span><span>20d <span class="${cls(c.chg_20d)}">${pct(c.chg_20d, 1)}</span></span>`
+        + `<span>vol ${fin(c.vol_20d) ? c.vol_20d.toFixed(0) + "%" : "–"}</span><span>${pct(c.from_high, 1)} from 1y high</span>`
+        + `<span class="pill ${c.trend === "up" ? "up" : c.trend === "down" ? "down" : ""}">${esc(c.trend === "up" ? "uptrend" : c.trend === "down" ? "downtrend" : c.trend)}</span></div>`
+        + `<div class="chart" id="mk-${i}"></div><div class="legend"><span><i style="background:var(--s1)"></i>Close</span><span><i style="background:var(--s2)"></i>20-day</span>`
+        + `<span><i style="background:var(--s3)"></i>50-day</span>${c.positions.length ? '<span><i style="background:var(--text)"></i>Entry</span>' : ""}${c.positions.some((p) => fin(p.stop)) ? '<span><i style="background:var(--bad)"></i>Stop</span>' : c.positions.length ? '<span class="down">no stop set</span>' : ""}</div>`
+        + `<div class="s" style="font-size:11.5px;color:var(--muted)">Source: ${esc(c.source)} · last bar ${esc(day(c.asof))}</div></div>`).join("") || empty("No markets configured");
+    cards.forEach((c, i) => { if (c.error) return;
+      const hl = c.positions.flatMap((p) => [{ y: p.entry, color: css("--text"), label: `${p.side} entry` }].concat(fin(p.stop) ? [{ y: p.stop, color: css("--bad"), label: "stop", left: true }] : []));
+      lineChart($("mk-" + i), { x: c.t, h: 200, hlines: hl, fmt: (v) => short(v),
+        series: [{ values: c.close, color: css("--s1") }, { values: c.sma20, color: css("--s2"), width: 1.4 }, { values: c.sma50, color: css("--s3"), width: 1.4 }],
+        tip: (j) => `${esc(day(c.t[j]))}<br><b>${num(c.close[j], c.decimals)}</b>${fin(c.sma20[j]) ? "<br>20d " + num(c.sma20[j], c.decimals) : ""}${fin(c.sma50[j]) ? " · 50d " + num(c.sma50[j], c.decimals) : ""}` }); });
+  }
+
+  // ------------------------------------------------------------ loading
+  let marketsLoaded = false, lastData = null, lastMarkets = null;
+  function renderData() { const d = lastData; if (!d) return;
+    renderBanners(d.risk || {}); renderAccount(d.account || {}, d.risk || {}); renderTrades(d.trades || {}); renderCompliance(d.compliance || {}); }
+  let resizeTimer = 0;   // charts are drawn at their real width: redraw when the window or the tab changes
+  const redraw = () => { renderData(); if (lastMarkets) renderMarkets(lastMarkets); };
+  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(redraw, 200); });
+  async function load() {
+    try {
+      lastData = await api("/api/charts/data"); renderData();
+      $("updated").textContent = "Updated " + lastData.now;
+    } catch (e) { $("updated").textContent = "Could not reach DONNA (" + e.message + "). Is the DONNA link window still open?"; }
+  }
+  async function loadMarkets(refresh = false) {
+    try { lastMarkets = await api("/api/charts/markets" + (refresh ? "?refresh=true" : "")); renderMarkets(lastMarkets); marketsLoaded = true; }
+    catch (e) { $("mk-cards").innerHTML = empty("Could not load market data (" + e.message + ")"); }
+  }
+  document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll("nav button").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+    document.querySelectorAll("section").forEach((s) => { s.hidden = s.id !== "tab-" + b.dataset.tab; });
+    if (b.dataset.tab === "markets" && !marketsLoaded) loadMarkets(); else redraw();
+    try { localStorage.setItem("donna-charts-tab", b.dataset.tab); } catch (e) { /* private window */ }
+  }));
+  $("reload").addEventListener("click", () => { load(); if (marketsLoaded) loadMarkets(true); });
+  let saved = null; try { saved = localStorage.getItem("donna-charts-tab"); } catch (e) { /* private window */ }
+  const start = saved && document.querySelector(`nav button[data-tab="${saved}"]`); if (start) start.click();
+  load(); setInterval(load, 5 * 60 * 1000);
+})();
+</script>
+</body>
+</html>
