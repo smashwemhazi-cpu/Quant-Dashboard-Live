@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -81,7 +82,8 @@ def test_snapshot_reads_positions_prices_and_converts_currency():
     snap = run(fake)
     jpy, gold = snap["positions"]
     assert jpy == {"symbol": "USDJPY", "side": "sell", "units": 10_000, "entry": 150.0, "stop": 150.5,
-                   "price": 150.2, "quote_to_account": pytest.approx(1332 / 2000 / 100, rel=1e-6)}
+                   "price": 150.2, "quote_to_account": pytest.approx(1332 / 2000 / 100, rel=1e-6),
+                   "position_id": "1", "opened_ms": None}
     assert gold["side"] == "buy" and gold["price"] == 2405.0 and gold["stop"] is None
     assert gold["quote_to_account"] == pytest.approx(1.0)
     assert snap["balance"] == 10_000 and snap["equity"] == pytest.approx(10_000 - 14 + 49)
@@ -215,6 +217,21 @@ def test_closed_trades_flow_into_the_journal(monkeypatch):
     fake2 = FakeCTrader()
     asyncio.run(f.snapshot(fake2, "5551234", "a", "r", "cid", "sec", now_ms=NOW + 300_000))
     assert fake2.windows == [(NOW - 3600_000, NOW + 300_000)]
+
+
+def test_closed_trade_carries_its_open_time_for_pad(monkeypatch):
+    """The PAD holding-period check needs when a closed position was opened: from its opening deal."""
+    fake = FakeCTrader()
+    close = {"entryPrice": 2400.0, "grossProfit": 10_000, "swap": 0, "commission": 0, "balance": 1_010_000,
+             "closedVolume": 1_000, "moneyDigits": 2}
+    fake.deals = [_deal(5, NOW - 3 * DAY, 1), {**_deal(6, NOW - 2 * DAY, 2, close), "positionId": 5},
+                  _deal(7, NOW - DAY, 2, close)]                     # opened before the history read: unknown
+    monkeypatch.setattr(f, "HISTORY_REQUESTS", 100)
+    snap = asyncio.run(f.snapshot(fake, "5551234", "a", "r", "cid", "sec", now_ms=NOW))
+    a, b = snap["closed"]
+    assert a["position_id"] == "5" and a["opened_utc"] == datetime.fromtimestamp(
+        (NOW - 3 * DAY) / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    assert b["position_id"] == "7" and b["opened_utc"] is None
 
 
 def test_history_backfill_is_paced_and_survives_rate_limits(monkeypatch):
