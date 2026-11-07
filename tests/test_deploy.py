@@ -133,3 +133,11 @@ def test_rejected_client_id_says_why(tmp_path):
     out = subprocess.run([sys.executable, "-c", _settings_writer(), str(env)], capture_output=True, text=True,
                          env={**os.environ, "SET_DONNA_CTRADER_CLIENT_ID": "38863_Ab/Cd#Ef"}, cwd=ROOT, check=True).stdout
     assert "SKIPPED DONNA_CTRADER_CLIENT_ID" in out and "starting 38863_" in out and "'/'" in out
+
+
+def test_auto_update_does_not_print_first_time_setup_steps():
+    install = (DEPLOY / "install.sh").read_text()
+    gate = install.index("[[ -z ${VERTEX1_SKIP_APT:-} ]] || exit 0")
+    assert gate < install.index('echo "Next:"')
+    assert "VERTEX1_SKIP_APT=1 bash" in (DEPLOY / "vertex1-update").read_text()
+    assert "LogLevel=ERROR" in (DEPLOY / "windows" / "DONNA-Console.bat").read_text()

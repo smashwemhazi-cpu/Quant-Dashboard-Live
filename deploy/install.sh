@@ -43,6 +43,8 @@ systemctl enable -q --now vertex1-backup.timer  # nightly database backups, 14 d
 
 echo
 echo "Installed to /opt/vertex1/app (previous release kept in /opt/vertex1/app.prev)."
+# first-time setup steps; the auto-updater (VERTEX1_SKIP_APT) has nothing to set up, so it stops here
+[[ -z ${VERTEX1_SKIP_APT:-} ]] || exit 0
 echo "Next:"
 echo "  1. Fill in /etc/vertex1/vertex1.env and /etc/vertex1/secrets.toml"
 echo "  2. sudo systemctl enable --now vertex1-donna vertex1-scheduler vertex1-console"
