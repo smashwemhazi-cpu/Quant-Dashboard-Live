@@ -500,7 +500,7 @@ def main() -> None:
 
                 async with message.channel.typing():
                     pdf = await asyncio.to_thread(pad.build_pdf, padpack.group(1))
-                await message.channel.send("PAD pack for the MLRO's post-trade review:",
+                await message.channel.send("Your PAD self-review record:",
                                            file=discord.File(io.BytesIO(pdf), pad.filename(padpack.group(1))))
             except Exception as e:
                 log.exception("pad pack failed")

@@ -1,5 +1,6 @@
 """PAD guardrails: read-only checks of the owner's own cTrader trades against the PAD Policy (v0.2, approved
-7 Nov 2026), plus the monthly PAD pack the owner forwards to the MLRO for the post-trade review.
+7 Nov 2026), plus a monthly self-review record (PDF) for the owner's own file. Board and MLRO involvement was waived by
+the owner on 7 Nov 2026: this monitors the owner's personal trades only.
 
 Where the data comes from
   Every cTrader snapshot (jarvis/adapters/ctrader_feed.py, read-only token) calls record(): open positions
@@ -24,7 +25,7 @@ Discord
   !pad clear <symbol> <buy/sell> <lots> <reason>    log your own pre-clearance before you trade
   !pad list | !pad restrict <sym> [why] | !pad watch <sym> [why] | !pad unlist <sym>
   !pad class <sym> <forex|metal|index|commodity|crypto|share>   fix how a symbol is classed
-  !pad flags [days] | !pad rules | !pad pack [YYYY-MM]  (PDF for the MLRO)
+  !pad flags [days] | !pad rules | !pad pack [YYYY-MM]  (self-review PDF)
 Scheduler: job "pad_pack" sends last month's PDF to the personal Discord channel on day DONNA_PAD_PACK_DAY.
 """
 from __future__ import annotations
@@ -376,7 +377,7 @@ def command(cmd: str, rest: str) -> str | None:
                     "be cleared. Nothing logged.")
         cid = add_clearance(sym, side, float(m.group(3)), m.group(4).strip())
         return (f"Clearance #{cid} logged: {side} {sym} {m.group(3)} lots, valid today ({_local_day(_now())}). "
-                "Recorded for the MLRO's post-trade review. DONNA does not place the trade.")
+                "Kept in your PAD record. DONNA does not place the trade.")
     if sub in ("restrict", "watch"):
         sym, _, why = arg.partition(" ")
         if not sym:
@@ -412,7 +413,7 @@ def command(cmd: str, rest: str) -> str | None:
             "!pad rules | !pad pack [YYYY-MM]")
 
 
-# ------------------------------------------------------------------ monthly MLRO pack
+# ------------------------------------------------------------------ monthly self-review record
 def month_bounds(month: str | None = None, today: date | None = None) -> tuple[str, str, str]:
     """'2026-11' -> (label, first day, first day of next month). Default: last full month."""
     if month:
@@ -439,7 +440,7 @@ def pack_sections(month: str | None = None, today: date | None = None) -> tuple[
     net = sum(r["net"] or 0 for r in pos if in_month(r["closed_utc"]))
     summary = [f"Trades opened or closed in {label}: {len(pos)}", f"Clearances logged: {len(clear)}",
                f"Flags raised: {len(fl)}", f"Realised net P&L on trades closed in the month: {net:,.2f}",
-               "Reviewer: MLRO (post-trade review under PAD Policy s.4.3). Reviewed by: ____________  "
+               "Self-review by the Compliance Officer (PAD Policy s.4.3, s.8). Reviewed: ____________  "
                "Date: ________", "Outcome: [ ] no concerns  [ ] follow-up needed (note below)"]
     trades = [f"{'Opened (UTC)':<17} {'Closed (UTC)':<17} {'Symbol':<10} {'Side':<4} {'Units':>10} {'Class':<9} "
               f"{'Net':>10} Flag"]
@@ -450,7 +451,7 @@ def pack_sections(month: str | None = None, today: date | None = None) -> tuple[
                       f"{(r['net'] if r['net'] is not None else 0):>10,.2f} {'YES' if r['position_id'] in flagged else ''}")
     secs = [("Summary", summary),
             ("Trades", trades if pos else ["No trades in the month."]),
-            ("Pre-clearances (self-approved by the Compliance Officer)",
+            ("Pre-clearances (self-approved)",
              [f"#{k['id']} {k['ts_utc'][:16]} UTC  {k['side']} {k['symbol']} {k['lots'] or ''} - {k['reason']}"
               for k in clear] or ["None logged."]),
             ("Flags", [f"{f['first_seen_utc'][:16]} {CHECK_WORDS.get(f['check_name'], f['check_name'])}: {f['detail']}"
@@ -460,8 +461,7 @@ def pack_sections(month: str | None = None, today: date | None = None) -> tuple[
              or ["Both lists empty."]),
             ("Rules applied", rules_lines()[1:]),
             ("Limits", ["Covers only the cTrader account connected to DONNA (read-only). Other accounts, Connected "
-                        "Persons, client flow and collusion signals outside this account are for the MLRO to check "
-                        "in Fynxt and cTrader."])]
+                        "Persons and client flow are not visible here."])]
     return label, secs
 
 
@@ -477,9 +477,9 @@ def build_pdf(month: str | None = None, today: date | None = None) -> bytes:
     pdf.set_title(f"{FIRM} PAD review {label}")
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 10, _latin1(f"{FIRM} - PAD post-trade review, {label}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(0, 10, _latin1(f"{FIRM} - PAD self-review, {label}"), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 6, "Compliance Officer's personal account dealing, for the MLRO. Prepared by D.O.N.N.A from cTrader.",
+    pdf.cell(0, 6, "Compliance Officer's personal account dealing - self-review record. Prepared by D.O.N.N.A from cTrader.",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.cell(0, 6, "Strictly private and confidential. Keep for 7 years (PAD Policy s.4.4, s.7).",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
@@ -494,13 +494,13 @@ def build_pdf(month: str | None = None, today: date | None = None) -> bytes:
 
 
 def filename(month: str | None = None, today: date | None = None) -> str:
-    return f"pad-review-{month_bounds(month, today)[0]}.pdf"
+    return f"pad-self-review-{month_bounds(month, today)[0]}.pdf"
 
 
 @register
 class PadAgent(Agent):
     name = "pad"
-    description = "PAD guardrails: read-only checks of the owner's own trades and the monthly MLRO PAD pack."
+    description = "PAD guardrails: read-only checks of the owner's own trades and a monthly self-review record."
 
     def monthly(self, send: bool = True, today: date | None = None) -> dict[str, Any]:
         """Scheduler hook (not a Brain tool): only runs on DONNA_PAD_PACK_DAY, for the previous month."""
@@ -514,7 +514,7 @@ class PadAgent(Agent):
             from jarvis.agents.personal import PERSONAL_TARGETS
 
             res["delivery"] = {t: send_discord_file(pdf, filename(None, today),
-                                                    "Your monthly PAD pack - forward it to the MLRO for the post-trade review.",
+                                                    "Your monthly PAD self-review record, for your own file.",
                                                     webhook=t.partition(":")[2])
                                for t in PERSONAL_TARGETS if t.startswith("discord")}
         audit.log("pad", "monthly_pack", res)

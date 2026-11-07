@@ -26,6 +26,14 @@ or keys, and nothing paid is signed up for without your OK.
 
 **Next:** SH approved these scorecards as they stand on 2026-11-07. Claude reviews the first results on 21 November 2026 and lists what is missing. **Recommendations:** after 4 weeks of data, raise or lower the lead and client-book targets to what the firm actually achieves; once web search and YouTube are on, raise qualified leads to 25 a week.
 
+## 2026-11-07 · PAD: no Board or MLRO, self-review only
+
+**What was done:** the PAD checks now treat the monthly PDF as your own self-review record, not a pack for the MLRO. All MLRO and Board wording is gone from DONNA's PAD messages, the PDF and the policy document (section 8A and the MLRO review in 4.3 removed).
+
+**Why:** SH waived Board and MLRO involvement: the policy monitors SH's own personal trades.
+
+**What you need to do:** nothing. The checks themselves are unchanged. If you don't want the monthly PDF at all, set `DONNA_PAD_PACK_DAY=0` in the settings file and it stops.
+
 ## 2026-11-07 · PAD guardrails on your own trades
 
 **What was done:**
