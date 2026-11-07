@@ -36,6 +36,17 @@ She has seven duties. Each one is carried out by agents she coordinates, and eac
 
 The mandate lives in `jarvis/agents/hq.py`. A test fails if a new agent job isn't given a duty, so this section can't fall out of date.
 
+## KPIs: how DONNA scores every agent and your trading
+
+Every agent and every trader has KPIs with a target, scored GREEN, AMBER, RED or NO DATA (the source isn't connected yet, so it is never shown as green). Each KPI is either **grow** (the business gets bigger) or **protect** (it stays safe while it grows). The full list with the starter targets is in the doc "DONNA KPI Scorecard: agents, leads and traders".
+
+- `!kpi` the whole scorecard. `!kpi leads`, `!kpi marketing`, `!kpi growth`, `!kpi compliance`, `!kpi admin`, `!kpi desk`, `!kpi self`, `!kpi trading`, `!kpi book` one department.
+- `!kpi targets` every target. `!kpi set leads_qualified_week 20 10` changes one (target 20, amber at 10). `!kpi reset leads_qualified_week` puts it back.
+- `!kpi lead 12` runs the lead quality bar on one lead. A lead only counts if it is in a cleared country, has no red flags, has a public link (never a personal LinkedIn profile), was active recently (60 days for IBs, 14 for traders), is about trading, has 1,000+ followers when shown (IBs) and scores 60+ (IBs) or 50+ (traders). `!leads` tags each lead QUALIFIED or says why it doesn't count, and `!leads stats` shows the qualified count per source and the lead KPIs against target.
+- `!hq` shows the KPI counts and the worst reds. The Monday management pack has a KPI section.
+- **Growth brake:** if red-flag leads were contacted, a sanctions match is open, a complaint or regulatory deadline is late, a lead was messaged without your confirm, or the audit trail breaks, `!kpi` and `!hq` say "growth brake" and name what to fix first.
+- Trader KPIs only read the cTrader feed and back-office exports. DONNA never places, changes or closes a trade.
+
 ## What she does for you
 
 | You want | DONNA does | Where |

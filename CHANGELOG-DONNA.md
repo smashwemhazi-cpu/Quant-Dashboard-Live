@@ -5,6 +5,21 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-07 · KPIs for every agent, the lead quality bar and trader KPIs
+
+**What was done:**
+- New `!kpi` scorecard: 30 KPIs for the agents (lead finder, marketing, growth/CRM, compliance, admin desk, desk/daily wrap, DONNA herself), 10 for your own trading (lots, largest loss, stops, open risk, daily-loss hits, drawdown, profit factor, revenge trades, overtrading) and 6 for the client book (lots, active accounts, stop-outs, concentration, turnover, money in and out). Each is grow or protect, and scored green, amber, red or no data.
+- Lead quality bar: a lead from any source (web, Telegram, YouTube, LinkedIn) only counts if it passes seven gates. `!leads` tags each lead, `!leads stats` adds a Qualified column and the lead KPIs against target, `!kpi lead 12` shows one lead's check.
+- Targets can be changed in chat with `!kpi set <name> <target> [amber]` and are kept on the server.
+- `!hq` shows the KPI counts and the reds; the Monday management pack has a KPI section; a "growth brake" warning appears when a protect KPI that matters for outreach is red.
+- No Claude credit is needed: everything is worked out from DONNA's own records.
+
+**Why:** SH asked for KPIs that a head of business development would sign off on, for every agent by department and for traders, so we know the agents are working and the business grows while protecting itself.
+
+**What you need to do:** read the doc "DONNA KPI Scorecard: agents, leads and traders" and change any target you disagree with. Many KPIs show NO DATA until the back-office exports arrive by email and web search is switched on.
+
+**Next:** SH approved these scorecards as they stand on 2026-11-07. Claude reviews the first results on 21 November 2026 and lists what is missing. **Recommendations:** after 4 weeks of data, raise or lower the lead and client-book targets to what the firm actually achieves; once web search and YouTube are on, raise qualified leads to 25 a week.
+
 ## 2026-11-07 · PAD guardrails on your own trades
 
 **What was done:**

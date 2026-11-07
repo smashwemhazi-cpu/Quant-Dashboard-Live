@@ -196,7 +196,10 @@ def hq_text() -> str:
     for d in DUTIES:
         bad = [j for j in d["jobs"] if states.get(j, {}).get("state") in ("failing", "waiting")]
         L.append(f" {d['name']}: {duty_state(d, states)}" + (f" ({', '.join(bad)})" if bad else ""))
-    L += [""] + rhythm._safe(rhythm.health_lines, "SYSTEM") + ["", "Details: !agents   Run one: !run <job>"]
+    from jarvis.agents import kpi
+
+    L += [""] + rhythm._safe(kpi.summary_lines, "KPIS")
+    L += [""] + rhythm._safe(rhythm.health_lines, "SYSTEM") + ["", "Details: !agents   Run one: !run <job>   KPIs: !kpi"]
     return "\n".join(L)
 
 
