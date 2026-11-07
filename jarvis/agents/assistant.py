@@ -179,12 +179,30 @@ _URGENT = re.compile(r"\b(urgent|asap|immediately|today|deadline|overdue|final n
 _ASKS = re.compile(r"\?|\b(please|kindly|could you|can you|would you|let me know|confirm|advise|"
                    r"awaiting your|request)\b", re.I)
 _NOREPLY = re.compile(r"no-?reply|do-?not-?reply|notifications?@|mailer", re.I)
+# Marketing and mailing-list mail: never "needs a reply", whatever the sorter (Claude or rules) said.
+# Body footers are the surest sign; the subject and sender catch cold sales pitches that have no footer.
+_BULK_BODY = re.compile(r"\b(unsubscribe|opt[- ]?out|manage (your )?(email )?preferences|update your preferences|"
+                        r"view (this email )?in (your )?browser|you are receiving this|you received this email)", re.I)
+_PROMO_SUBJECT = re.compile(r"(\baffiliate|white[- ]?label|turnkey|\bown (trading )?platform|in action\b|webinar|"
+                            r"\d+ ?% off|\boffer\b|promo|cashback|\bbonus|free trial|book a (call|demo)|"
+                            r"limited time|last chance|don'?t miss|special deal|black friday|"
+                            r"\bsale\b|new feature|register now)", re.I)
+_BULK_SENDER = re.compile(r"(^|[<\s])(marketing|news(letter)?|promo(tions)?|offers?|hello|updates?|events?|"
+                          r"campaigns?)@|@(mail|email|e|em|news|newsletter|marketing|go|info|send|mailer)\.", re.I)
+
+
+def looks_bulk(subject: str, body: str = "", sender: str = "") -> bool:
+    """True for newsletters, promos and cold sales pitches: nothing in them needs a reply from you."""
+    return bool(_BULK_BODY.search(body or "") or _PROMO_SUBJECT.search(subject or "")
+                or _NOREPLY.search(sender or "") or _BULK_SENDER.search(sender or ""))
 
 
 def classify_rules(subject: str, sender_domain: str, body: str, sender: str = "") -> dict[str, Any]:
     """Claude-free triage: category, urgency and 'needs a reply' from keywords. Never raises."""
     text = f"{subject}\n{body[:3000]}"
     category = next((cat for cat, rx in _RULES if rx.search(text)), "internal" if not sender_domain else "other")
+    if category not in ("regulator", "newsletter", "vendor_marketing") and looks_bulk(subject, body, sender):
+        category = "vendor_marketing"
     bulk = category in ("newsletter", "vendor_marketing") or bool(_NOREPLY.search(sender))
     urgency = "high" if _URGENT.search(subject) or (category == "regulator" and not bulk) else (
         "low" if bulk else "medium")
@@ -275,6 +293,9 @@ def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
                     r = classify_rules(subject, domain, body, m["from"])
                 if m.get("answered"):
                     r["needs_reply"] = False
+                if r["category"] in ("newsletter", "vendor_marketing", "spam") or (
+                        r["category"] != "regulator" and looks_bulk(subject, body, m["from"])):
+                    r["needs_reply"], r["tasks"] = False, []   # promos and mailing lists never wait on you
                 c.execute("INSERT INTO email_seen VALUES (?,?,?,?,?,?,?,?,?)",
                           (m["id"], m["received"], domain, subject[:300], r["category"], r["urgency"],
                            r["summary"][:500], int(r["needs_reply"]), _now()))
