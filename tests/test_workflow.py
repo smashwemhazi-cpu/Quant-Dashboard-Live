@@ -148,3 +148,20 @@ def test_help_lists_the_admin_commands():
     from donna import discord_bot
 
     assert "!diary" in discord_bot.HELP and "!workflow" in discord_bot.HELP
+
+
+def test_read_or_answered_mail_is_counted_but_not_chased(tmp_path, monkeypatch):
+    from jarvis.agents import assistant as a
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    mails = [{"id": "<a@x>", "date": "", "from": "c@client.com", "subject": "Urgent: withdrawal",
+              "body": "Can you confirm?", "unread": False, "answered": True},
+             {"id": "<b@x>", "date": "", "from": "d@client.com", "subject": "Urgent: deposit",
+              "body": "Can you confirm?", "unread": True, "answered": False}]
+    _bridge(monkeypatch, a, mails)
+    r = {x["subject"]: x for x in a.triage_inbox()["processed"]}
+    assert r["Urgent: withdrawal"]["handled"] and not r["Urgent: withdrawal"]["task_ids"]
+    assert not r["Urgent: withdrawal"]["needs_reply"]
+    assert r["Urgent: deposit"]["task_ids"] and "handled" not in r["Urgent: deposit"]
+    assert a.inbox_status()["emails"] == 2                                  # both counted for !workflow

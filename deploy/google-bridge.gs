@@ -1,5 +1,5 @@
 // D.O.N.N.A Google bridge - runs inside your own Google account, so no password is ever given to DONNA.
-// It READS new unread inbox emails, your calendar, and report attachments (.csv / .xlsx / .xls).
+// It READS new inbox emails (read or unread), your calendar, and report attachments (.csv / .xlsx / .xls).
 // It WRITES only: a draft reply when you ask for one (!draft 12), an event in your own calendar when you ask for one
 // (!diary add / !diary block - no guests, so no invitations), DONNA's encrypted nightly backup to the
 // "DONNA backups" folder in your Drive, and an email TO YOU if DONNA's server stops checking in (uptime alert).
@@ -52,16 +52,22 @@ function doGet(e) {
   return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
 }
 
+// new inbox mail, read or not (mail you already opened on your phone still counts for !workflow); each message says
+// whether it is still unread and whether you have already replied in its thread, so DONNA doesn't chase handled mail
 function mail_(days, max) {
   var msgs = [];
-  GmailApp.search('in:inbox is:unread newer_than:' + days + 'd', 0, max).forEach(function (t) {
-    t.getMessages().forEach(function (m) {
-      if (!m.isUnread()) return;
+  var me = Session.getEffectiveUser().getEmail().toLowerCase();
+  GmailApp.search('in:inbox newer_than:' + days + 'd', 0, max).forEach(function (t) {
+    var all = t.getMessages();
+    all.forEach(function (m, i) {
+      if (m.getFrom().toLowerCase().indexOf(me) >= 0) return;          // your own messages
+      var answered = all.slice(i + 1).some(function (n) { return n.getFrom().toLowerCase().indexOf(me) >= 0; });
       msgs.push({id: m.getHeader('Message-ID') || m.getId(), date: m.getDate().toISOString(), from: m.getFrom(),
-                 subject: m.getSubject(), body: m.getPlainBody().slice(0, 8000)});
+                 subject: m.getSubject(), body: m.getPlainBody().slice(0, 8000), unread: m.isUnread(),
+                 answered: answered});
     });
   });
-  return {messages: msgs.slice(-max)};
+  return {version: VERSION, messages: msgs.slice(-max * 2)};
 }
 
 function calendar_(start, days) {

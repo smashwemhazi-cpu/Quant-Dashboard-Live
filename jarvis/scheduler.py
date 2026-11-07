@@ -139,7 +139,7 @@ def job_inbox_triage() -> None:
     if all("error" in x for x in items):  # every email failed: say so instead of going quiet
         raise RuntimeError(f"email triage failed for all {len(items)} new emails: {items[0]['error'][:200]}")
     notify("inbox_triage", {"processed": len(items)})
-    urgent = [x for x in items if x.get("urgency") == "high" and "error" not in x]
+    urgent = [x for x in items if x.get("urgency") == "high" and "error" not in x and not x.get("handled")]
     if urgent and PERSONAL_TARGETS:
         from donna.channels import broadcast
 

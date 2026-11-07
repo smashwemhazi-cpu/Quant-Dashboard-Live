@@ -238,8 +238,11 @@ def _bridge_mail(c: sqlite3.Connection, max_messages: int) -> Iterator[dict[str,
     for m in r.get("messages", []):
         raw_id = str(m.get("id") or "").strip()
         if raw_id and not c.execute("SELECT 1 FROM email_seen WHERE msg_id = ?", (raw_id,)).fetchone():
+            # bridge v4 also sends read mail; one you've opened or answered is counted, not chased
             yield {"id": raw_id, "received": str(m.get("date") or _now()), "from": str(m.get("from", "")),
-                   "subject": str(m.get("subject", "")), "body": str(m.get("body", ""))}
+                   "subject": str(m.get("subject", "")), "body": str(m.get("body", "")),
+                   "handled": m.get("unread") is False or bool(m.get("answered")),
+                   "answered": bool(m.get("answered"))}
 
 
 def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
@@ -267,12 +270,16 @@ def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
                             continue  # not marked seen - retried next run
                 if r is None:
                     r = classify_rules(subject, domain, body, m["from"])
+                if m.get("answered"):
+                    r["needs_reply"] = False
                 c.execute("INSERT INTO email_seen VALUES (?,?,?,?,?,?,?,?,?)",
                           (m["id"], m["received"], domain, subject[:300], r["category"], r["urgency"],
                            r["summary"][:500], int(r["needs_reply"]), _now()))
-                ids = [add_task(t["title"], t["due"], t["priority"], f"From email: {subject}", "email", m["id"], conn=c)
-                       for t in r["tasks"]]
-                entry = {"subject": subject, "from_domain": domain, **r, "task_ids": [i for i in ids if i]}
+                ids = [] if m.get("handled") else [
+                    add_task(t["title"], t["due"], t["priority"], f"From email: {subject}", "email", m["id"], conn=c)
+                    for t in r["tasks"]]
+                entry = {"subject": subject, "from_domain": domain, **r, "task_ids": [i for i in ids if i],
+                         **({"handled": True} if m.get("handled") else {})}
                 try:
                     from jarvis.agents import complaints
 
