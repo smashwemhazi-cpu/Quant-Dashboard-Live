@@ -5,6 +5,12 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-08 · !waiting is easier to read
+
+**What was done:** each email in `!waiting` is now a numbered block in plain words: the subject, who it's from, how long it has waited ("waiting 2 days", "arrived today", "OVER 5 DAYS"), how many emails are in the thread, and the exact command to use: "write the reply: !draft 13" or "already handled: !waiting done E14". "Others owe you" now says "sent 5 days ago".
+
+**Why:** SH asked what the letters and numbers meant (E14, 2d, x6, task #13).
+
 ## 2026-11-07 · Private charts dashboard
 
 **What was done:** a new Charts page next to the DONNA Console, with four tabs:
