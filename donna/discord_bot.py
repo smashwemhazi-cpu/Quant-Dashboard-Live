@@ -47,6 +47,8 @@ HELP = ("D.O.N.N.A commands:\n"
         "!add <title> | YYYY-MM-DD | high/medium/low\n"
         "!draft 12 <note>           reply to task 12's email, saved in Gmail Drafts (never sent)\n"
         "!today                     my-day brief\n"
+        "!diary  !diary add <title> | YYYY-MM-DD HH:MM | 45m  !diary block 12   week ahead, add to calendar, focus time\n"
+        "!workflow  !workflow 30    where your email, tasks and meeting time go, and what to streamline\n"
         "!ask <question>            e.g. !ask which clients are at risk this week?\n"
         "\nCOMPLIANCE & RISK\n"
         "!compliance                full compliance & risk report\n"
@@ -305,11 +307,11 @@ def handle(text: str, channel: str = "") -> str | None:
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
     from jarvis.agents import complaints, ib, str_pack
 
-    from jarvis.agents import attribution, campaigns, leadfinder, radar, screening
+    from jarvis.agents import attribution, campaigns, leadfinder, radar, screening, workflow
 
     reply = (complaints.command(cmd, rest) or str_pack.command(cmd, rest) or ib.command(cmd, rest)
              or leadfinder.command(cmd, rest) or radar.command(cmd, rest) or campaigns.command(cmd, rest) or attribution.command(cmd, rest)
-             or screening.command(cmd, rest))
+             or screening.command(cmd, rest) or workflow.command(cmd, rest))
     if reply is not None:
         return reply
     reply = compliance_commands(cmd, rest)

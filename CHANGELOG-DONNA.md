@@ -5,6 +5,22 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-07 · Admin desk: quieter alerts, inbox without Claude credit, !workflow, !diary
+
+**What was done:**
+- **The repeating "job failed" messages.** Every 5 minutes DONNA checks cTrader. Before, the first failed check sent an alert, and each new wording of the error ("unreachable", "CANT_ROUTE_REQUEST", "rate limited") counted as a new alert. Now short blips (network, timeouts, a busy or closed broker server, rate limits) say nothing unless the job has failed for an hour (`JARVIS_FAIL_GRACE_MINUTES`) with no success in between. After that you get one alert a day at most. cTrader, execution and LP checks stay silent while the FX market is closed (Friday 22:00 to Sunday 21:00 UTC), when broker servers are often down for maintenance. Real faults, like a missing setting, a refused login or a broken report, still alert on the first failure.
+- **Email keeps working without Claude credit.** If the credit runs out or the key is missing, new emails are now sorted by plain rules (regulator, KYC/compliance, payments, LP, client, newsletter, sales). Urgent mail still reaches you, and "Reply: <subject>" tasks are still made. Rule-sorted emails show "[rules]" in their summary. Before, triage quietly did nothing.
+- **Inbox problems speak up.** If the mailbox refuses DONNA, or every new email fails, the triage job now raises it (once a day, or "waiting for setup") instead of staying silent.
+- **`!workflow [days]`** shows where your week went: email by type and sender, replies owed, tasks in vs done, overdue, how long tasks take, and meeting hours. It ends with "Streamline" suggestions taken from those numbers: filters for bulk mail, report senders to auto-load, repeating tasks to make recurring, and focus time. It doesn't need Claude.
+- **`!diary [days]`** shows the week ahead: meetings, tasks due, regulatory deadlines and free slots in work hours (`JARVIS_WORK_HOURS`, default 08:00-17:00). **`!diary add <title> | YYYY-MM-DD HH:MM | 45m`** puts an event in your own calendar, and **`!diary block 12 90m`** books focus time for task 12 in the next free slot. Events have no guests, so no invitations go out, and DONNA never changes or deletes existing events.
+- Google bridge script is now **version 4** (adds the calendar-write action).
+
+**Why:** SH asked how the admin side is handled (email access, workflow analysis, diary upkeep, streamlining) and why the "screenshot" alerts keep coming back. The 07 Nov screenshot showed two weekend cTrader alerts (10:04 and 10:25 local) that resolved by themselves.
+
+**What you need to do:** for `!diary add` and `!diary block`, paste the new `google-bridge.gs` (version 4), deploy a new version, then Run **setup** once and click Allow. Steps are in DONNA.md under "Updating the bridge script". Everything else works on its own.
+
+**Recommendation:** top up the Claude credit. Rule sorting keeps the inbox flowing, but summaries, task wording and `!draft` replies are much better with Claude.
+
 ## 2026-11-06 · cTrader "rate limited" fix
 
 **What was done:**

@@ -1,12 +1,13 @@
 // D.O.N.N.A Google bridge - runs inside your own Google account, so no password is ever given to DONNA.
 // It READS new unread inbox emails, your calendar, and report attachments (.csv / .xlsx / .xls).
-// It WRITES only: a draft reply when you ask for one (!draft 12), DONNA's encrypted nightly backup to the
+// It WRITES only: a draft reply when you ask for one (!draft 12), an event in your own calendar when you ask for one
+// (!diary add / !diary block - no guests, so no invitations), DONNA's encrypted nightly backup to the
 // "DONNA backups" folder in your Drive, and an email TO YOU if DONNA's server stops checking in (uptime alert).
 // It never sends email to anyone else, and never deletes, labels or marks anything read.
 // Set-up (5 minutes, once) is in DONNA.md under "Email and calendar without a password".
 // After pasting a newer copy: Deploy > Manage deployments > pencil > Version: New version > Deploy (the link stays the same).
 
-var VERSION = 3;
+var VERSION = 4;
 var WATCH_MINUTES = 30;      // email me if DONNA hasn't checked in for this long
 var BACKUPS_KEPT = 14;
 var REPORT_FILE = /\.(csv|xlsx|xls)$/i;
@@ -111,6 +112,8 @@ function doPost(e) {
     out = draft_(body.id, body.text);
   } else if (q.action === 'backup') {
     out = backup_(body.name, body.data);
+  } else if (q.action === 'event') {
+    out = event_(body.title, body.start, Number(body.minutes || 30), body.note);
   } else {
     out = {error: 'unknown action'};
   }
@@ -138,6 +141,16 @@ function draft_(id, text) {
   if (!text) return {error: 'empty draft'};
   var d = m.createDraftReply(String(text).slice(0, 20000));   // saved in Drafts - never sent
   return {ok: true, draft: d.getId()};
+}
+
+// a new event in your own default calendar: no guests (nobody is invited), never edits or deletes existing ones
+function event_(title, start, minutes, note) {
+  var s = new Date(start);
+  if (!title || isNaN(s.getTime())) return {error: 'bad event'};
+  minutes = Math.max(5, Math.min(minutes || 30, 480));
+  var ev = CalendarApp.getDefaultCalendar().createEvent(String(title).slice(0, 200), s,
+    new Date(s.getTime() + minutes * 60000), {description: 'Added by DONNA. ' + String(note || '').slice(0, 500)});
+  return {ok: true, id: ev.getId()};
 }
 
 // ------------------------------------------------------------------ uptime

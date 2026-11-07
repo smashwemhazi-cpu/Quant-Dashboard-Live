@@ -140,6 +140,8 @@ def test_repeated_job_failures_alert_once(monkeypatch, tmp_path):
     monkeypatch.setattr(ch, "broadcast", lambda text, targets, title: sent.append(text) or {})
     monkeypatch.setattr(scheduler, "ALERT_TARGETS", ["discord:personal"])
     monkeypatch.setattr(scheduler.audit, "log", lambda *a, **k: None)
+    monkeypatch.setattr(scheduler, "FAIL_GRACE_MINUTES", 0)
+    monkeypatch.setattr(scheduler, "market_closed", lambda name, now=None: False)
     for _ in range(3):
         scheduler.job_failed("ctrader_positions", RuntimeError("cTrader unreachable (ClientConnectorError)"))
     assert len(sent) == 1
@@ -252,3 +254,41 @@ def test_rate_limit_skips_the_run_quietly(monkeypatch):
     monkeypatch.setattr(f, "_run", limited)
     r = f.poll()
     assert "error" not in r and "rate limited" in r["skipped"]
+
+
+def test_blips_and_weekend_failures_stay_quiet(monkeypatch, tmp_path):
+    """The repeating 'job failed' alerts: one-off cTrader blips and weekend maintenance must not alert."""
+    from datetime import datetime, timezone
+
+    from jarvis import scheduler
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    sent = []
+    import donna.channels as ch
+    monkeypatch.setattr(ch, "broadcast", lambda text, targets, title: sent.append(text) or {})
+    monkeypatch.setattr(scheduler, "ALERT_TARGETS", ["discord:personal"])
+    monkeypatch.setattr(scheduler.audit, "log", lambda *a, **k: None)
+    sat = datetime(2026, 11, 7, 6, 4, tzinfo=timezone.utc)
+    assert scheduler.market_closed("ctrader_positions", sat)
+    assert not scheduler.market_closed("ctrader_positions", datetime(2026, 11, 9, 6, tzinfo=timezone.utc))
+    assert not scheduler.market_closed("daily_wrap", sat)
+    monkeypatch.setattr(scheduler, "market_closed", lambda name, now=None: False)
+    clock = [1_000_000.0]
+    monkeypatch.setattr(scheduler.time, "time", lambda: clock[0])
+    errors = ["cTrader unreachable (ClientConnectorError)", "CANT_ROUTE_REQUEST: Cannot route request",
+              "BLOCKED_PAYLOAD_TYPE: You are being rate limited"]
+    for err in errors:  # within the first hour: silent, whatever the wording
+        scheduler.job_failed("ctrader_positions", RuntimeError(err))
+        clock[0] += 600
+    assert sent == []
+    scheduler.job_ok("ctrader_positions")   # one success resets the clock
+    clock[0] += 3000
+    scheduler.job_failed("ctrader_positions", RuntimeError(errors[0]))
+    assert sent == []
+    clock[0] += 3700                        # failing for over an hour without a success: one alert
+    for err in errors:
+        scheduler.job_failed("ctrader_positions", RuntimeError(err))
+    assert len(sent) == 1
+    # a real fault (not a blip) still alerts on the first failure
+    scheduler.job_failed("daily_wrap", KeyError("equity"))
+    assert len(sent) == 2

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -130,11 +131,15 @@ def job_inbox_triage() -> None:
     from jarvis.agents.personal import PERSONAL_TARGETS
 
     r = agents()["assistant"].triage()
+    if "error" in r and not r.get("processed"):
+        raise RuntimeError(r["error"])   # mailbox refused or unreachable: shows in !status, alerts once
     items = r.get("processed", [])
     if not items:
         return
+    if all("error" in x for x in items):  # every email failed: say so instead of going quiet
+        raise RuntimeError(f"email triage failed for all {len(items)} new emails: {items[0]['error'][:200]}")
     notify("inbox_triage", {"processed": len(items)})
-    urgent = [x for x in items if x.get("urgency") == "high"]
+    urgent = [x for x in items if x.get("urgency") == "high" and "error" not in x]
     if urgent and PERSONAL_TARGETS:
         from donna.channels import broadcast
 
@@ -366,7 +371,43 @@ def waiting_jobs() -> dict[str, tuple[str, str]]:
         return {j: (r, t) for j, r, t in c.execute("SELECT job, reason, since FROM waiting_setup ORDER BY job")}
 
 
+FAIL_GRACE_MINUTES = float(os.getenv("JARVIS_FAIL_GRACE_MINUTES", "60"))
+# failures that fix themselves: the network, a busy or closed broker server, a rate limit, a timeout
+TRANSIENT = re.compile(r"unreachable|CANT_ROUTE_REQUEST|cannot route|rate limit|BLOCKED_PAYLOAD_TYPE|"
+                       r"REQUEST_FREQUENCY_EXCEEDED|timeout|timed out|temporarily|connection (?:closed|reset|aborted)|"
+                       r"ClientConnector|ServerDisconnected|\b50[234]\b|overloaded|try again", re.I)
+# jobs that read a market server, which is closed (and often in maintenance) from Friday night to Sunday night
+MARKET_JOBS = {"ctrader_positions", "execution", "lp_slippage"}
+
+
+def is_transient(e: Exception) -> bool:
+    return isinstance(e, (TimeoutError, ConnectionError)) or bool(TRANSIENT.search(f"{type(e).__name__} {e}"))
+
+
+def market_closed(name: str, now: datetime | None = None) -> bool:
+    """FX week: Sunday ~21:00 UTC to Friday ~22:00 UTC. Outside it, a market job's blips are expected."""
+    if name not in MARKET_JOBS:
+        return False
+    now = now or datetime.now(timezone.utc)
+    wd, h = now.weekday(), now.hour
+    return (wd == 4 and h >= 22) or wd == 5 or (wd == 6 and h < 21)
+
+
+def _failing_since(name: str, now: float) -> float:
+    """When the current run of failures started (the first failure after the last success)."""
+    with _state() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS fail_streak (job TEXT PRIMARY KEY, since REAL)")
+        row = c.execute("SELECT since FROM fail_streak WHERE job = ?", (name,)).fetchone()
+        if row:
+            return row[0]
+        c.execute("INSERT INTO fail_streak (job, since) VALUES (?,?)", (name, now))
+    return now
+
+
 def job_ok(name: str) -> None:
+    with _state() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS fail_streak (job TEXT PRIMARY KEY, since REAL)")
+        c.execute("DELETE FROM fail_streak WHERE job = ?", (name,))
     with _waiting_db() as c:
         was = c.execute("DELETE FROM waiting_setup WHERE job = ?", (name,)).rowcount
     if was:
@@ -394,7 +435,17 @@ def job_failed(name: str, e: Exception) -> bool:
                       ALERT_TARGETS, title="D.O.N.N.A waiting for setup")
         return True
     audit.log("scheduler", "job_error", {"job": name, "error": str(e)})
-    if not _first_alert(f"{name}|{type(e).__name__}|{str(e)[:200]}", time.time()):
+    now = time.time()
+    if is_transient(e):
+        # a network blip or a broker server that is closed for the weekend fixes itself: say nothing unless
+        # the job has been failing without a single success for FAIL_GRACE_MINUTES, and then one alert per day
+        # whatever the wording of the error (each wording used to count as a new alert)
+        if market_closed(name) or now - _failing_since(name, now) < FAIL_GRACE_MINUTES * 60:
+            return False
+        key = f"{name}|transient"
+    else:
+        key = f"{name}|{type(e).__name__}|{str(e)[:200]}"
+    if not _first_alert(key, now):
         return False
     if ALERT_TARGETS:  # a silent failure is how a missing report goes unnoticed for a week
         from donna.channels import broadcast
