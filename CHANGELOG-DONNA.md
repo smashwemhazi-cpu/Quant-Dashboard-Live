@@ -5,6 +5,12 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-07 · Tasks and "My day" in plain words
+
+**What was done:** `!tasks` now groups your tasks into Overdue, Due today, Coming up and No date set, and writes each one as "Task 13: Reply to FinPrime - urgent, due Mon 09 Nov" instead of codes like "#13 H 2026-11-09". It ends with what you can type (`!done 13`, `!draft 13`). `!add` and `!done` answer the same way. In `!today`, the inbox lines say "URGENT" and "Waiting for your reply: ... from finprime.com" and point to `!waiting`.
+
+**Why:** SH found the letters and numbers in DONNA's reports hard to read.
+
 ## 2026-11-08 · !waiting is easier to read
 
 **What was done:** each email in `!waiting` is now a numbered block in plain words: the subject, who it's from, how long it has waited ("waiting 2 days", "arrived today", "OVER 5 DAYS"), how many emails are in the thread, and the exact command to use: "write the reply: !draft 13" or "already handled: !waiting done E14". "Others owe you" now says "sent 5 days ago".

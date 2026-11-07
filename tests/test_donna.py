@@ -250,11 +250,12 @@ def test_discord_task_commands(tmp_path, monkeypatch):
     assert b.handle("hello there") is None and b.handle("!unknown") is None
     assert b.handle("!tasks") == "No open tasks."
     assert b.handle("!add Call LP about XAU spreads | 2026-10-24 | high") == \
-        "Added #1: Call LP about XAU spreads (due 2026-10-24) [high]"
+        "Added Task 1: Call LP about XAU spreads - urgent, overdue since Sat 24 Oct"
     b.handle("!add Archive test KYC docs")
-    assert "#1" in b.handle("!tasks") and "2026-10-24" in b.handle("!tasks")
+    t = b.handle("!tasks")
+    assert "🔴 Overdue\nTask 1: Call LP" in t and "⚪ No date set\nTask 2: Archive" in t and "!done 1" in t
     out = b.handle("!done 1 99")
-    assert "#1 done" in out and "#99 not found" in out and "#1 " not in out.split("\n\n")[1]
+    assert "Task 1 marked done." in out and "Task 99 not found" in out and "Task 1:" not in out
     parts = b.chunks("x" * 5000)
     assert all(len(p) <= 2000 for p in parts) and len(parts) == 3
 

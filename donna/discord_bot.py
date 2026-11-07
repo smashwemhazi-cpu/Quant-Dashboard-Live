@@ -257,10 +257,7 @@ def audit_text() -> str:
 
 
 def tasks_text() -> str:
-    rows = assistant.list_tasks()
-    if not rows:
-        return "No open tasks."
-    return "\n".join(f"#{t['id']:<4} {t['priority'][:1].upper()} {t['due'] or '          '}  {t['title']}" for t in rows)
+    return assistant.tasks_text()
 
 
 def handle(text: str, channel: str = "") -> str | None:
@@ -282,7 +279,7 @@ def handle(text: str, channel: str = "") -> str | None:
         ids = [int(x) for x in re.findall(r"\d+", rest)]
         if not ids:
             return "Usage: !done 12 13"
-        res = [f"#{i} {'done' if assistant.complete_task(i) else 'not found or already done'}" for i in ids]
+        res = [f"Task {i} {'marked done' if assistant.complete_task(i) else 'not found, or already done'}." for i in ids]
         return "\n".join(res) + "\n\n" + tasks_text()
     if cmd == "!add":
         parts = [p.strip() for p in rest.split("|")]
@@ -291,7 +288,7 @@ def handle(text: str, channel: str = "") -> str | None:
         due = next((p for p in parts[1:] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p)), None)
         prio = next((p.lower() for p in parts[1:] if p.lower() in ("high", "medium", "low")), "medium")
         tid = assistant.add_task(parts[0], due, prio, source="discord")
-        return f"Added #{tid}: {parts[0]}" + (f" (due {due})" if due else "") + f" [{prio}]"
+        return "Added " + assistant.task_line({"id": tid, "title": parts[0], "due": due, "priority": prio})
     if cmd == "!draft":
         m = re.match(r"\s*#?(\d+)\s*(.*)", rest, re.S)
         if not m:
