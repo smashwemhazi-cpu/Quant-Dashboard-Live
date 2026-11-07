@@ -404,6 +404,13 @@ def _failing_since(name: str, now: float) -> float:
     return now
 
 
+def failing_jobs() -> dict[str, float]:
+    """{job: unix time its current run of failures started} for jobs with no success since."""
+    with _state() as c:
+        c.execute("CREATE TABLE IF NOT EXISTS fail_streak (job TEXT PRIMARY KEY, since REAL)")
+        return dict(c.execute("SELECT job, since FROM fail_streak").fetchall())
+
+
 def job_ok(name: str) -> None:
     with _state() as c:
         c.execute("CREATE TABLE IF NOT EXISTS fail_streak (job TEXT PRIMARY KEY, since REAL)")
@@ -436,11 +443,12 @@ def job_failed(name: str, e: Exception) -> bool:
         return True
     audit.log("scheduler", "job_error", {"job": name, "error": str(e)})
     now = time.time()
+    started = _failing_since(name, now)   # also feeds the !agents board ("failing since ...")
     if is_transient(e):
         # a network blip or a broker server that is closed for the weekend fixes itself: say nothing unless
         # the job has been failing without a single success for FAIL_GRACE_MINUTES, and then one alert per day
         # whatever the wording of the error (each wording used to count as a new alert)
-        if market_closed(name) or now - _failing_since(name, now) < FAIL_GRACE_MINUTES * 60:
+        if market_closed(name) or now - started < FAIL_GRACE_MINUTES * 60:
             return False
         key = f"{name}|transient"
     else:

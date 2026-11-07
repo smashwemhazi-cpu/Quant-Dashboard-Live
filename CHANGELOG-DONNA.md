@@ -5,6 +5,20 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-07 · DONNA's mandate, and one place to coordinate every agent
+
+**What was done:**
+- **DONNA's mandate is written down**, in DONNA.md (the manual) and in `jarvis/agents/hq.py`: her purpose, seven duties (run your day, keep the firm compliant, watch the desk and markets, protect your own trading, grow the business, think with you, keep herself honest and running), the agents behind each duty, the commands, how you can tell each one is being done, and what she never does.
+- **`!mandate`** gives that answer in Discord. Her chat persona carries the same mandate, so "what can you do for me?" gets the full answer in plain chat too.
+- **`!hq`** gives one view across all agents: what needs you first, then each duty in one line ("running", "partly waiting on setup", "needs a fix").
+- **`!agents`** lists every agent job under its duty, showing OK, waiting for setup, failing (since when and why) or not run yet, plus when it last ran.
+- **`!run <job>`** runs any agent now, for example `!run daily_wrap`. A failure is recorded the same way the scheduler records it.
+- A test fails if a new scheduled job has no duty, or if the manual stops matching the mandate.
+
+**Why:** SH asked what DONNA's mandate should be, so the question in the manual is answered fully, and for DONNA to coordinate the agents from one place.
+
+**What you need to do:** nothing. Try `!mandate`, `!hq` and `!agents` in #donna once the update lands.
+
 ## 2026-11-07 · Admin desk: quieter alerts, inbox without Claude credit, !workflow, !diary
 
 **What was done:**
