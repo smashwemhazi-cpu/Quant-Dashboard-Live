@@ -438,3 +438,17 @@ def test_lead_message_is_sent_only_after_confirmation_once(client, tmp_path, mon
     ch = lf.add({"source": "telegram", "ext_id": "kefx", "kind": "ib", "country": "", "name": "KE FX",
                  "url": "https://t.me/kefx"})
     assert "can't take a direct message" in lf.ask_send(ch)                     # channels: you send by hand
+
+
+def test_send_preview_warns_or_blocks_on_red_protect_kpis(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    from jarvis.agents import kpi, leadfinder as lf
+
+    pid = lf.add({"source": "manual", "ext_id": "https://t.me/someone1", "kind": "trader", "country": "",
+                  "name": "someone", "url": "https://t.me/someone1"})
+    lf.update(pid, "approved")
+    monkeypatch.setattr(kpi, "brake", lambda *a, **k: ["Open high-severity cases"])
+    assert "Protect KPIs in the red: Open high-severity cases" in lf.ask_send(pid)
+    monkeypatch.setenv("DONNA_KPI_BRAKE", "block")
+    assert lf.ask_send(pid).startswith("Not sending")
+    assert "Nothing waiting" in lf.confirm_send(pid)

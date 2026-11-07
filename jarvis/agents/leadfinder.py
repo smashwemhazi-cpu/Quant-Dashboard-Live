@@ -501,7 +501,20 @@ def ask_send(pid: int, now: datetime | None = None) -> str:
             return f"Today's limit of {SEND_CAP} first messages is reached - it protects the Telegram account. Try tomorrow."
         db.execute("INSERT OR REPLACE INTO lead_outbox (prospect, handle, text, status, asked) VALUES (?,?,?,?,?)",
                    (pid, handle, draft_body(r), "asked", _now(now)))
-    return (f"READY TO SEND to @{handle} ({r['name']}) - exactly this:\n\n{draft_body(r)}\n\n"
+    warn = ""
+    try:
+        from jarvis.agents import kpi
+
+        red = kpi.brake()
+        if red:
+            if os.getenv("DONNA_KPI_BRAKE", "") == "block":
+                with _outbox() as db:
+                    db.execute("DELETE FROM lead_outbox WHERE prospect = ? AND status = 'asked'", (pid,))
+                return "Not sending: these protect KPIs are red - " + ", ".join(red) + ". Fix them first (!kpi)."
+            warn = "!! Protect KPIs in the red: " + ", ".join(red) + " - think twice before growing (!kpi)\n\n"
+    except Exception:  # the KPI module must never block a message SH chose to send
+        pass
+    return warn + (f"READY TO SEND to @{handle} ({r['name']}) - exactly this:\n\n{draft_body(r)}\n\n"
             f"To send it, reply within {CONFIRM_MINUTES} minutes:  !leads confirm {pid}\n"
             f"Anything else cancels. One first message per person; replies come back here.")
 

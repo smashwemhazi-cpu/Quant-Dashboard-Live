@@ -5,6 +5,12 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-07 · Send preview checks the protect KPIs
+
+**What was done:** `!leads send 12` now warns at the top of the preview when any protect KPI is red, for example open high-severity cases, so you see it before you confirm a growth message. If `DONNA_KPI_BRAKE=block` is set, it refuses to queue the message until those KPIs are fixed.
+
+**Why:** SH wants the system to grow the business while protecting itself.
+
 ## 2026-11-07 · KPIs for every agent, the lead quality bar and trader KPIs
 
 **What was done:**
