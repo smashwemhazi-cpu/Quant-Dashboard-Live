@@ -52,7 +52,7 @@ DUTIES: list[dict[str, Any]] = [
     {"key": "trading", "name": "Protect your own trading",
      "promise": "Reads your cTrader account (read-only), watches open risk, stops and the daily-loss limit, "
                 "keeps your trading journal and watches your cBots, and checks your own trades against the PAD "
-                "policy with a monthly pack for the MLRO.",
+                "policy with a monthly self-review record.",
      "agents": ["personal", "rhythm", "botlab", "trading", "pad"],
      "jobs": ["ctrader_positions", "pad_pack"],
      "commands": "!risk !journal !pad",
