@@ -5,6 +5,14 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-07 · Email sorting uses the cheapest Claude model
+
+**What was done:** sorting your inbox and drafting replies now uses Claude's smallest model (Haiku) instead of the largest one. Conversation and analysis stay on the larger model.
+
+**Why:** SH asked whether the smart features can run without credit. They can't fully, so the routine work should cost as little as possible once credit is topped up. Email sorting is the biggest user of credit.
+
+**What you need to do:** nothing. To change it back, set `JARVIS_TRIAGE_MODEL` in the settings file.
+
 ## 2026-11-07 · Quieter console window during updates
 
 **What was done:**
