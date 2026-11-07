@@ -405,6 +405,8 @@ def _bridge_calendar(day: date | None, days: int) -> dict[str, Any]:
             e = datetime.fromisoformat(str(ev["end"]).replace("Z", "+00:00")).astimezone(LOCAL_TZ)
         except (KeyError, ValueError):
             continue
+        if str(ev.get("my_status") or "").upper() == "NO":  # you declined it (bridge v5): not part of your day
+            continue
         all_day = bool(ev.get("all_day"))
         out.append({"title": str(ev.get("title") or "(no title)"), "all_day": all_day,
                     "start": (ev.get("day") or s.strftime("%Y-%m-%d")) if all_day else s.strftime("%Y-%m-%d %H:%M"),

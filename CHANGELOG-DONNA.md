@@ -42,6 +42,22 @@ or keys, and nothing paid is signed up for without your OK.
 
 **Recommendations:** (1) Ask the Board to note the self-approval arrangement and the 1:200 staff leverage in the minutes (PAD Policy s.8A). (2) Start the Restricted List with any listed LP, payment or tech vendor you are negotiating with.
 
+## 2026-11-07 · Wake-up briefing, agent map, bridge v5 reviewed
+
+**What was done:**
+- **Wake-up briefing:** when the console opens, DONNA says it aloud. It covers systems, your day, inbox and replies owed, tasks, trading flags, the agents and the first thing to do. `!wake`, `!briefing` and "brief me" give it on demand. After the server was down for more than 30 minutes, she posts it to your personal channel when she's back. Ordinary update restarts stay silent.
+- **Agent map** in the console: DONNA at the centre with her seven duties around her. Each duty's agents are its moons, and colour shows its state. Click a duty for its details.
+- **Bridge v5 review, with four gaps closed before you paste it:**
+  - A reply DONNA drafted (`!draft`) no longer counts as "answered" until you actually send it. Before, it could take the email off your list.
+  - The person who invited you now counts as a meeting guest, not only the people on the guest list.
+  - Meetings you declined are left out of your day, the reminders and your free slots.
+  - Notes you sent only to yourself don't show up as "waiting for an answer".
+- No Claude credit is needed for any of this.
+
+**Why:** SH asked for a fully reviewed v5, a start-up briefing, and agent reporting shown visually.
+
+**What you need to do:** paste bridge v5 when convenient (same steps as v4: Manage deployments → pencil → New version → Deploy).
+
 ## 2026-11-07 · Follow-ups (`!waiting`) and meeting prep
 
 **What was done:**

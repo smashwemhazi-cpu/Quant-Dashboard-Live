@@ -63,8 +63,9 @@ function mail_(days, max) {
   GmailApp.search('in:inbox newer_than:' + days + 'd', 0, max).forEach(function (t) {
     var all = t.getMessages();
     all.forEach(function (m, i) {
-      if (m.getFrom().toLowerCase().indexOf(me) >= 0) return;          // your own messages
-      var answered = all.slice(i + 1).some(function (n) { return n.getFrom().toLowerCase().indexOf(me) >= 0; });
+      if (m.isDraft() || m.getFrom().toLowerCase().indexOf(me) >= 0) return;   // your own messages and drafts
+      // answered = you SENT something later in the thread (a reply DONNA drafted doesn't count until you send it)
+      var answered = all.slice(i + 1).some(function (n) { return !n.isDraft() && n.getFrom().toLowerCase().indexOf(me) >= 0; });
       msgs.push({id: m.getHeader('Message-ID') || m.getId(), date: m.getDate().toISOString(), from: m.getFrom(),
                  subject: m.getSubject(), body: m.getPlainBody().slice(0, 8000), unread: m.isUnread(),
                  answered: answered});
@@ -78,11 +79,13 @@ function calendar_(start, days) {
   var e = new Date(s.getTime() + days * 86400000);
   var tz = Session.getScriptTimeZone();
   var me = Session.getEffectiveUser().getEmail().toLowerCase();
-  return {events: CalendarApp.getDefaultCalendar().getEvents(s, e).map(function (ev) {
+  return {version: VERSION, events: CalendarApp.getDefaultCalendar().getEvents(s, e).map(function (ev) {
     var allDay = ev.isAllDayEvent();
-    var guests = ev.getGuestList().map(function (g) { return g.getEmail(); })
-      .filter(function (x) { return x && x.toLowerCase() !== me; });       // who the meeting is with (for meeting prep)
-    return {title: ev.getTitle(), all_day: allDay, location: ev.getLocation(), guests: guests,
+    // who the meeting is with (for meeting prep): the guests and whoever sent the invitation, never you
+    var guests = ev.getGuestList().map(function (g) { return g.getEmail(); }).concat(ev.getCreators())
+      .filter(function (x, i, a) { return x && x.toLowerCase() !== me && a.indexOf(x) === i; });
+    var status = String(ev.getMyStatus() || '');                           // NO = you declined it
+    return {title: ev.getTitle(), all_day: allDay, location: ev.getLocation(), guests: guests, my_status: status,
             day: allDay ? Utilities.formatDate(ev.getAllDayStartDate(), tz, 'yyyy-MM-dd') : '',
             start: ev.getStartTime().toISOString(), end: ev.getEndTime().toISOString()};
   })};
@@ -94,9 +97,13 @@ function sent_(days, max) {
   var me = Session.getEffectiveUser().getEmail().toLowerCase();
   var out = [];
   GmailApp.search('in:sent newer_than:' + days + 'd', 0, max).forEach(function (t) {
-    var all = t.getMessages();
+    var all = t.getMessages().filter(function (m) { return !m.isDraft(); });
     var last = all[all.length - 1];
-    if (last.getFrom().toLowerCase().indexOf(me) < 0) return;             // they have answered
+    if (!last || last.getFrom().toLowerCase().indexOf(me) < 0) return;    // they have answered
+    var others = [last.getTo(), last.getCc()].join(',').split(',').filter(function (a) {
+      return a.indexOf('@') >= 0 && a.toLowerCase().indexOf(me) < 0;
+    });
+    if (!others.length) return;                                         // a note to yourself
     out.push({thread: t.getId(), to: last.getTo(), subject: last.getSubject(), date: last.getDate().toISOString()});
   });
   return {version: VERSION, sent: out};

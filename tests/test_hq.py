@@ -89,4 +89,50 @@ def test_desktop_console_shows_the_agents_and_answers_the_mandate(tmp_path, monk
     assert console.intent("what can you do?") == "!mandate" and console.intent("how are the agents") == "!hq"
     assert console.reply("what can you do for me") == hq.mandate_text()
     page = console.PAGE.read_text()
-    assert 'id="agents"' in page and 'say("!hq")' in page and 'say("!agents")' in page
+    assert 'id="agents"' in page and 'id="map-svg"' in page and "openMap()" in page and 'say("!agents")' in page
+    assert [d["key"] for d in s["board"]] == [d["key"] for d in hq.DUTIES]
+    assert all({"name", "state", "agents", "jobs", "promise", "proof"} <= set(d) for d in s["board"])
+
+
+def test_wake_up_briefing_without_claude(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    from jarvis.agents import assistant, hq
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("JARVIS_GOOGLE_BRIDGE_URL", raising=False)
+    monkeypatch.delenv("JARVIS_GCAL_ICS_URL", raising=False)
+    assistant.add_task("File the quarterly return", "2026-11-01", "high")
+    now = datetime(2026, 11, 9, 7, 30, tzinfo=assistant.LOCAL_TZ)
+    lines = hq.wake_lines(now)
+    text = "\n".join(lines)
+    assert lines[0].startswith("Good morning") and "DONNA is online" in lines[0]
+    assert "Email and calendar not connected" in text and "Claude" in text
+    assert "Tasks: 1 open, 0 due today, 1 overdue." in text
+    assert "First thing: Overdue #1: File the quarterly return." in text
+    assert hq.command("!wake", "").startswith("Good ") and hq.command("!briefing", "").startswith("Good ")
+
+
+def test_wake_after_downtime_only_when_the_server_was_off(monkeypatch):
+    from jarvis.agents import hq
+
+    sent = []
+    monkeypatch.setattr(hq, "wake_text", lambda now=None: "briefing")
+    monkeypatch.setattr("jarvis.agents.personal.PERSONAL_TARGETS", ["discord:personal"])
+    monkeypatch.setattr("donna.channels.broadcast", lambda text, targets, title="": sent.append((title, text)))
+    assert hq.wake_after_downtime({"nudges": 1000.0}, now=1000.0 + 120) is None          # an update restart
+    assert hq.wake_after_downtime({}, now=5000.0) is None                                # first start ever
+    text = hq.wake_after_downtime({"nudges": 1000.0, "watch": 900.0}, now=1000.0 + 3 * 3600)
+    assert text.startswith("I'm back after being offline for 3.0 hours") and sent[0][0] == "D.O.N.N.A is awake"
+
+
+def test_console_wake_route_and_intents(tmp_path, monkeypatch):
+    from donna import console
+    from jarvis.agents import hq
+
+    monkeypatch.setattr(hq, "wake_lines", lambda now=None: ["Good morning, SH.", "All systems are connected."])
+    assert console.console_wake() == {"lines": ["Good morning, SH.", "All systems are connected."]}
+    monkeypatch.setattr(hq, "wake_lines", lambda now=None: 1 / 0)
+    assert "briefing failed" in console.console_wake()["lines"][0]
+    assert console.intent("brief me") == "!wake" and console.intent("what did I miss") == "!wake"
