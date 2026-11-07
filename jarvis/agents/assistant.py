@@ -35,7 +35,8 @@ from jarvis.core.config import settings
 from jarvis.core.registry import Agent, register, tool
 
 LOCAL_TZ = ZoneInfo(os.getenv("JARVIS_LOCAL_TZ", "UTC"))
-TRIAGE_MODEL = os.getenv("JARVIS_TRIAGE_MODEL", settings.model)
+# sorting and drafting email is routine work: the smallest, cheapest model is plenty and stretches the credit
+TRIAGE_MODEL = os.getenv("JARVIS_TRIAGE_MODEL", "claude-haiku-5-5")
 MAX_BODY_CHARS = 6000
 CATEGORIES = ["client", "kyc_compliance", "regulator", "liquidity_provider", "payments", "internal",
               "vendor_marketing", "newsletter", "spam", "other"]

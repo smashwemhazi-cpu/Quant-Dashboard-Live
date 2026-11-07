@@ -206,6 +206,12 @@ def needs_you() -> list[str]:
             items.append((0, "Daily-loss limit hit - no new trades today"))
         if r["open_risk_pct"] and r["open_risk_pct"] > r["open_risk_limit_pct"]:
             items.append((1, f"Open risk {r['open_risk_pct']:.1f}% is over the {r['open_risk_limit_pct']:g}% limit"))
+    try:
+        from jarvis.agents import pad
+
+        items += [(1, t) for t in pad.digest_lines()]
+    except Exception as e:
+        items.append((5, f"PAD check failed ({type(e).__name__})"))
     for b in personal.bots():
         if b["state"] == "crashed" or b["hours_since"] > personal.BOT_STALE_HOURS:
             items.append((2, f"Bot {b['bot']} {b['symbol']}: {b['state']}, last seen {b['hours_since']:.0f}h ago"))

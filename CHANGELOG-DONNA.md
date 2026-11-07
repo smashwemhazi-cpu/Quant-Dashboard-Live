@@ -18,7 +18,31 @@ or keys, and nothing paid is signed up for without your OK.
 
 **What you need to do:** read the doc "DONNA KPI Scorecard: agents, leads and traders" and change any target you disagree with. Many KPIs show NO DATA until the back-office exports arrive by email and web search is switched on.
 
-**Recommendations:** after 4 weeks of data, raise or lower the lead and client-book targets to what the firm actually achieves; once web search and YouTube are on, raise qualified leads to 25 a week.
+**Next:** SH approved these scorecards as they stand on 2026-11-07. Claude reviews the first results on 21 November 2026 and lists what is missing. **Recommendations:** after 4 weeks of data, raise or lower the lead and client-book targets to what the firm actually achieves; once web search and YouTube are on, raise qualified leads to 25 a week.
+
+## 2026-11-07 · PAD guardrails on your own trades
+
+**What was done:**
+- DONNA now checks your own cTrader trades against the PAD Policy v0.2 you approved today. She flags: trades on the Restricted List, crypto, single-name share or Watch List trades with no clearance logged first, positions closed in profit before 48 hours (14 working days for shares), leverage above the client cap for the instrument, no stop-loss or more than 2% of equity at risk, more than 10 trades in a day, and long and short in the same symbol at once.
+- New commands: `!pad` (status), `!pad clear BTCUSD buy 0.05 <why>` (log your own clearance before you trade), `!pad restrict` / `!pad watch` / `!pad unlist` / `!pad list` (the two lists), `!pad class` (fix how a symbol is classed), `!pad flags`, `!pad rules`, `!pad pack 2026-11` (PDF).
+- New flags show in the morning message under NEEDS YOU.
+- On the 1st of each month DONNA sends you a PAD pack PDF for the previous month: every trade, every clearance, every flag, the lists, and a sign-off box for the MLRO's post-trade review. You forward it to the MLRO; DONNA does not send it anywhere else.
+
+**Why:** the PAD policy (Vertex 1's "staff dealing rules", T&Cs s.16.4) needs evidence that it is followed, and the MLRO's post-trade review needs a record to work from.
+
+**What you need to do:** nothing to switch it on. Only trades opened from 7 November 2026 are checked. If DONNA mis-classes a symbol (anything it doesn't recognise is treated as a single-name share, the strictest class), fix it with `!pad class <symbol> <forex|metal|index|commodity|crypto|share>`.
+
+**Limits:** DONNA only reads the cTrader account she is connected to, and never places, changes or closes a trade. She cannot see other accounts, other staff or client flow, so the MLRO's review still has to look for collusion in Fynxt and cTrader.
+
+**Recommendations:** (1) Ask the Board to note the self-approval arrangement and the 1:200 staff leverage in the minutes (PAD Policy s.8A). (2) Start the Restricted List with any listed LP, payment or tech vendor you are negotiating with.
+
+## 2026-11-07 · Email sorting uses the cheapest Claude model
+
+**What was done:** sorting your inbox and drafting replies now uses Claude's smallest model (Haiku) instead of the largest one. Conversation and analysis stay on the larger model.
+
+**Why:** SH asked whether the smart features can run without credit. They can't fully, so the routine work should cost as little as possible once credit is topped up. Email sorting is the biggest user of credit.
+
+**What you need to do:** nothing. To change it back, set `JARVIS_TRIAGE_MODEL` in the settings file.
 
 ## 2026-11-07 · Quieter console window during updates
 

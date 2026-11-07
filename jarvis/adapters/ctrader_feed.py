@@ -312,9 +312,23 @@ async def snapshot(transport: Any, login: str, access: str, refresh: str, client
             continue
         out.append({"symbol": symbol, "side": side, "units": units, "entry": entry,
                     "stop": p.get("stopLoss") or None, "price": close,
-                    "quote_to_account": _rate(gross, side, units, entry, close, symbol)})
+                    "quote_to_account": _rate(gross, side, units, entry, close, symbol),
+                    "position_id": str(p["positionId"]), "opened_ms": td.get("openTimestamp")})
     equity = balance + sum(n for _, n in pnl.values())
-    closed = [t for t in (closed_trade(d, names.get(int(d["symbolId"]), str(d["symbolId"]))) for d in history) if t]
+    # when each position was opened, for the PAD holding-period check: open positions carry it in tradeData,
+    # closed ones get it from their opening deal (if that deal is inside the history read so far)
+    opened_ms = {str(d.get("positionId")): d.get("executionTimestamp") for d in history
+                 if not d.get("closePositionDetail") and d.get("dealStatus") in FILLED}
+    opened_ms |= {str(p["positionId"]): p["tradeData"].get("openTimestamp") for p in positions
+                  if p["tradeData"].get("openTimestamp")}
+    closed = []
+    for d in history:
+        t = closed_trade(d, names.get(int(d["symbolId"]), str(d["symbolId"])))
+        if t:
+            pid = str(d.get("positionId", ""))
+            ms = opened_ms.get(pid)
+            closed.append(t | {"position_id": pid, "opened_utc": datetime.fromtimestamp(int(ms) / 1000, timezone.utc)
+                               .strftime("%Y-%m-%d %H:%M:%S") if ms else None})
     return {"login": login, "balance": balance, "equity": equity, "positions": out, "unpriced": unpriced,
             "closed": closed, "synced_to_ms": reached if reached > from_ms else last, "token_refreshed": refresh_due}
 
@@ -378,6 +392,12 @@ def poll() -> dict[str, Any]:
 
     rhythm.store_positions(snap["positions"], snap["equity"], None, source=f"ctrader:{login}")
     added = personal.store_trades(login, snap["closed"])
+    try:   # PAD checks of the owner's own trades; a problem there must never stop the feed
+        from jarvis.agents import pad
+
+        pad.record(login, snap["positions"], snap["closed"], snap["equity"])
+    except Exception as e:
+        audit.log("ctrader_feed", "pad_error", {"error": f"{type(e).__name__}: {str(e)[:200]}"})
     if snap["synced_to_ms"]:
         _mark_synced(login, snap["synced_to_ms"])
     audit.log("ctrader_feed", "snapshot", {"positions": len(snap["positions"]), "unpriced": snap["unpriced"],

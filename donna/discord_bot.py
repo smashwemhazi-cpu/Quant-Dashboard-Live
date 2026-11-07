@@ -83,6 +83,7 @@ HELP = ("D.O.N.N.A commands:\n"
         "!morning  !evening  !risk  today's digests / live position risk\n"
         "!growth  !exp              growth review / experiments (!exp start 3)\n"
         "!audit                     what DONNA did today; audit trail check\n"
+        "!pad                       your PAD status (!pad clear <symbol> buy 0.1 <why>, !pad restrict, !pad pack)\n"
         "!journal                   your trading analysis (drop a cTrader statement - Excel or PDF - in here first)\n"
         "!status                    running version and what is connected / broken\n"
         "!pack  !pack 30            management pack PDF (last 7 / 30 days) to forward to the directors")
@@ -310,12 +311,12 @@ def handle(text: str, channel: str = "") -> str | None:
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
     from jarvis.agents import complaints, ib, str_pack
 
-    from jarvis.agents import attribution, campaigns, hq, kpi, leadfinder, radar, screening, workflow
+    from jarvis.agents import attribution, campaigns, hq, kpi, leadfinder, pad, radar, screening, workflow
 
     reply = (complaints.command(cmd, rest) or str_pack.command(cmd, rest) or ib.command(cmd, rest)
              or leadfinder.command(cmd, rest) or radar.command(cmd, rest) or campaigns.command(cmd, rest) or attribution.command(cmd, rest)
              or screening.command(cmd, rest) or workflow.command(cmd, rest)
-             or hq.command(cmd, rest) or kpi.command(cmd, rest))
+             or hq.command(cmd, rest) or pad.command(cmd, rest) or kpi.command(cmd, rest))
     if reply is not None:
         return reply
     reply = compliance_commands(cmd, rest)
@@ -490,6 +491,19 @@ def main() -> None:
             except Exception as e:
                 log.exception("str pack failed")
                 await message.channel.send(f"Sorry - the STR pack failed ({type(e).__name__}).")
+            return
+        padpack = re.fullmatch(r"!pad\s+pack(?:\s+(\d{4}-\d{2}))?", message.content.strip().lower())
+        if padpack:
+            try:
+                from jarvis.agents import pad
+
+                async with message.channel.typing():
+                    pdf = await asyncio.to_thread(pad.build_pdf, padpack.group(1))
+                await message.channel.send("PAD pack for the MLRO's post-trade review:",
+                                           file=discord.File(io.BytesIO(pdf), pad.filename(padpack.group(1))))
+            except Exception as e:
+                log.exception("pad pack failed")
+                await message.channel.send(f"Sorry - the PAD pack failed ({type(e).__name__}).")
             return
         pack = re.fullmatch(r"!pack(?:\s+(\d{1,3}))?", message.content.strip().lower())
         if pack:

@@ -51,10 +51,11 @@ DUTIES: list[dict[str, Any]] = [
      "proof": "Daily wrap at 21:00 your time; an LP slippage episode is flagged within the hour."},
     {"key": "trading", "name": "Protect your own trading",
      "promise": "Reads your cTrader account (read-only), watches open risk, stops and the daily-loss limit, "
-                "keeps your trading journal and watches your cBots.",
-     "agents": ["personal", "rhythm", "botlab", "trading"],
-     "jobs": ["ctrader_positions"],
-     "commands": "!risk !journal",
+                "keeps your trading journal and watches your cBots, and checks your own trades against the PAD "
+                "policy with a monthly pack for the MLRO.",
+     "agents": ["personal", "rhythm", "botlab", "trading", "pad"],
+     "jobs": ["ctrader_positions", "pad_pack"],
+     "commands": "!risk !journal !pad",
      "proof": "A position without a stop or a hit daily-loss limit is flagged within 15 minutes."},
     {"key": "growth", "name": "Grow the business",
      "promise": "Finds possible IBs and traders, drafts first messages for your OK, builds country campaigns "
