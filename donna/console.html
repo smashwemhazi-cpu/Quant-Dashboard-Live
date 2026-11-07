@@ -62,6 +62,35 @@
   .dot.demand { background: var(--muted); }
   #agents li { cursor: pointer; } #agents li:hover { color: var(--accent); }
   .panel h2 .link { float: right; padding: 0 8px; font-size: 11px; letter-spacing: .08em; border-radius: 8px; }
+  header .tools { display: flex; gap: 10px; align-items: baseline; }
+  header .tools button { padding: 5px 12px; font-size: 13px; }
+  /* the agent map: DONNA in the middle, her seven duties around her, each agent a moon of its duty */
+  #map { position: fixed; inset: 0; z-index: 10; background: rgba(4, 8, 18, .98); backdrop-filter: blur(4px);
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); gap: 16px; padding: 16px; }
+  #map[hidden] { display: none; }
+  #map .stage { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  #map .stage h2 { margin: 0 0 6px; font-size: 13px; letter-spacing: .3em; color: var(--accent); font-weight: 600; }
+  #map svg { flex: 1; width: 100%; min-height: 0; }
+  #map .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px;
+    overflow-y: auto; min-height: 0; }
+  #map .card h3 { margin: 0 0 4px; font-size: 16px; }
+  #map .card p { margin: 6px 0; color: var(--muted); font-size: 13.5px; }
+  #map .card ul { list-style: none; padding: 0; margin: 8px 0; }
+  #map .card li { padding: 6px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+  #map .chip { display: inline-block; font-size: 11.5px; padding: 1px 8px; border: 1px solid var(--line);
+    border-radius: 10px; margin: 2px 4px 2px 0; color: var(--text); }
+  #map .close { position: absolute; top: 0; right: 0; padding: 5px 12px; font-size: 13px; }
+  #map .legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+  .duty { cursor: pointer; }
+  .duty:hover .halo, .duty.sel .halo { stroke-opacity: 1; stroke-width: 3; }
+  .flow { stroke-dasharray: 6 10; animation: flow 1.6s linear infinite; }
+  .flow.fix { animation-duration: .6s; }
+  .pulse { animation: pulse 1.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  .core-ring { animation: spin 18s linear infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes flow { to { stroke-dashoffset: -32; } }
+  @keyframes pulse { 50% { opacity: .35; transform: scale(1.18); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .flow, .pulse, .core-ring { animation: none; } }
   @media (max-width: 900px) {
     body { grid-template-columns: minmax(0, 1fr); height: auto; overflow: visible; }
     .col { overflow: visible; }
@@ -70,12 +99,22 @@
     .centre { order: -1; }
     .bar { flex-wrap: wrap; }
     .bar input { flex-basis: 100%; order: -1; }
+    #map { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1.2fr) minmax(0, 1fr); }
     #orb { width: min(70vw, 340px); }
   }
 </style>
 </head>
 <body>
-<header><h1>D.O.N.N.A</h1><span class="clock" id="clock"></span></header>
+<header><h1>D.O.N.N.A</h1><span class="tools"><button type="button" id="map-open" title="See every agent and how it's doing">◎ Agent map</button><span class="clock" id="clock"></span></span></header>
+<div id="map" hidden role="dialog" aria-label="Agent map">
+  <div class="stage">
+    <h2>DONNA · AGENT MAP</h2>
+    <button type="button" class="close" id="map-close">Close ✕</button>
+    <svg id="map-svg" viewBox="0 0 1000 680" role="img" aria-label="DONNA in the centre, her seven duties around her"></svg>
+    <div class="legend"><span><span class="dot running"></span>running</span><span><span class="dot waiting"></span>waiting on setup</span><span><span class="dot fix"></span>needs a fix</span><span><span class="dot demand"></span>on demand</span><span>small moons = the agents doing that duty</span></div>
+  </div>
+  <div class="card" id="map-card"><p>Click a duty to see what it does for you, the agents behind it and how each one is doing.</p></div>
+</div>
 <div class="attention" id="attention" hidden></div>
 
 <section class="col">
@@ -161,12 +200,106 @@
       $("risk").innerHTML = risk.join("") || `<li class="empty">All indicators green</li>`;
       const dotOf = { "running": "running", "partly waiting on setup": "waiting", "needs a fix": "fix", "on demand": "demand" };
       list($("agents"), s.agents, (a) => `<li title="${esc(a.problems.join("\n"))}"><span class="dot ${dotOf[a.state] || "demand"}"></span>${esc(a.name)} <span class="hint">${esc(a.state)}</span>${a.problems.length ? `<div class="hint">${esc(a.problems[0])}</div>` : ""}</li>`, "No agents reported");
+      board = Array.isArray(s.board) ? s.board : [];
+      if (!$("map").hidden) drawMap();
       if (orb.mode === "connecting") setMode("idle");
     } catch (e) {
       setMode("connecting");
       $("mode").textContent = "can't reach DONNA - is the black window still open?";
     }
   }
+
+  // ------------------------------------------------------------ the agent map
+  let board = [], selected = null;
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const STATE_CLS = { "running": "running", "partly waiting on setup": "waiting", "needs a fix": "fix", "on demand": "demand" };
+  const STATE_COL = { running: "#38d996", waiting: "#f5b942", fix: "#ff6b7d", demand: "#8ea3c4" };
+  const JOB_CLS = { ok: "running", waiting: "waiting", failing: "fix", not_run: "demand" };
+  const JOB_TXT = { ok: "OK", waiting: "waiting on setup", failing: "failing", not_run: "not run yet" };
+  function el(tag, attrs, parent) {
+    const e = document.createElementNS(SVGNS, tag);
+    Object.entries(attrs || {}).forEach(([k, v]) => { if (v !== null && v !== undefined) e.setAttribute(k, v); });
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function wrap(text, max) {
+    const words = text.split(" "), out = [""];
+    words.forEach((w) => { const l = out.length - 1; if ((out[l] + " " + w).trim().length > max && out[l]) out.push(w); else out[l] = (out[l] + " " + w).trim(); });
+    return out.slice(0, 3);
+  }
+  function drawMap() {
+    const svg = $("map-svg");
+    svg.innerHTML = "";
+    const defs = el("defs", {}, svg);
+    const grad = el("radialGradient", { id: "coreg" }, defs);
+    el("stop", { offset: "0%", "stop-color": "#ffffff" }, grad);
+    el("stop", { offset: "45%", "stop-color": "#2de2c4" }, grad);
+    el("stop", { offset: "100%", "stop-color": "#2de2c4", "stop-opacity": "0.05" }, grad);
+    const cx = 500, cy = 340, n = board.length || 1;
+    const pos = board.map((d, i) => {
+      const a = -Math.PI / 2 + i * 2 * Math.PI / n;
+      return [cx + Math.cos(a) * 340, cy + Math.sin(a) * 250, a];
+    });
+    // links first, so the nodes sit on top
+    board.forEach((d, i) => {
+      const c = STATE_CLS[d.state] || "demand";
+      el("line", { x1: cx, y1: cy, x2: pos[i][0], y2: pos[i][1], stroke: STATE_COL[c], "stroke-opacity": c === "demand" ? 0.35 : 0.7,
+        "stroke-width": 2, class: c === "demand" ? "" : "flow " + c, "stroke-dasharray": c === "demand" ? "2 8" : null }, svg);
+    });
+    // DONNA in the middle
+    const core = el("g", {}, svg);
+    el("circle", { cx, cy, r: 92, fill: "url(#coreg)", opacity: 0.55 }, core);
+    el("circle", { cx, cy, r: 104, fill: "none", stroke: "#2de2c4", "stroke-opacity": 0.5, "stroke-width": 1.5,
+      "stroke-dasharray": "40 22 8 22", class: "core-ring" }, core);
+    el("circle", { cx, cy, r: 46, fill: "#e9fffb", opacity: 0.9 }, core);
+    const t = el("text", { x: cx, y: cy + 6, "text-anchor": "middle", fill: "#06231f", "font-size": 18, "font-weight": 700, "letter-spacing": 3 }, core);
+    t.textContent = "DONNA";
+    const fixes = board.filter((d) => d.state === "needs a fix").length, run = board.filter((d) => d.state === "running").length;
+    const sub = el("text", { x: cx, y: cy + 128, "text-anchor": "middle", fill: "#8ea3c4", "font-size": 14 }, core);
+    sub.textContent = `${run} of ${board.length} duties fully running` + (fixes ? ` · ${fixes} need a fix` : "");
+    // the duties, each with its agents as moons
+    board.forEach((d, i) => {
+      const [x, y, a] = pos[i], c = STATE_CLS[d.state] || "demand", col = STATE_COL[c];
+      const g = el("g", { class: "duty" + (selected === d.key ? " sel" : ""), tabindex: 0, role: "button", "aria-label": `${d.name}: ${d.state}` }, svg);
+      d.agents.forEach((ag, k) => {
+        const b = a + Math.PI + (k - (d.agents.length - 1) / 2) * 0.42;
+        const mx = x + Math.cos(b) * -78, my = y + Math.sin(b) * -78;
+        el("line", { x1: x, y1: y, x2: mx, y2: my, stroke: col, "stroke-opacity": 0.25 }, g);
+        const m = el("circle", { cx: mx, cy: my, r: 7, fill: col, "fill-opacity": 0.75 }, g);
+        el("title", {}, m).textContent = ag;
+      });
+      if (c === "fix") el("circle", { cx: x, cy: y, r: 58, fill: col, "fill-opacity": 0.18, class: "pulse" }, g);
+      el("circle", { cx: x, cy: y, r: 50, fill: "#0d1b33", stroke: col, "stroke-width": 2, class: "halo", "stroke-opacity": 0.8 }, g);
+      wrap(d.name, 14).forEach((line, k, arr) => {
+        const tx = el("text", { x, y: y + 5 + (k - (arr.length - 1) / 2) * 16, "text-anchor": "middle", fill: "#e6eefc", "font-size": 13.5 }, g);
+        tx.textContent = line;
+      });
+      const jobsBad = d.jobs.filter((j) => j.state === "failing" || j.state === "waiting").length;
+      if (jobsBad) {
+        el("circle", { cx: x + 38, cy: y - 38, r: 12, fill: col }, g);
+        const bt = el("text", { x: x + 38, y: y - 33.5, "text-anchor": "middle", fill: "#06101f", "font-size": 13, "font-weight": 700 }, g);
+        bt.textContent = jobsBad;
+      }
+      const pick = () => { selected = d.key; drawMap(); showDuty(d); };
+      g.addEventListener("click", pick);
+      g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    });
+    const cur = board.find((d) => d.key === selected);
+    if (cur) showDuty(cur);
+  }
+  function showDuty(d) {
+    const c = STATE_CLS[d.state] || "demand";
+    $("map-card").innerHTML = `<h3><span class="dot ${c}"></span>${esc(d.name)}</h3><p class="hint">${esc(d.state)}</p>
+      <p>${esc(d.promise)}</p><p><b>How you can tell:</b> ${esc(d.proof)}</p>
+      <div>${d.agents.map((a) => `<span class="chip">${esc(a)}</span>`).join("")}</div>
+      <ul>${d.jobs.map((j) => `<li><span class="dot ${JOB_CLS[j.state] || "demand"}"></span>${esc(j.name)} <span class="hint">${esc(JOB_TXT[j.state] || j.state)}${j.last ? " · last ran " + esc(j.last) : ""}</span>${j.why ? `<div class="hint">${esc(j.why)}</div>` : ""}</li>`).join("") || `<li class="empty">Runs when you ask</li>`}</ul>
+      <p class="hint">Commands: ${esc(d.commands)}</p>`;
+  }
+  function openMap() { $("map").hidden = false; drawMap(); $("map-close").focus(); }
+  function closeMap() { $("map").hidden = true; $("map-open").focus(); }
+  $("map-open").addEventListener("click", openMap);
+  $("map-close").addEventListener("click", closeMap);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("map").hidden) closeMap(); });
 
   // ------------------------------------------------------------ conversation
   function add(cls, text) {
@@ -295,7 +428,13 @@
     if (b) { b.disabled = true; say("!done " + b.dataset.done); }
   });
   // the agents panel: a duty opens DONNA's one view (!hq); "details" lists every agent and when it last ran
-  $("agents").addEventListener("click", (e) => { if (e.target.closest("li:not(.empty)")) say("!hq"); });
+  $("agents").addEventListener("click", (e) => {
+    const li = e.target.closest("li:not(.empty)");
+    if (!li) return;
+    const i = Array.from($("agents").children).indexOf(li);
+    selected = board[i] ? board[i].key : null;
+    openMap();
+  });
   $("agents-more").addEventListener("click", () => say("!agents"));
   $("send").onclick = () => { const t = $("text").value; $("text").value = ""; say(t); };
   $("text").addEventListener("keydown", (e) => { if (e.key === "Enter") $("send").click(); });
@@ -365,7 +504,28 @@
 
   refresh();
   setInterval(refresh, 60000);
-  setTimeout(() => add("her", "Hello. I'm here. Hold the button or the space bar to talk, or type below."), 600);
+  // her wake-up briefing. Browsers only let a page speak after a click or key press, so if she can't say it
+  // straight away she says it on your first click or key.
+  let pendingWake = null;
+  async function wake() {
+    try {
+      const r = await api("/api/console/wake");
+      const text = (r.lines || []).join("\n");
+      add("her", text + "\n\nHold the button or the space bar to talk, or type below.");
+      pendingWake = text;
+      speak(text);
+      setTimeout(() => { if (window.speechSynthesis && speechSynthesis.speaking) pendingWake = null; }, 1500);
+    } catch (e) {
+      add("her", "Hello. I'm here. Hold the button or the space bar to talk, or type below.");
+    }
+  }
+  const speakPending = () => {
+    if (pendingWake && !(window.speechSynthesis && speechSynthesis.speaking)) { const t = pendingWake; pendingWake = null; speak(t); }
+    else pendingWake = null;
+  };
+  document.addEventListener("pointerdown", speakPending, { once: true, capture: true });
+  document.addEventListener("keydown", speakPending, { once: true, capture: true });
+  setTimeout(wake, 400);
 })();
 </script>
 </body>

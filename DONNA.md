@@ -200,6 +200,8 @@ Double-click **DONNA-Console.bat** on your PC and type your server password. A w
 - her animated orb;
 - your calendar, inbox highlights, tasks and risk panels, refreshed every minute;
 - **Your agents**: the seven duties from her mandate, each with a light (green running, amber waiting on setup, red needs a fix). Click a duty for the `!hq` view, or **details** for every agent. Ask "what can you do?" for her mandate.
+- **Her wake-up briefing** when the console opens: a systems check (email and calendar, Claude, cTrader), your meetings and the next one, urgent email and replies owed, tasks due and overdue, any trading flag, how many duties are fully running, and the first thing to do. She reads it out. Browsers only allow speech after a click, so if she stays quiet, click anywhere and she'll say it. Ask "brief me" or type `!wake` any time. If the server was off for more than 30 minutes, she posts the same briefing to your personal channel when she's back.
+- **◎ Agent map** (top right, or click a duty under Your agents): DONNA in the middle with her seven duties around her. Each duty's agents are its small moons, and colour shows its state. A number badge counts jobs that need attention, and a red duty pulses. Click a duty for what it promises, how you can tell, each agent job, when it last ran and what's wrong.
 
 How to use it:
 - **Hold the button or the space bar** to talk, and let go when you are done. She answers on screen and out loud.

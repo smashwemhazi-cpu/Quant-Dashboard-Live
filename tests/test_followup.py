@@ -115,3 +115,30 @@ def test_console_and_help_know_waiting():
 
     assert console.intent("what am I waiting on") == "!waiting"
     assert "!waiting" in discord_bot.HELP
+
+
+def test_bridge_v5_gap_fixes():
+    """Drafts DONNA saved never count as a reply; the organiser counts as a guest; declined meetings drop out."""
+    from pathlib import Path
+
+    gs = (Path(__file__).resolve().parent.parent / "deploy" / "google-bridge.gs").read_text()
+    mail = gs.split("function mail_")[1].split("\n}\n")[0]
+    sent = gs.split("function sent_")[1].split("\n}\n")[0]
+    cal = gs.split("function calendar_")[1].split("\n}\n")[0]
+    assert "isDraft()" in mail and "!n.isDraft()" in mail and "isDraft()" in sent
+    assert "getCreators()" in cal and "getMyStatus()" in cal and "var VERSION = 5;" in gs
+
+
+def test_declined_meetings_are_not_part_of_the_day(monkeypatch):
+    from datetime import date
+
+    from jarvis.agents import assistant as a
+
+    _bridge(monkeypatch, {"calendar": {"version": 5, "events": [
+        {"title": "Kept", "all_day": False, "start": "2026-11-09T09:00:00Z", "end": "2026-11-09T09:30:00Z",
+         "location": "", "guests": ["x@lp.com"], "my_status": "YES"},
+        {"title": "Declined", "all_day": False, "start": "2026-11-09T10:00:00Z", "end": "2026-11-09T10:30:00Z",
+         "location": "", "guests": [], "my_status": "NO"}]}})
+    monkeypatch.delenv("JARVIS_GCAL_ICS_URL", raising=False)
+    ev = a.calendar_events(date(2026, 11, 9))["events"]
+    assert [e["title"] for e in ev] == ["Kept"] and ev[0]["guests"] == ["x@lp.com"]

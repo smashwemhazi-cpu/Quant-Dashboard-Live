@@ -7,11 +7,16 @@ The mandate is written once, here, as data. It feeds:
                           OK / waiting for setup / failing since / not run yet, and when it last ran
   !run <job>              run one agent's job now (the same thing the scheduler does on its timetable)
   !hq                     one view across all agents: what needs you, then each duty's state in one line
+  !wake (or "!briefing")  her wake-up briefing: systems check, your day, inbox, follow-ups, tasks, trading,
+                          agents and the first thing to do. The console says it when it opens; after the server
+                          was down she posts it to your personal channel by herself.
 A test checks that every scheduled job belongs to a duty, so a new agent can't be added without a place in it.
 """
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -203,6 +208,129 @@ def hq_text() -> str:
     return "\n".join(L)
 
 
+# ------------------------------------------------------------------ wake-up briefing
+OWNER = os.getenv("DONNA_OWNER_NAME", "SH")
+WAKE_AFTER_DOWN_MINUTES = 30
+
+
+def _try(fn: Any, default: Any = None) -> Any:
+    try:
+        return fn()
+    except Exception:  # noqa: BLE001 - one dead source must never stop the briefing
+        return default
+
+
+def systems() -> list[dict[str, Any]]:
+    """What DONNA can reach right now: name, ok (True/False/None = not set up), and a short note."""
+    from jarvis.adapters import google_bridge
+    from jarvis.core.brain import claude_check
+    from jarvis.scheduler import waiting_jobs
+
+    out: list[dict[str, Any]] = []
+    if google_bridge.configured():
+        ping = _try(lambda: google_bridge.call("ping"), {"error": "no answer"})
+        if "error" in ping:
+            out.append({"name": "Email and calendar", "ok": False, "note": str(ping["error"])[:100]})
+        else:
+            v = int(ping.get("version") or 0)
+            out.append({"name": "Email and calendar", "ok": True,
+                        "note": f"bridge v{v}" + (" (v5 adds follow-ups and meeting guests)" if v < 5 else "")})
+    else:
+        out.append({"name": "Email and calendar", "ok": None, "note": "not connected"})
+    claude = _try(claude_check, "ERROR")
+    out.append({"name": "Claude", "ok": claude == "OK",
+                "note": "OK" if claude == "OK" else "no credit - running on rules" if "CREDIT" in claude else claude[:80]})
+    waits = _try(waiting_jobs, {}) or {}
+    ct = [why for job, (why, _) in waits.items() if job.startswith("ctrader")]
+    out.append({"name": "cTrader (read-only)", "ok": None if ct else True, "note": ct[0][:80] if ct else "connected"})
+    return out
+
+
+def wake_lines(now: datetime | None = None) -> list[str]:
+    """DONNA's wake-up briefing as short, speakable lines. Works without Claude credit."""
+    from jarvis.agents import assistant, followup, rhythm
+
+    now = now or datetime.now(assistant.LOCAL_TZ)
+    part = "morning" if now.hour < 12 else "afternoon" if now.hour < 17 else "evening"
+    L = [f"Good {part}, {OWNER}. DONNA is online. It's {now:%A %d %B, %H:%M}."]
+    sy = systems()
+    bad = [s for s in sy if s["ok"] is not True]
+    L.append("All systems are connected." if not bad else
+             "Systems: " + "; ".join(f"{s['name']} {s['note']}" for s in bad) + ".")
+    cal = _try(lambda: assistant.calendar_events(now.date()), {"error": "calendar unavailable"})
+    if "error" not in cal:
+        meet = [e for e in cal["events"] if not e["all_day"]]
+        nxt = next((e for e in meet if e["start"][11:] >= f"{now:%H:%M}"), None)
+        L.append(f"You have {len(meet)} meeting{'s' if len(meet) != 1 else ''} today"
+                 + (f". Next: {nxt['title']} at {nxt['start'][11:]}." if nxt else "." if meet else ", a clear diary."))
+    ib = _try(assistant.inbox_status, None)
+    owed = _try(followup.replies_owed, []) or []
+    if ib is not None:
+        L.append(f"Inbox: {len(ib['high'])} urgent, {len(owed)} repl{'ies' if len(owed) != 1 else 'y'} owed"
+                 + (f", the oldest {owed[0]['days']} days." if owed and owed[0]["days"] else "."))
+    tasks = _try(assistant.list_tasks, []) or []
+    today = now.date().isoformat()
+    over = [t for t in tasks if t["due"] and t["due"] < today]
+    due = [t for t in tasks if t["due"] == today]
+    L.append(f"Tasks: {len(tasks)} open, {len(due)} due today, {len(over)} overdue.")
+    risk = _try(rhythm.risk_lines, []) or []
+    if risk and not any("NO DATA" in x for x in risk):
+        flags = [x.strip(" !") for x in risk[1:] if x.lstrip().startswith("!!")]
+        L.append("Trading: " + (flags[0] if flags else risk[1].strip() if len(risk) > 1 else "no data") + ".")
+    states = _try(job_states, {}) or {}
+    if states:
+        ds = [(d["name"], duty_state(d, states)) for d in DUTIES]
+        fix = [n for n, st in ds if st == "needs a fix"]
+        L.append(f"Agents: {sum(st == 'running' for _, st in ds)} of {len(ds)} duties fully running"
+                 + (f"; needs a fix: {', '.join(fix)}." if fix else "."))
+    first = [re.sub(r"^\s*\d+\.\s*", "", x).rstrip(".") for x in (_try(rhythm.needs_you, []) or [])[1:]]
+    first = [x for x in first if x and not x.startswith(("Nothing urgent", "..."))]
+    L.append(f"First thing: {first[0]}." if first else "Nothing urgent needs you.")
+    return L
+
+
+def wake_text(now: datetime | None = None) -> str:
+    return "\n".join(wake_lines(now))
+
+
+def wake_after_downtime(last: dict[str, float], now: float | None = None) -> str | None:
+    """On scheduler start: if nothing ran for WAKE_AFTER_DOWN_MINUTES (server was off), post the briefing
+    to SH's personal channel. An ordinary update restart (a few seconds) posts nothing."""
+    now = now or time.time()
+    if not last:
+        return None
+    gap = (now - max(last.values())) / 60
+    if gap < WAKE_AFTER_DOWN_MINUTES:
+        return None
+    from jarvis.agents.personal import PERSONAL_TARGETS
+
+    down = f"{gap / 60:.1f} hours" if gap >= 90 else f"{gap:.0f} minutes"
+    text = f"I'm back after being offline for {down}. Catching up now.\n" + wake_text()
+    if PERSONAL_TARGETS:
+        from donna.channels import broadcast
+
+        _try(lambda: broadcast(text, PERSONAL_TARGETS, title="D.O.N.N.A is awake"))
+    audit.log("hq", "wake_after_downtime", {"minutes": round(gap)})
+    return text
+
+
+def board() -> list[dict[str, Any]]:
+    """The agent map for the console: each duty with its state, agents and every job's state."""
+    now = time.time()
+    states = job_states(now)
+    out = []
+    for d in DUTIES:
+        jobs = []
+        for j in d["jobs"]:
+            st = states.get(j)
+            if st:
+                jobs.append({"name": j, "state": st["state"], "why": str(st.get("why") or "")[:140],
+                             "last": _ago(st["last"], now) if st.get("last") else None})
+        out.append({"key": d["key"], "name": d["name"], "state": duty_state(d, states), "promise": d["promise"],
+                    "agents": d["agents"], "commands": d["commands"], "proof": d["proof"], "jobs": jobs})
+    return out
+
+
 def run_job(name: str) -> str:
     """Run one scheduled job now, the way the scheduler would, and say what happened."""
     from jarvis import scheduler
@@ -230,6 +358,8 @@ def command(cmd: str, rest: str) -> str | None:
         return agents_text()
     if cmd == "!hq":
         return hq_text()
+    if cmd in ("!wake", "!briefing"):
+        return wake_text()
     if cmd == "!run":
         return run_job(rest) if rest.strip() else "Usage: !run <job name>  (names are in !agents)"
     return None

@@ -78,16 +78,19 @@ def state() -> dict[str, Any]:
 
         return sorted({why for why, _ in waiting_jobs().values() if not why.startswith("nothing to read")})
 
-    def agents() -> list[dict[str, Any]]:
-        from jarvis.agents import hq
+    from jarvis.agents import hq
 
-        states = hq.job_states()
-        return [{"name": d["name"], "state": hq.duty_state(d, states),
-                 "problems": [f"{j}: {states[j].get('why') or states[j]['state']}"[:140] for j in d["jobs"]
-                              if states.get(j, {}).get("state") in ("failing", "waiting")]} for d in hq.DUTIES]
+    board = _section(hq.board)
+
+    def agents() -> list[dict[str, Any]]:
+        if isinstance(board, dict):
+            return board
+        return [{"name": d["name"], "state": d["state"],
+                 "problems": [f"{j['name']}: {j['why'] or j['state']}"[:140] for j in d["jobs"]
+                              if j["state"] in ("failing", "waiting")]} for d in board]
 
     today = datetime.now(assistant.LOCAL_TZ).date().isoformat()
-    return {"agents": _section(agents),"now": datetime.now(assistant.LOCAL_TZ).strftime("%a %d %b %Y %H:%M"),
+    return {"agents": _section(agents), "board": board, "now": datetime.now(assistant.LOCAL_TZ).strftime("%a %d %b %Y %H:%M"),
             "attention": _section(attention),
             "calendar": _section(calendar),
             "tasks": _section(lambda: [{"id": t["id"], "title": t["title"][:90], "priority": t["priority"],
@@ -109,6 +112,7 @@ class Say(BaseModel):
 INTENTS = [
     (re.compile(r"\b(what (?:can|do) you do|your (?:job|mandate|duties)|who are you|how can you help)\b", re.I),
      "!mandate"),
+    (re.compile(r"\b(brief(?:ing)? me|wake up|good morning|catch me up|what did i miss|sitrep)\b", re.I), "!wake"),
     (re.compile(r"\b(agents?|how(?:'s| is) everything|overview|headquarters|hq)\b", re.I), "!hq"),
     (re.compile(r"\b(waiting|follow.?ups?|(?:who|what) (?:do i|am i) owe|replies? (?:i )?owe|chase)\b", re.I),
      "!waiting"),
@@ -156,6 +160,17 @@ def console_str_pdf(case_id: int) -> Any:
         raise HTTPException(404, str(e)) from e
     return Response(pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'inline; filename="{str_pack.filename(case_id)}"', "Cache-Control": "no-store"})
+
+
+@router.get("/api/console/wake", dependencies=[Depends(console_api)])
+def console_wake() -> dict[str, Any]:
+    """The wake-up briefing the console shows and says when it opens."""
+    from jarvis.agents import hq
+
+    lines = _section(hq.wake_lines)
+    if isinstance(lines, dict):
+        return {"lines": [f"I'm online, but my briefing failed: {lines['error']}"]}
+    return {"lines": lines}
 
 
 @router.post("/api/console/say", dependencies=[Depends(console_api)])

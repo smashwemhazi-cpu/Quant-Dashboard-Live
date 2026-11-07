@@ -475,6 +475,12 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     load_builtin_agents()
     last: dict[str, float] = load_last()
+    try:  # back after the server was off: say so, with the wake-up briefing (an update restart says nothing)
+        from jarvis.agents import hq
+
+        hq.wake_after_downtime(last)
+    except Exception as e:  # noqa: BLE001
+        log.warning("wake-up briefing failed: %s", e)
     paused: dict[str, float] = {}  # in memory: a restart (every vertex1-connect run) retries everything at once
     while True:
         now = time.time()
