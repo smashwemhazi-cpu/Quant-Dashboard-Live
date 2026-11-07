@@ -78,8 +78,16 @@ def state() -> dict[str, Any]:
 
         return sorted({why for why, _ in waiting_jobs().values() if not why.startswith("nothing to read")})
 
+    def agents() -> list[dict[str, Any]]:
+        from jarvis.agents import hq
+
+        states = hq.job_states()
+        return [{"name": d["name"], "state": hq.duty_state(d, states),
+                 "problems": [f"{j}: {states[j].get('why') or states[j]['state']}"[:140] for j in d["jobs"]
+                              if states.get(j, {}).get("state") in ("failing", "waiting")]} for d in hq.DUTIES]
+
     today = datetime.now(assistant.LOCAL_TZ).date().isoformat()
-    return {"now": datetime.now(assistant.LOCAL_TZ).strftime("%a %d %b %Y %H:%M"),
+    return {"agents": _section(agents),"now": datetime.now(assistant.LOCAL_TZ).strftime("%a %d %b %Y %H:%M"),
             "attention": _section(attention),
             "calendar": _section(calendar),
             "tasks": _section(lambda: [{"id": t["id"], "title": t["title"][:90], "priority": t["priority"],
@@ -99,6 +107,9 @@ class Say(BaseModel):
 
 # everyday spoken questions answered straight from DONNA's own data - they work without Claude credit
 INTENTS = [
+    (re.compile(r"\b(what (?:can|do) you do|your (?:job|mandate|duties)|who are you|how can you help)\b", re.I),
+     "!mandate"),
+    (re.compile(r"\b(agents?|how(?:'s| is) everything|overview|headquarters|hq)\b", re.I), "!hq"),
     (re.compile(r"\b(tasks?|to.?do|what (?:do i|should i) (?:need to )?do)\b", re.I), "!tasks"),
     (re.compile(r"\b(my day|today|schedule|calendar|meetings?|agenda)\b", re.I), "!today"),
     (re.compile(r"\bcomplaints?\b", re.I), "!complaints"),

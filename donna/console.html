@@ -57,6 +57,11 @@
   select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
     padding: 8px; font: inherit; max-width: 220px; }
   .hint { color: var(--muted); font-size: 12px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
+  .dot.running { background: var(--ok); } .dot.waiting { background: var(--warn); } .dot.fix { background: var(--bad); }
+  .dot.demand { background: var(--muted); }
+  #agents li { cursor: pointer; } #agents li:hover { color: var(--accent); }
+  .panel h2 .link { float: right; padding: 0 8px; font-size: 11px; letter-spacing: .08em; border-radius: 8px; }
   @media (max-width: 900px) {
     body { grid-template-columns: minmax(0, 1fr); height: auto; overflow: visible; }
     .col { overflow: visible; }
@@ -76,6 +81,7 @@
 <section class="col">
   <div class="panel"><h2>Today</h2><ul id="calendar"><li class="empty">Loading…</li></ul></div>
   <div class="panel"><h2>Inbox</h2><ul id="mail"><li class="empty">Loading…</li></ul></div>
+  <div class="panel"><h2>Your agents <button type="button" class="link" id="agents-more" title="Every agent and when it last ran">details</button></h2><ul id="agents"><li class="empty">Loading…</li></ul></div>
 </section>
 
 <section class="centre">
@@ -153,6 +159,8 @@
         k.green ? [`<li class="hint">${k.green} indicator(s) green</li>`] : [],
         (k.no_data || []).length || !live ? [`<li class="hint">Waiting for data: ${esc([].concat(k.no_data || [], live ? [] : ["live positions"]).join(", "))}</li>`] : []);
       $("risk").innerHTML = risk.join("") || `<li class="empty">All indicators green</li>`;
+      const dotOf = { "running": "running", "partly waiting on setup": "waiting", "needs a fix": "fix", "on demand": "demand" };
+      list($("agents"), s.agents, (a) => `<li title="${esc(a.problems.join("\n"))}"><span class="dot ${dotOf[a.state] || "demand"}"></span>${esc(a.name)} <span class="hint">${esc(a.state)}</span>${a.problems.length ? `<div class="hint">${esc(a.problems[0])}</div>` : ""}</li>`, "No agents reported");
       if (orb.mode === "connecting") setMode("idle");
     } catch (e) {
       setMode("connecting");
@@ -286,6 +294,9 @@
     const b = e.target.closest("[data-done]");
     if (b) { b.disabled = true; say("!done " + b.dataset.done); }
   });
+  // the agents panel: a duty opens DONNA's one view (!hq); "details" lists every agent and when it last ran
+  $("agents").addEventListener("click", (e) => { if (e.target.closest("li:not(.empty)")) say("!hq"); });
+  $("agents-more").addEventListener("click", () => say("!agents"));
   $("send").onclick = () => { const t = $("text").value; $("text").value = ""; say(t); };
   $("text").addEventListener("keydown", (e) => { if (e.key === "Enter") $("send").click(); });
 

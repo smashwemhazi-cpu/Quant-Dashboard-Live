@@ -76,3 +76,17 @@ def test_the_manual_carries_the_mandate():
     assert hq.PURPOSE in manual
     assert all(d["name"] in manual and d["proof"] in manual for d in hq.DUTIES)
     assert all(b in manual for b in hq.BOUNDARIES)
+
+
+def test_desktop_console_shows_the_agents_and_answers_the_mandate(tmp_path, monkeypatch):
+    from donna import console
+    from jarvis.agents import hq
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    s = console.state()
+    assert [a["name"] for a in s["agents"]] == [d["name"] for d in hq.DUTIES]
+    assert {a["state"] for a in s["agents"]} <= {"running", "partly waiting on setup", "needs a fix", "on demand"}
+    assert console.intent("what can you do?") == "!mandate" and console.intent("how are the agents") == "!hq"
+    assert console.reply("what can you do for me") == hq.mandate_text()
+    page = console.PAGE.read_text()
+    assert 'id="agents"' in page and 'say("!hq")' in page and 'say("!agents")' in page

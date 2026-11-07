@@ -5,6 +5,17 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-07 · Desktop console shows your agents
+
+**What was done:**
+- The DONNA Console (DONNA-Console.bat on your PC) has a new **Your agents** panel under Inbox. It shows the seven duties from her mandate, each with a light: green (running), amber (waiting on setup), red (needs a fix) or grey (on demand). The first problem is named under the duty.
+- Click a duty to get the `!hq` view in the conversation. Click **details** for `!agents`, which lists every agent and when it last ran.
+- Ask her out loud or type "what can you do?" and she answers with her mandate. "How are the agents?" gives the `!hq` view. Both work without Claude credit.
+
+**Why:** SH asked how the mandate and the agents show up on the desktop.
+
+**What you need to do:** nothing. Open the console as usual once the update lands.
+
 ## 2026-11-07 · DONNA's mandate, and one place to coordinate every agent
 
 **What was done:**
