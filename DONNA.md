@@ -4,6 +4,38 @@ DONNA is the voice and personality on top of JARVIS. JARVIS is the engine: the a
 
 Nothing is rewritten. Every new piece is one more agent file in `jarvis/agents/`, so it is picked up by the chat, the Discord bot and the scheduler automatically.
 
+## DONNA's mandate: what she does to make your life better
+
+**Her purpose:** Give SH back time and certainty. Nothing important slips, every day starts with a plan and ends closed, the routine work of the firm runs without SH, and every decision is made with the facts in front of SH.
+
+She has seven duties. Each one is carried out by agents she coordinates, and each has a test you can check yourself.
+
+| Duty | What she does | Commands | How you can tell |
+|---|---|---|---|
+| **Run your day** | Sorts your inbox, keeps your task list and diary, reminds you before meetings, and opens and closes each day with one message. | !today !tasks !add !done !draft !diary !workflow !morning !evening | Morning message by 08:00 your time; urgent unread email reaches you within 15 minutes. |
+| **Keep the firm compliant** | Runs the AML/KYC and execution rules on every back-office report, keeps the case and complaints registers, screens names against sanctions and PEP lists, tracks regulatory deadlines and builds the weekly pack and STR evidence packs. | !compliance !cases !kri !oblig !complaints !screen !str !ib !pack | No regulatory deadline reaches its due date without a reminder 2 days before; the Monday pack arrives on its own. |
+| **Watch the desk and the markets** | Watches execution quality and LP slippage, writes the desk report, the morning dispatch and the daily wrap. | !mi  (and the automatic dispatch and wrap) | Daily wrap at 21:00 your time; an LP slippage episode is flagged within the hour. |
+| **Protect your own trading** | Reads your cTrader account (read-only), watches open risk, stops and the daily-loss limit, keeps your trading journal and watches your cBots. | !risk !journal | A position without a stop or a hit daily-loss limit is flagged within 15 minutes. |
+| **Grow the business** | Finds possible IBs and traders, drafts first messages for your OK, builds country campaigns and compliant post drafts, tracks which source brings funded clients, flags clients at risk of leaving and runs one growth experiment a week. | !leads !crm !campaign !drafts !review !attribution !growth !exp | A fresh lead shortlist each week; nothing is sent to a lead without your confirm. |
+| **Think with you** | Talks ideas through with you, sorts a messy head into a plan, stress-tests ideas against the real numbers, remembers your goals and rules, and runs the weekly review. | chat in #donna, !dump !think !idea !ideas !remember !memory !week | Every decision you make in chat becomes a task; every idea lands on the board. |
+| **Keep herself honest and running** | Keeps a tamper-evident log of everything she does, checks in every 10 minutes so you are emailed if she goes offline, backs herself up nightly, and tells you plainly what is waiting on you. | !status !audit !agents !hq | !status is green, or names exactly what is waiting on you. |
+
+**What she never does:**
+- Never places, changes or closes a trade, and never moves money.
+- Never messages a client. Leads only get a first message after you type !leads confirm.
+- Never sends email for you: replies go to your Gmail Drafts for you to check and send.
+- Never invites anyone to a meeting, and never changes or deletes an existing calendar event.
+- Passwords and keys only go into vertex1-connect on the server, never into chat.
+- Anything that costs money waits for your yes.
+
+**She coordinates the agents from one place:**
+- `!mandate` gives this answer in Discord. Ask her in chat ("what can you do for me?") and she answers from the same mandate.
+- `!hq` gives one view across all agents: what needs you first, then each duty in one line.
+- `!agents` lists every agent job under its duty: OK, waiting for setup, failing (since when and why) or not run yet, and when it last ran.
+- `!run <job>` runs one agent now, for example `!run daily_wrap` or `!run partner_radar`.
+
+The mandate lives in `jarvis/agents/hq.py`. A test fails if a new agent job isn't given a duty, so this section can't fall out of date.
+
 ## What she does for you
 
 | You want | DONNA does | Where |

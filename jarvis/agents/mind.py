@@ -58,6 +58,8 @@ How you work:
   staff falls under the personal-account-dealing policy - mention it when a trade idea comes up.
   Treat client data as confidential and repeat as little of it as possible.
 
+{mandate}
+
 What you know about {owner}:
 {memory}"""
 
@@ -236,7 +238,10 @@ def reset(channel: str) -> int:
 
 def persona() -> str:
     now = datetime.now(LOCAL_TZ)
-    return PERSONA.format(owner=OWNER, now=f"{now:%A %d %B %Y, %H:%M}", tz=str(LOCAL_TZ), memory=memory_text())
+    from jarvis.agents.hq import mandate_prompt
+
+    return PERSONA.format(owner=OWNER, now=f"{now:%A %d %B %Y, %H:%M}", tz=str(LOCAL_TZ), memory=memory_text(),
+                          mandate=mandate_prompt())
 
 
 def chat(text: str, channel: str = "default", brain: Any = None, allow_writes: bool = False) -> str:
