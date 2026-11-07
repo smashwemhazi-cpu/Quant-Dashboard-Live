@@ -110,6 +110,8 @@ INTENTS = [
     (re.compile(r"\b(what (?:can|do) you do|your (?:job|mandate|duties)|who are you|how can you help)\b", re.I),
      "!mandate"),
     (re.compile(r"\b(agents?|how(?:'s| is) everything|overview|headquarters|hq)\b", re.I), "!hq"),
+    (re.compile(r"\b(waiting|follow.?ups?|(?:who|what) (?:do i|am i) owe|replies? (?:i )?owe|chase)\b", re.I),
+     "!waiting"),
     (re.compile(r"\b(tasks?|to.?do|what (?:do i|should i) (?:need to )?do)\b", re.I), "!tasks"),
     (re.compile(r"\b(my day|today|schedule|calendar|meetings?|agenda)\b", re.I), "!today"),
     (re.compile(r"\bcomplaints?\b", re.I), "!complaints"),

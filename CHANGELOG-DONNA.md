@@ -36,6 +36,19 @@ or keys, and nothing paid is signed up for without your OK.
 
 **Recommendations:** (1) Ask the Board to note the self-approval arrangement and the 1:200 staff leverage in the minutes (PAD Policy s.8A). (2) Start the Restricted List with any listed LP, payment or tech vendor you are negotiating with.
 
+## 2026-11-07 · Follow-ups (`!waiting`) and meeting prep
+
+**What was done:**
+- `!waiting` lists the emails you owe a reply on, oldest first. Each shows its task number for `!draft`, and anything over 5 days is flagged. When you reply from your phone, the email drops off the list by itself. `!waiting done E12` clears one you dealt with another way.
+- The same command lists emails you sent that nobody has answered after 3 working days. This part needs bridge version 5.
+- The 15-minute meeting reminder now brings a short brief: who the meeting is with, your last 3 related emails and open tasks that mention them.
+- You can also ask the console "what am I waiting on?".
+- Bridge script version 5 adds two read-only things: unanswered sent mail (subjects and recipients only) and meeting guest lists. No new permissions are needed.
+
+**Why:** these are steps 1 and 2 of the admin desk build plan. They need no Claude credit.
+
+**What you need to do:** nothing for the replies you owe or the meeting brief from emails and tasks. For "others owe you" and the meeting guest names, update the bridge to version 5 when convenient: paste it, then Manage deployments → pencil → New version → Deploy.
+
 ## 2026-11-07 · Email sorting uses the cheapest Claude model
 
 **What was done:** sorting your inbox and drafting replies now uses Claude's smallest model (Haiku) instead of the largest one. Conversation and analysis stay on the larger model.

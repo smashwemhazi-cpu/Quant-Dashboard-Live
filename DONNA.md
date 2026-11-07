@@ -12,7 +12,7 @@ She has seven duties. Each one is carried out by agents she coordinates, and eac
 
 | Duty | What she does | Commands | How you can tell |
 |---|---|---|---|
-| **Run your day** | Sorts your inbox, keeps your task list and diary, reminds you before meetings, and opens and closes each day with one message. | !today !tasks !add !done !draft !diary !workflow !morning !evening | Morning message by 08:00 your time; urgent unread email reaches you within 15 minutes. |
+| **Run your day** | Sorts your inbox, keeps your task list and diary, reminds you before meetings, and opens and closes each day with one message. | !today !tasks !add !done !draft !waiting !diary !workflow !morning !evening | Morning message by 08:00 your time; urgent unread email reaches you within 15 minutes. |
 | **Keep the firm compliant** | Runs the AML/KYC and execution rules on every back-office report, keeps the case and complaints registers, screens names against sanctions and PEP lists, tracks regulatory deadlines and builds the weekly pack and STR evidence packs. | !compliance !cases !kri !oblig !complaints !screen !str !ib !pack | No regulatory deadline reaches its due date without a reminder 2 days before; the Monday pack arrives on its own. |
 | **Watch the desk and the markets** | Watches execution quality and LP slippage, writes the desk report, the morning dispatch and the daily wrap. | !mi  (and the automatic dispatch and wrap) | Daily wrap at 21:00 your time; an LP slippage episode is flagged within the hour. |
 | **Protect your own trading** | Reads your cTrader account (read-only), watches open risk, stops and the daily-loss limit, keeps your trading journal and watches your cBots, and checks your own trades against the PAD policy with a monthly pack for the MLRO. | !risk !journal !pad | A position without a stop or a hit daily-loss limit is flagged within 15 minutes. |
@@ -178,6 +178,14 @@ Version 2 adds two things:
 - **Draft replies:** `!draft 12` writes a reply to task 12's email and saves it in your Gmail **Drafts**. It is never sent; you review it and press send yourself.
 
 Version 4 also reads **all new inbox mail, not just unread**, so mail you opened on your phone first still counts. Mail you've opened or answered is counted for `!workflow` but isn't chased. Version 4 adds **your diary** too: `!diary add <title> | YYYY-MM-DD HH:MM | 45m` and `!diary block 12` put events in your own Google Calendar. They are created with no guests, so nobody is invited, and DONNA never changes or deletes an event that is already there. After pasting version 4, choose **setup** in the function list and click **Run** once, then **Allow**: Google needs your OK for DONNA to add calendar events. `!diary` (reading) and `!workflow` work without this update.
+
+Version 5 (optional) adds two read-only things. It lists **sent emails nobody has answered**, by subject and recipient only, for the second half of `!waiting`. It also shows **who a meeting is with**, so the 15-minute reminder can show your recent emails with them. No new permissions are needed, so you don't have to run setup again. Paste it, then go to **Manage deployments → ✏️ pencil → New version → Deploy**. Don't use "New deployment", because that makes a new link DONNA doesn't know.
+
+## Follow-ups and meeting prep
+
+- `!waiting` lists the emails that asked you something and that you haven't answered yet, oldest first. Each one shows its task number, so `!draft 12` writes the reply. Anything over 5 days old is marked. A reply you send from your phone takes the email off the list by itself. If you dealt with one another way, use `!waiting done E12`.
+- The second half of `!waiting` lists emails you sent that nobody has answered after 3 working days. This part needs bridge version 5. You can change the number of days with `JARVIS_CHASE_DAYS`.
+- The meeting reminder 15 minutes before a meeting now adds who it's with (bridge version 5), your last 3 emails that match the people or the meeting title, and open tasks that mention them. All of this works without Claude credit.
 
 ## Reports by email (no more uploading)
 

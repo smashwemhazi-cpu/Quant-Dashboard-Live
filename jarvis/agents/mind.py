@@ -381,7 +381,14 @@ def meeting_nudges(now: datetime | None = None, events: list[dict[str, Any]] | N
         mins = (start - now).total_seconds() / 60
         if 0 <= mins <= NUDGE_MINUTES and _once(f"meeting:{e['start']}:{e['title']}"):
             where = f" ({e['location']})" if e["location"] else ""
-            out.append(f"In {mins:.0f} min: {e['title']}{where}, {e['start'][11:]}-{e['end']}")
+            msg = f"In {mins:.0f} min: {e['title']}{where}, {e['start'][11:]}-{e['end']}"
+            try:  # meeting prep: who it's with, last emails, open tasks - never blocks the reminder
+                from jarvis.agents import followup
+
+                msg = "\n".join([msg, *followup.meeting_brief(e)])
+            except Exception:  # noqa: BLE001
+                pass
+            out.append(msg)
     return out
 
 

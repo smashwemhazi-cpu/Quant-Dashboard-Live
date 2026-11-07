@@ -31,7 +31,7 @@ DUTIES: list[dict[str, Any]] = [
                 "and closes each day with one message.",
      "agents": ["assistant", "workflow", "rhythm", "mind"],
      "jobs": ["inbox_triage", "morning", "evening", "my_day", "shutdown", "nudges", "midday"],
-     "commands": "!today !tasks !add !done !draft !diary !workflow !morning !evening",
+     "commands": "!today !tasks !add !done !draft !waiting !diary !workflow !morning !evening",
      "proof": "Morning message by 08:00 your time; urgent unread email reaches you within 15 minutes."},
     {"key": "compliance", "name": "Keep the firm compliant",
      "promise": "Runs the AML/KYC and execution rules on every back-office report, keeps the case and "

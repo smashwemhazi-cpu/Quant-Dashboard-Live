@@ -365,7 +365,7 @@ def test_calendar_from_ics(monkeypatch):
     monkeypatch.setattr(a.requests, "get", lambda url, timeout: type("R", (), {
         "content": ics.encode(), "raise_for_status": lambda self: None})())
     ev = a.calendar_events(date(2026, 10, 24))["events"]          # recurring instance on the next day
-    assert ev == [{"title": "LP call", "all_day": False, "start": "2026-10-24 10:00", "end": "10:30", "location": ""}]
+    assert ev == [{"title": "LP call", "all_day": False, "start": "2026-10-24 10:00", "end": "10:30", "location": "", "guests": []}]
     assert [e["title"] for e in a.calendar_events(date(2026, 10, 23))["events"]] == ["Month-end", "LP call"]
 
 
@@ -1014,7 +1014,7 @@ def test_bridge_script_watchdog_and_backup_are_wired():
     from pathlib import Path
 
     gs = (Path(__file__).resolve().parents[1] / "deploy" / "google-bridge.gs").read_text()
-    assert "var VERSION = 4;" in gs and "newTrigger('watchdog')" in gs and "function watchdog()" in gs
+    assert "var VERSION = 5;" in gs and "newTrigger('watchdog')" in gs and "function watchdog()" in gs
     assert "q.action === 'heartbeat'" in gs and "q.action === 'backup'" in gs and "BACKUPS_KEPT = 14" in gs
     assert "MailApp.sendEmail(Session.getEffectiveUser().getEmail()" in gs   # alerts go only to the owner
     assert "q.action === 'event'" in gs and "guests" not in gs.split("function event_")[1].split("}")[0]

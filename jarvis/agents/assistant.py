@@ -238,6 +238,8 @@ def _bridge_mail(c: sqlite3.Connection, max_messages: int) -> Iterator[dict[str,
         raise ConnectionError(r["error"])
     for m in r.get("messages", []):
         raw_id = str(m.get("id") or "").strip()
+        if raw_id and m.get("answered"):  # you replied after DONNA sorted it: it no longer counts as a reply owed
+            c.execute("UPDATE email_seen SET needs_reply = 0 WHERE msg_id = ? AND needs_reply = 1", (raw_id,))
         if raw_id and not c.execute("SELECT 1 FROM email_seen WHERE msg_id = ?", (raw_id,)).fetchone():
             # bridge v4 also sends read mail; one you've opened or answered is counted, not chased
             yield {"id": raw_id, "received": str(m.get("date") or _now()), "from": str(m.get("from", "")),
@@ -380,8 +382,14 @@ def calendar_events(day: date | None = None, days: int = 1) -> dict[str, Any]:
         out.append({"title": str(ev.get("SUMMARY", "(no title)")), "all_day": all_day,
                     "start": to_local(s).strftime("%Y-%m-%d") if all_day else to_local(s).strftime("%Y-%m-%d %H:%M"),
                     "end": "" if all_day or e is None else to_local(e).strftime("%H:%M"),
-                    "location": str(ev.get("LOCATION", ""))})
+                    "location": str(ev.get("LOCATION", "")), "guests": _ics_guests(ev.get("ATTENDEE"))})
     return {"events": sorted(out, key=lambda x: (not x["all_day"], x["start"]))}
+
+
+def _ics_guests(att: Any) -> list[str]:
+    """ATTENDEE is one value or a list of 'mailto:' addresses."""
+    items = att if isinstance(att, list) else [att] if att else []
+    return [str(a).split(":", 1)[-1] for a in items if "@" in str(a)]
 
 
 def _bridge_calendar(day: date | None, days: int) -> dict[str, Any]:
@@ -400,7 +408,8 @@ def _bridge_calendar(day: date | None, days: int) -> dict[str, Any]:
         all_day = bool(ev.get("all_day"))
         out.append({"title": str(ev.get("title") or "(no title)"), "all_day": all_day,
                     "start": (ev.get("day") or s.strftime("%Y-%m-%d")) if all_day else s.strftime("%Y-%m-%d %H:%M"),
-                    "end": "" if all_day else e.strftime("%H:%M"), "location": str(ev.get("location") or "")})
+                    "end": "" if all_day else e.strftime("%H:%M"), "location": str(ev.get("location") or ""),
+                    "guests": [str(g) for g in ev.get("guests") or []]})  # bridge v5 and later
     return {"events": sorted(out, key=lambda x: (not x["all_day"], x["start"]))}
 
 
