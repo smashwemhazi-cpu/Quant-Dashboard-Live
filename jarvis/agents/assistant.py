@@ -104,6 +104,44 @@ def list_tasks(include_done: bool = False) -> list[dict[str, Any]]:
     return rows
 
 
+def _nice_date(iso: str) -> str:
+    try:
+        return f"{date.fromisoformat(iso):%a %d %b}"
+    except (TypeError, ValueError):
+        return iso
+
+
+def task_line(t: dict[str, Any], today: str | None = None) -> str:
+    """One task in plain words: 'Task 13: Reply to FinPrime - urgent, due today'."""
+    today = today or datetime.now(LOCAL_TZ).date().isoformat()
+    bits = ["urgent"] if t.get("priority") == "high" else []
+    if t.get("due"):
+        bits.append("overdue since " + _nice_date(t["due"]) if t["due"] < today else
+                    "due today" if t["due"] == today else "due " + _nice_date(t["due"]))
+    return f"Task {t['id']}: {t['title']}" + (f" - {', '.join(bits)}" if bits else "")
+
+
+def tasks_text() -> str:
+    """Open tasks grouped by when they're due, in plain words, with what to type."""
+    rows = list_tasks()
+    if not rows:
+        return "No open tasks."
+    today = datetime.now(LOCAL_TZ).date().isoformat()
+    groups = (("🔴 Overdue", [t for t in rows if t["due"] and t["due"] < today]),
+              ("🟠 Due today", [t for t in rows if t["due"] == today]),
+              ("🟢 Coming up", [t for t in rows if t["due"] and t["due"] > today]),
+              ("⚪ No date set", [t for t in rows if not t["due"]]))
+    L = [f"YOUR TASKS ({len(rows)} open)"]
+    for title, ts in groups:
+        if ts:
+            L += ["", title] + [task_line(t, today) for t in ts]
+    eg = next((t["id"] for t in rows if t["title"].lower().startswith("reply")), None)
+    L += ["", "WHAT YOU CAN TYPE", f"!done {rows[0]['id']} - mark task {rows[0]['id']} as finished"]
+    if eg:
+        L.append(f"!draft {eg} - I write the email reply for task {eg}, you check it and press send")
+    return "\n".join(L)
+
+
 def complete_task(task_id: int) -> bool:
     with _db() as c:
         return c.execute("UPDATE tasks SET status = 'done', done_at = ? WHERE id = ? AND status = 'open'",
@@ -454,22 +492,24 @@ def my_day_text() -> str:
     due_today = [t for t in tasks if t["due"] == today]
     rest = [t for t in tasks if t not in overdue and t not in due_today]
     L += ["", f"TASKS ({len(tasks)} open)"]
-    fmt = lambda t: f" #{t['id']} [{t['priority']}] {t['title']}" + (f" (due {t['due']})" if t["due"] else "")  # noqa: E731
+    fmt = lambda t: " " + task_line(t, today)  # noqa: E731
     if overdue:
-        L += ["Overdue:"] + [fmt(t) for t in overdue]
+        L += ["🔴 Overdue:"] + [fmt(t) for t in overdue]
     if due_today:
-        L += ["Today:"] + [fmt(t) for t in due_today]
+        L += ["🟠 Due today:"] + [fmt(t) for t in due_today]
     if rest:
-        L += ["Next:"] + [fmt(t) for t in rest[:8]] + ([f" ... and {len(rest) - 8} more"] if len(rest) > 8 else [])
+        L += ["🟢 Next:"] + [fmt(t) for t in rest[:8]] + ([f" ... and {len(rest) - 8} more"] if len(rest) > 8 else [])
     if not tasks:
         L.append(" No open tasks")
     ib = inbox_status()
     L += ["", f"INBOX (last 24h: {ib['emails']} analysed)"]
     if not inbox_connected():
         L.append(" NO DATA - inbox not connected")
-    L += [f" !! {r['subject'][:80]} - {r['summary'][:120]}" for r in ib["high"][:5]]
-    L += [f" Reply needed: {r['subject'][:80]} ({r['sender_domain']})" for r in ib["needs_reply"]
+    L += [f" URGENT: {r['subject'][:80]} - {r['summary'][:120]}" for r in ib["high"][:5]]
+    L += [f" Waiting for your reply: \"{r['subject'][:80]}\" from {r['sender_domain']}" for r in ib["needs_reply"]
           if r not in ib["high"]][:5]
+    if ib["needs_reply"]:
+        L.append(" Full list, oldest first: !waiting")
     L += [""] + personal.report_lines()
     try:
         from jarvis.agents import mind
