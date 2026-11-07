@@ -2,7 +2,10 @@
 
 !waiting            what you owe others (emails that asked you something and you haven't answered, oldest
                     first) and what others owe you (emails you sent that nobody has answered after 3 working days).
-!waiting done E12   you've dealt with email E12 another way (phone, in person): stop listing it.
+!waiting done E12   you've dealt with email E12 another way (phone, in person): stop listing it (and the
+                    rest of that conversation).
+!waiting mute x.com never list replies owed to that sender (undo: !waiting unmute x.com).
+!waiting all        the list including promos, newsletters and muted senders, which are normally left out.
 Meeting prep        the 15-minute meeting reminder also says who the meeting is with, your last emails with
                     them and open tasks that mention them.
 
@@ -48,26 +51,88 @@ def _ago(iso: str, today: date) -> int:
 
 
 # ------------------------------------------------------------------ you owe others
-def replies_owed(today: date | None = None) -> list[dict[str, Any]]:
-    """Emails that asked you something, not answered and not dealt with, oldest first.
-    An email whose tasks are all marked done counts as dealt with."""
-    today = today or datetime.now(LOCAL_TZ).date()
+_BULK_CATEGORIES = {"newsletter", "vendor_marketing", "spam"}
+_PREFIX = re.compile(r"^\s*((re|fwd?|aw|sv)\s*(\[\d+\])?\s*:\s*)+", re.I)
+
+
+def _thread_key(subject: str, domain: str) -> tuple[str, str]:
+    """Same conversation = same sender domain and same subject once Re:/Fwd: are taken off."""
+    return re.sub(r"\s+", " ", _PREFIX.sub("", subject or "")).strip().lower(), (domain or "").lower()
+
+
+def _muted(c: Any) -> set[str]:
+    c.execute("CREATE TABLE IF NOT EXISTS waiting_muted (domain TEXT PRIMARY KEY, added TEXT)")
+    return {r[0] for r in c.execute("SELECT domain FROM waiting_muted")}
+
+
+def _is_muted(domain: str, muted: set[str]) -> bool:
+    d = (domain or "").lower()
+    return any(d == m or d.endswith("." + m) for m in muted)
+
+
+def _owed(today: date, everything: bool = False) -> tuple[list[dict[str, Any]], int]:
+    """(conversations you owe a reply on, oldest first; how many emails were left out as promos or muted).
+    An email whose tasks are all marked done counts as dealt with. A thread that repeats shows once."""
     since = (datetime.now(timezone.utc) - timedelta(days=OWED_DAYS)).isoformat()
     with assistant._db() as c:
+        muted = _muted(c)
         rows = [dict(r) for r in c.execute(
             "SELECT rowid AS ref, e.*, (SELECT COUNT(*) FROM tasks t WHERE t.source_ref = e.msg_id) AS n_tasks, "
             "(SELECT MIN(id) FROM tasks t WHERE t.source_ref = e.msg_id AND t.status = 'open') AS open_task "
             "FROM email_seen e WHERE needs_reply = 1 AND processed_at >= ? ORDER BY received", (since,))]
-    out = [r for r in rows if not r["n_tasks"] or r["open_task"]]
-    for r in out:
-        r["days"] = _ago(r["received"], today)
-    return out
+    rows = [r for r in rows if not r["n_tasks"] or r["open_task"]]
+    kept = rows if everything else [
+        r for r in rows if r["category"] not in _BULK_CATEGORIES and not _is_muted(r["sender_domain"], muted)
+        and not assistant.looks_bulk(r["subject"] or "", (r["summary"] or "").removeprefix("[rules]"),
+                                     f"@{r['sender_domain']}")]
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in kept:
+        g = groups.get(_thread_key(r["subject"], r["sender_domain"]))
+        if g is None:
+            groups[_thread_key(r["subject"], r["sender_domain"])] = {**r, "count": 1, "refs": [r["ref"]],
+                                                                     "days": _ago(r["received"], today)}
+        else:
+            g["count"] += 1
+            g["refs"].append(r["ref"])
+            g["open_task"] = g["open_task"] or r["open_task"]
+    return list(groups.values()), len(rows) - len(kept)
+
+
+def replies_owed(today: date | None = None, everything: bool = False) -> list[dict[str, Any]]:
+    """Conversations that asked you something, not answered and not dealt with, oldest first.
+    Promos, newsletters and muted senders are left out unless everything=True."""
+    return _owed(today or datetime.now(LOCAL_TZ).date(), everything)[0]
 
 
 def mark_dealt_with(ref: int) -> bool:
+    """Take email E<ref> off the list, with every other email in the same conversation."""
     with assistant._db() as c:
-        return c.execute("UPDATE email_seen SET needs_reply = 0 WHERE rowid = ? AND needs_reply = 1",
-                         (ref,)).rowcount == 1
+        row = c.execute("SELECT subject, sender_domain FROM email_seen WHERE rowid = ? AND needs_reply = 1",
+                        (ref,)).fetchone()
+        if not row:
+            return False
+        key = _thread_key(row[0], row[1])
+        refs = [r[0] for r in c.execute("SELECT rowid, subject, sender_domain FROM email_seen "
+                                        "WHERE needs_reply = 1 AND sender_domain = ?", (row[1],))
+                if _thread_key(r[1], r[2]) == key]
+        c.executemany("UPDATE email_seen SET needs_reply = 0 WHERE rowid = ?", [(r,) for r in refs])
+        return True
+
+
+def mute(domain: str) -> int:
+    """Never list replies owed to this sender domain again; returns how many waiting emails it hides now."""
+    d = domain.strip().lower().lstrip("@").rpartition("@")[2]
+    with assistant._db() as c:
+        _muted(c)
+        c.execute("INSERT OR REPLACE INTO waiting_muted VALUES (?, ?)", (d, datetime.now(timezone.utc).isoformat()))
+        return c.execute("SELECT COUNT(*) FROM email_seen WHERE needs_reply = 1 AND "
+                         "(sender_domain = ? OR sender_domain LIKE ?)", (d, f"%.{d}")).fetchone()[0]
+
+
+def unmute(domain: str) -> bool:
+    with assistant._db() as c:
+        _muted(c)
+        return c.execute("DELETE FROM waiting_muted WHERE domain = ?", (domain.strip().lower(),)).rowcount == 1
 
 
 # ------------------------------------------------------------------ others owe you
@@ -97,29 +162,35 @@ def awaiting_others(today: date | None = None) -> dict[str, Any]:
     return {"items": sorted(out, key=lambda x: -x["days"])}
 
 
-def waiting_text(today: date | None = None) -> str:
+def waiting_text(today: date | None = None, everything: bool = False) -> str:
     today = today or datetime.now(LOCAL_TZ).date()
-    owed = replies_owed(today)
+    owed, hidden = _owed(today, everything)
     L = [f"D.O.N.N.A | WAITING | {today:%a %d %b}", "-" * 34, f"YOU OWE A REPLY ({len(owed)})"]
     for r in owed[:12]:
         task = f"  task #{r['open_task']} (!draft {r['open_task']})" if r["open_task"] else ""
         old = "  OVER 5 DAYS" if r["days"] > 5 else ""
-        L.append(f" E{r['ref']}  {r['days']}d  {r['subject'][:60]} ({r['sender_domain']}){task}{old}")
+        times = f"  x{r['count']}" if r["count"] > 1 else ""
+        L.append(f" E{r['ref']}  {r['days']}d  {_PREFIX.sub('', r['subject'] or '')[:60]} "
+                 f"({r['sender_domain']}){times}{task}{old}")
     if not owed:
         L.append(" Nothing - every email that asked you something has an answer.")
     elif len(owed) > 12:
         L.append(f" ...and {len(owed) - 12} more")
+    if hidden:
+        L.append(f" ({hidden} promo, newsletter or muted email{'s' if hidden != 1 else ''} left out - !waiting all)")
     aw = awaiting_others(today)
     L += ["", "OTHERS OWE YOU (no answer after "
           f"{CHASE_WORKING_DAYS} working days)"]
     if aw.get("error") == "older bridge":
-        L.append(" Needs the Google bridge script version 5 - see DONNA.md 'Updating the bridge script'. Optional.")
+        v = aw.get("version")
+        L.append(f" Your Google bridge is still answering as version {v or 'older than 5'}: the new code is saved but "
+                 "not published. Deploy > Manage deployments > pencil > Version: New version > Deploy. Optional.")
     elif "error" in aw:
         L.append(f" Can't check: {aw['error']}")
     else:
         L += [f" {a['days']}d  {a['subject'][:60]} -> {a['to']}" for a in aw["items"][:12]] or [" Nothing outstanding."]
     if owed:
-        L += ["", "Dealt with one another way? !waiting done E12"]
+        L += ["", "Dealt with one another way? !waiting done E12   Never from this sender? !waiting mute example.com"]
     return "\n".join(L)
 
 
@@ -162,10 +233,20 @@ def command(cmd: str, rest: str) -> str | None:
     if cmd != "!waiting":
         return None
     sub, _, arg = rest.strip().partition(" ")
-    if sub.lower() == "done":
+    sub = sub.lower()
+    if sub == "done":
         m = re.fullmatch(r"\s*[Ee]?(\d+)\s*", arg)
         if not m:
             return "Usage: !waiting done E12"
         return f"E{m.group(1)} won't be listed again." if mark_dealt_with(int(m.group(1))) else \
             f"E{m.group(1)} isn't on the list."
-    return waiting_text()
+    if sub in ("mute", "unmute"):
+        d = arg.strip().lower()
+        if not re.fullmatch(r"@?[a-z0-9.-]+\.[a-z]{2,}", d):
+            return f"Usage: !waiting {sub} example.com"
+        if sub == "unmute":
+            return f"{d} is listed again." if unmute(d.lstrip("@")) else f"{d} wasn't muted."
+        n = mute(d)
+        return f"Muted {d.lstrip('@')}: its emails won't show under YOU OWE A REPLY ({n} hidden now). " \
+               f"Undo with !waiting unmute {d.lstrip('@')}"
+    return waiting_text(everything=sub == "all")

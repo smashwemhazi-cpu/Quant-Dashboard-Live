@@ -183,7 +183,8 @@ Version 5 (optional) adds two read-only things. It lists **sent emails nobody ha
 
 ## Follow-ups and meeting prep
 
-- `!waiting` lists the emails that asked you something and that you haven't answered yet, oldest first. Each one shows its task number, so `!draft 12` writes the reply. Anything over 5 days old is marked. A reply you send from your phone takes the email off the list by itself. If you dealt with one another way, use `!waiting done E12`.
+- `!waiting` lists the emails that asked you something and that you haven't answered yet, oldest first. Each one shows its task number, so `!draft 12` writes the reply. Anything over 5 days old is marked. A reply you send from your phone takes the email off the list by itself. If you dealt with one another way, use `!waiting done E12`. That clears the whole conversation.
+- Promos, newsletters and cold sales pitches are left out. The list says how many were left out, and `!waiting all` shows everything. A conversation that repeats (Re:, Re:, Re:) shows once with a count, such as `x3`. To stop a sender showing up at all, use `!waiting mute example.com`, and undo it with `!waiting unmute example.com`.
 - The second half of `!waiting` lists emails you sent that nobody has answered after 3 working days. This part needs bridge version 5. You can change the number of days with `JARVIS_CHASE_DAYS`.
 - The meeting reminder 15 minutes before a meeting now adds who it's with (bridge version 5), your last 3 emails that match the people or the meeting title, and open tasks that mention them. All of this works without Claude credit.
 

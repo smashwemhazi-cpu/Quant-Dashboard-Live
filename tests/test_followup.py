@@ -12,9 +12,9 @@ def _bridge(monkeypatch, answers):
     monkeypatch.setattr(google_bridge, "call", lambda action="ping", body=None, **p: answers.get(action, {"ok": True, "version": 4}))
 
 
-def _seen(c, msg_id, received, domain, subject, needs_reply):
+def _seen(c, msg_id, received, domain, subject, needs_reply, category="client"):
     c.execute("INSERT INTO email_seen VALUES (?,?,?,?,?,?,?,?,?)",
-              (msg_id, received, domain, subject, "client", "medium", "x", needs_reply,
+              (msg_id, received, domain, subject, category, "medium", "x", needs_reply,
                datetime.now(timezone.utc).isoformat()))
 
 
@@ -70,7 +70,7 @@ def test_others_owe_you_needs_bridge_v5(tmp_path, monkeypatch):
 
     monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
     _bridge(monkeypatch, {})                                  # v4 answers an unknown GET with its ping
-    assert "Needs the Google bridge script version 5" in f.waiting_text(date(2026, 11, 9))
+    assert "still answering as version 4" in f.waiting_text(date(2026, 11, 9))
     _bridge(monkeypatch, {"sent": {"version": 5, "sent": [
         {"to": "Ops <ops@lp.com>", "subject": "Rebate statement", "date": "2026-11-02T10:00:00Z"},
         {"to": "kyc@client.com", "subject": "Missing ID", "date": "2026-11-06T10:00:00Z"}]}})
@@ -142,3 +142,62 @@ def test_declined_meetings_are_not_part_of_the_day(monkeypatch):
     monkeypatch.delenv("JARVIS_GCAL_ICS_URL", raising=False)
     ev = a.calendar_events(date(2026, 11, 9))["events"]
     assert [e["title"] for e in ev] == ["Kept"] and ev[0]["guests"] == ["x@lp.com"]
+
+
+def test_waiting_leaves_out_promos_and_shows_a_thread_once(tmp_path, monkeypatch):
+    """SH's real list: 7 copies of an affiliate pitch, a white-label pitch and a cTrader promo crowded it out."""
+    from jarvis.agents import assistant as a, followup as f
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.delenv("JARVIS_GOOGLE_BRIDGE_URL", raising=False)
+    with a._db() as c:
+        for i in range(7):
+            _seen(c, f"<m{i}@x>", f"2026-10-{10 + i}T09:00:00+00:00", "mediacle.com",
+                  ("Re: " * min(i, 1)) + "Considering a new affiliate platform? Cut your affiliate costs", 1)
+        _seen(c, "<p@x>", "2026-10-18T09:00:00+00:00", "pelris.com", "VERTEX 1 Brokers on its own trading platform", 1)
+        _seen(c, "<ct@x>", "2026-11-06T09:00:00+00:00", "mail.ctrader.com", "See Flex Renko in action on cTrader", 1)
+        _seen(c, "<nl@x>", "2026-11-06T09:00:00+00:00", "fxweekly.com", "Weekly digest", 1, "newsletter")
+        for i in range(3):
+            _seen(c, f"<lp{i}@x>", f"2026-11-0{4 + i}T09:00:00+00:00", "finprime.com",
+                  ("RE: " * i) + "FinPrime - Institutional Liquidity Provider Introduction", 1)
+        _seen(c, "<dx@x>", "2026-11-06T09:00:00+00:00", "deusxpay.com", "Payment Status Update", 1)
+    owed = f.replies_owed(date(2026, 11, 9))
+    assert [(r["sender_domain"], r["count"]) for r in owed] == [("finprime.com", 3), ("deusxpay.com", 1)]
+    text = f.waiting_text(date(2026, 11, 9))
+    assert "YOU OWE A REPLY (2)" in text and "x3" in text and "RE:" not in text
+    assert "(10 promo, newsletter or muted emails left out - !waiting all)" in text
+    assert "mediacle" not in text and "mediacle.com" in f.command("!waiting", "all")
+    # done clears the whole conversation, not just one copy
+    assert f.command("!waiting", f"done E{owed[0]['ref']}").endswith("won't be listed again.")
+    assert [r["sender_domain"] for r in f.replies_owed(date(2026, 11, 9))] == ["deusxpay.com"]
+    # mute a sender, then undo it
+    assert "1 hidden now" in f.command("!waiting", "mute deusxpay.com")
+    assert f.replies_owed(date(2026, 11, 9)) == []
+    assert f.command("!waiting", "unmute deusxpay.com") == "deusxpay.com is listed again."
+    assert "Usage" in f.command("!waiting", "mute nonsense")
+
+
+def test_promos_never_need_a_reply_when_sorted(tmp_path, monkeypatch):
+    from jarvis.agents import assistant as a
+
+    assert a.classify_rules("Can you confirm the deposit?", "client.com", "Please confirm.", "c@client.com")["needs_reply"]
+    pitch = a.classify_rules("Considering a new affiliate platform?", "mediacle.com", "Can we book a call?",
+                             "Sam <sam@mediacle.com>")
+    assert pitch["category"] == "vendor_marketing" and not pitch["needs_reply"] and pitch["tasks"] == []
+    footer = a.classify_rules("Quick question", "acme.io", "Could you reply?\n\nUnsubscribe here", "a@acme.io")
+    assert not footer["needs_reply"]
+    assert a.looks_bulk("See Flex Renko in action on cTrader", "", "cTrader <news@mail.ctrader.com>")
+    assert not a.looks_bulk("Payment Status Update", "Please confirm receipt.", "ops@deusxpay.com")
+    # Claude's verdict is overridden too: a promo it marked "needs reply" is stored as not needing one
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    _bridge(monkeypatch, {"mail": {"messages": [{"id": "<x@x>", "date": "", "from": "sam@mediacle.com",
+                                                  "subject": "Cut your affiliate costs", "body": "Can we talk?",
+                                                  "unread": True, "answered": False}]}})
+    monkeypatch.setattr(a, "classify", lambda *x: {"category": "client", "urgency": "medium", "summary": "s",
+                                                   "needs_reply": True, "tasks": [{"title": "Reply", "due": "",
+                                                                                   "priority": "medium"}]})
+    a.triage_inbox()
+    with a._db() as c:
+        assert c.execute("SELECT needs_reply FROM email_seen").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
