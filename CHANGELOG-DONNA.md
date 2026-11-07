@@ -5,6 +5,17 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-07 · Quieter console window during updates
+
+**What was done:**
+- When the console installs an update, it no longer prints the first-time setup list ("Next: 1. Fill in ... 5. Test ..."). Those steps were for the original install and need nothing from you.
+- It now says "DONNA restarts for about half a minute while it installs - that is normal."
+- The console file on your PC now hides the "channel 3: open failed: Connection refused" lines. They came from the console checking whether DONNA was back while she restarted after the update, and they were harmless.
+
+**Why:** SH's console window showed both after the #45 update, which looked like errors.
+
+**What you need to do:** nothing. The first two changes reach the server by themselves. To also hide the "channel" lines, download the new DONNA-Console.bat and replace the old one on your desktop. This is optional.
+
 ## 2026-11-07 · Desktop console shows your agents
 
 **What was done:**
