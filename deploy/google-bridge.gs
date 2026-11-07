@@ -1,5 +1,6 @@
 // D.O.N.N.A Google bridge - runs inside your own Google account, so no password is ever given to DONNA.
-// It READS new inbox emails (read or unread), your calendar, and report attachments (.csv / .xlsx / .xls).
+// It READS new inbox emails (read or unread), your calendar (with guest addresses), which of your sent emails
+// are still unanswered (subjects only), and report attachments (.csv / .xlsx / .xls).
 // It WRITES only: a draft reply when you ask for one (!draft 12), an event in your own calendar when you ask for one
 // (!diary add / !diary block - no guests, so no invitations), DONNA's encrypted nightly backup to the
 // "DONNA backups" folder in your Drive, and an email TO YOU if DONNA's server stops checking in (uptime alert).
@@ -7,7 +8,7 @@
 // Set-up (5 minutes, once) is in DONNA.md under "Email and calendar without a password".
 // After pasting a newer copy: Deploy > Manage deployments > pencil > Version: New version > Deploy (the link stays the same).
 
-var VERSION = 4;
+var VERSION = 5;
 var WATCH_MINUTES = 30;      // email me if DONNA hasn't checked in for this long
 var BACKUPS_KEPT = 14;
 var REPORT_FILE = /\.(csv|xlsx|xls)$/i;
@@ -43,6 +44,8 @@ function doGet(e) {
     out = attachment_(q.id);
   } else if (q.action === 'message') {
     out = message_(q.id);
+  } else if (q.action === 'sent') {
+    out = sent_(Number(q.days || 21), Number(q.max || 40));
   } else if (q.action === 'heartbeat') {
     out = heartbeat_(q.release || '');
   } else {
@@ -74,12 +77,29 @@ function calendar_(start, days) {
   var s = start ? new Date(start) : new Date();
   var e = new Date(s.getTime() + days * 86400000);
   var tz = Session.getScriptTimeZone();
+  var me = Session.getEffectiveUser().getEmail().toLowerCase();
   return {events: CalendarApp.getDefaultCalendar().getEvents(s, e).map(function (ev) {
     var allDay = ev.isAllDayEvent();
-    return {title: ev.getTitle(), all_day: allDay, location: ev.getLocation(),
+    var guests = ev.getGuestList().map(function (g) { return g.getEmail(); })
+      .filter(function (x) { return x && x.toLowerCase() !== me; });       // who the meeting is with (for meeting prep)
+    return {title: ev.getTitle(), all_day: allDay, location: ev.getLocation(), guests: guests,
             day: allDay ? Utilities.formatDate(ev.getAllDayStartDate(), tz, 'yyyy-MM-dd') : '',
             start: ev.getStartTime().toISOString(), end: ev.getEndTime().toISOString()};
   })};
+}
+
+// mail you sent that nobody has answered yet: threads in Sent whose newest message is yours (for !waiting).
+// Subjects, recipients and dates only - no message text.
+function sent_(days, max) {
+  var me = Session.getEffectiveUser().getEmail().toLowerCase();
+  var out = [];
+  GmailApp.search('in:sent newer_than:' + days + 'd', 0, max).forEach(function (t) {
+    var all = t.getMessages();
+    var last = all[all.length - 1];
+    if (last.getFrom().toLowerCase().indexOf(me) < 0) return;             // they have answered
+    out.push({thread: t.getId(), to: last.getTo(), subject: last.getSubject(), date: last.getDate().toISOString()});
+  });
+  return {version: VERSION, sent: out};
 }
 
 // spreadsheet attachments of the last few days: names and sizes only - DONNA asks for the ones it hasn't seen
