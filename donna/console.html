@@ -64,6 +64,7 @@
   .panel h2 .link { float: right; padding: 0 8px; font-size: 11px; letter-spacing: .08em; border-radius: 8px; }
   header .tools { display: flex; gap: 10px; align-items: baseline; }
   header .tools button { padding: 5px 12px; font-size: 13px; }
+  header .tools .charts-link { color: var(--accent); font-size: 13px; text-decoration: none; }
   /* the agent map: DONNA in the middle, her seven duties around her, each agent a moon of its duty */
   #map { position: fixed; inset: 0; z-index: 10; background: rgba(4, 8, 18, .98); backdrop-filter: blur(4px);
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); gap: 16px; padding: 16px; }
@@ -105,7 +106,7 @@
 </style>
 </head>
 <body>
-<header><h1>D.O.N.N.A</h1><span class="tools"><button type="button" id="map-open" title="See every agent and how it's doing">◎ Agent map</button><span class="clock" id="clock"></span></span></header>
+<header><h1>D.O.N.N.A</h1><span class="tools"><a class="charts-link" href="/charts" title="Your account, trades and market charts">📈 Charts</a><button type="button" id="map-open" title="See every agent and how it's doing">◎ Agent map</button><span class="clock" id="clock"></span></span></header>
 <div id="map" hidden role="dialog" aria-label="Agent map">
   <div class="stage">
     <h2>DONNA · AGENT MAP</h2>
