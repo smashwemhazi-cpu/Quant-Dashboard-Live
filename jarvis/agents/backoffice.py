@@ -4,6 +4,8 @@ Drop exports into JARVIS_INBOX_DIR (server: /var/lib/vertex1/inbox). `ingest()` 
 each file by its columns, not its name, stores it in the state DB and moves it to
 inbox/processed/. Supported:
   cTrader   "End of day report"      (.xlsx/.csv: Trader Account, Group, Balance, Credit, Equity, Margin, ...)
+  cTrader   "Accounts EOD report"    (emailed daily by trade@alerts.ctrader.com as EOD_Report_USD.html.zip:
+                                      Login, Net Unrealised PnL (A-book / B-book), Balance, Equity, Margin, ...)
   Syntellicore "Performance Overview KPIs"  (.csv: caption/value pairs - Leads, FTDs, Deposits ...)
   Syntellicore "Customer Documents"         (.csv: customer_no, type, document_status, ...)
   cTrader   "Active Accounts"        (.xlsx: deposits, withdrawals, deals, rejected deals, volume, realised P&L)
@@ -40,7 +42,9 @@ TEST_NAME = re.compile(r"test|\bqa\b|automation", re.I)
 NULL_DATE = "1900-01-01"
 
 
-UPLOAD_TYPES = (".csv", ".xlsx", ".xls", ".log", ".txt", ".pdf")
+UPLOAD_TYPES = (".csv", ".xlsx", ".xls", ".log", ".txt", ".pdf", ".html", ".htm", ".zip")
+REPORT_TYPES = (".csv", ".xlsx", ".xls", ".html", ".htm", ".zip")   # what can arrive by email
+ZIP_MAX_BYTES = 30 * 2**20            # a zipped report is unpacked in memory, never past this size
 
 
 def inbox() -> Path:
@@ -102,7 +106,109 @@ def _read_pdf(path: Path) -> pd.DataFrame:
     return pd.DataFrame(body, columns=[c or f"col{i}" for i, c in enumerate(best)])
 
 
+class _Tables:
+    """Every <table> in an HTML page as rows of cell text (standard library only, no extra packages)."""
+
+    def __init__(self, page: str) -> None:
+        from html.parser import HTMLParser
+
+        self.tables: list[list[list[str]]] = []
+        self.text: list[str] = []
+        outer = self
+
+        class P(HTMLParser):
+            def __init__(self) -> None:
+                super().__init__(convert_charrefs=True)
+                self.stack: list[list[list[str]]] = []
+                self.cell: list[str] | None = None
+                self.skip = 0
+
+            def handle_starttag(self, tag: str, attrs: Any) -> None:
+                if tag in ("style", "script"):
+                    self.skip += 1
+                elif tag == "table":
+                    self.stack.append([])
+                elif tag == "tr" and self.stack:
+                    self.stack[-1].append([])
+                elif tag in ("td", "th") and self.stack:
+                    if not self.stack[-1]:
+                        self.stack[-1].append([])
+                    self.cell = []
+
+            def handle_endtag(self, tag: str) -> None:
+                if tag in ("style", "script"):
+                    self.skip = max(0, self.skip - 1)
+                elif tag in ("td", "th") and self.cell is not None and self.stack:
+                    self.stack[-1][-1].append(re.sub(r"\s+", " ", "".join(self.cell)).strip())
+                    self.cell = None
+                elif tag == "table" and self.stack:
+                    outer.tables.append([r for r in self.stack.pop() if any(r)])
+
+            def handle_data(self, data: str) -> None:
+                if self.skip:
+                    return
+                if self.cell is not None:
+                    self.cell.append(data)
+                outer.text.append(data)
+
+        P().feed(page)
+
+
+def _read_html(data: bytes) -> pd.DataFrame:
+    """The biggest table of an HTML report, with its header row; the report date (if printed) in .attrs['asof']."""
+    page = data.decode("utf-8", "ignore")
+    t = _Tables(page)
+    best: list[list[str]] = []
+    for rows in t.tables:
+        h = next((i for i, r in enumerate(rows) if _header_like(r)), None)
+        if h is not None and len(rows) - h > len(best):
+            best = rows[h:]
+    if not best:
+        raise ValueError("no table in this HTML report")
+    head = [c or f"col{i}" for i, c in enumerate(best[0])]
+    body = [r[:len(head)] + [""] * (len(head) - len(r)) for r in best[1:] if not _header_like(r)]
+    d = pd.DataFrame(body, columns=head, dtype=str)
+    # "Report generated at: 04-11-2026 20:55:00:008 UTC" (day-month-year)
+    m = re.search(r"generated at:?\s*(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})", " ".join(t.text), re.I)
+    if m:
+        try:
+            d.attrs["asof"] = date(int(m.group(3)), int(m.group(2)), int(m.group(1))).isoformat()
+        except ValueError:
+            pass
+    return d
+
+
+def _unzip(path: Path) -> tuple[str, bytes]:
+    """The one report inside a zip (cTrader emails EOD_Report_USD.html.zip). Read in memory, size-capped."""
+    import zipfile
+
+    with zipfile.ZipFile(path) as z:
+        members = [i for i in z.infolist() if not i.is_dir() and Path(i.filename).suffix.lower() in
+                   (".html", ".htm", ".csv", ".xlsx", ".xls")]
+        if not members:
+            raise ValueError("no report inside this zip")
+        m = max(members, key=lambda i: i.file_size)
+        if m.file_size > ZIP_MAX_BYTES:
+            raise ValueError("the report inside this zip is too big")
+        return Path(m.filename).name, z.read(m)
+
+
 def _read(path: Path) -> pd.DataFrame:
+    import io
+
+    if path.suffix.lower() == ".zip":
+        name, data = _unzip(path)
+        ext = Path(name).suffix.lower()
+        if ext in (".html", ".htm"):
+            return _read_html(data)
+        if ext in (".xlsx", ".xls"):
+            d = pd.read_excel(io.BytesIO(data))
+        else:
+            d = pd.read_csv(io.BytesIO(data), dtype=str, encoding="utf-8-sig")
+        d.columns = [str(c).strip() for c in d.columns]
+        return d
+    if path.suffix.lower() in (".html", ".htm"):
+        return _read_html(path.read_bytes())
     if path.suffix.lower() == ".pdf":
         d = _read_pdf(path)
     elif path.suffix.lower() in (".xlsx", ".xls"):
@@ -131,7 +237,7 @@ def _asof(path: Path) -> str:
 
 def detect(d: pd.DataFrame) -> str | None:
     cols = {c.lower() for c in d.columns}
-    if {"trader account", "equity", "balance"} <= cols:
+    if {"equity", "balance"} <= cols and cols & {"trader account", "login"}:
         return "eod"
     if {"customer_no", "document_status"} <= cols:
         return "docs"
@@ -151,11 +257,15 @@ def detect(d: pd.DataFrame) -> str | None:
 def _store_eod(c: sqlite3.Connection, d: pd.DataFrame, asof: str) -> int:
     col = {k.lower(): k for k in d.columns}
     g = lambda name: _num(d[col[name]]) if name in col else pd.Series(0.0, index=d.index)  # noqa: E731
+    for k in list(col):                     # cTrader spells it both ways: unrealised / unrealized
+        col.setdefault(k.replace("unrealised", "unrealized"), col[k])
+    acc = col.get("trader account") or col["login"]
     rows = pd.DataFrame({
-        "asof": asof, "account": d[col["trader account"]].astype(str).str.replace(r"\.0$", "", regex=True),
+        "asof": asof, "account": d[acc].astype(str).str.strip().str.replace(r"\.0$", "", regex=True),
         "grp": d[col["group"]].astype(str) if "group" in col else "",
         "balance": g("balance"), "credit": g("credit"), "equity": g("equity"), "margin": g("margin"),
         "upnl_a": g("net unrealized pnl (a-book)"), "upnl_b": g("net unrealized pnl (b-book)")})
+    rows = rows[rows["account"].str.fullmatch(r"\d+")]      # drops a totals line, if the report has one
     c.execute("DELETE FROM bo_eod WHERE asof = ?", (asof,))
     c.executemany("INSERT INTO bo_eod VALUES (?,?,?,?,?,?,?,?,?)", rows.itertuples(index=False, name=None))
     return len(rows)
@@ -239,7 +349,7 @@ def ingest_file(path: Path) -> dict[str, Any]:
             return {"file": path.name, "status": "STORED", "kind": "customers", "rows": screened["screened"],
                     "screening": screened}
         return {"file": path.name, "status": "UNRECOGNISED", "columns": list(d.columns)[:12]}
-    asof = _asof(path)
+    asof = d.attrs.get("asof") or _asof(path)       # the date printed inside the report wins
     with _db() as c:
         n = {"eod": lambda: _store_eod(c, d, asof), "kpi": lambda: _store_kpi(c, d, asof),
              "docs": lambda: _store_docs(c, d), "activity": lambda: _store_activity(c, d, asof),
@@ -255,9 +365,12 @@ def recognised(path: Path) -> str | None:
 
     if personal.is_bot_log(path):
         return "botlog"
-    if path.suffix.lower() not in (".csv", ".xlsx", ".xls"):
+    if path.suffix.lower() not in REPORT_TYPES:
         return None
-    d = _read(path)
+    try:
+        d = _read(path)
+    except ValueError:                       # a zip or web page with no report table in it
+        return None
     if personal.is_statement(d):
         return "statement"
     from jarvis.agents import screening
@@ -273,8 +386,13 @@ BRIDGE_OUTDATED = ("the Google bridge script is an older copy without report rea
                    "Version: New version > Deploy")
 
 
+BUILTIN_SENDERS = {"alerts.ctrader.com"}   # cTrader's own daily EOD report (trade@alerts.ctrader.com)
+
+
 def _report_senders() -> set[str]:
-    return {x.strip().lower() for x in os.getenv("JARVIS_REPORT_SENDERS", "").split(",") if x.strip()}
+    """Senders whose report attachments are read; empty = any sender. cTrader's own alerts are always allowed."""
+    own = {x.strip().lower() for x in os.getenv("JARVIS_REPORT_SENDERS", "").split(",") if x.strip()}
+    return own | BUILTIN_SENDERS if own else own
 
 
 def fetch_mail_reports(days: int = MAIL_REPORT_DAYS) -> dict[str, Any]:

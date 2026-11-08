@@ -74,3 +74,34 @@ def test_pair_saves_chat_and_adds_phone_to_personal_targets(tmp_path, monkeypatc
     assert "DONNA_TELEGRAM_CHAT_ID=42" in text and "DONNA_TELEGRAM_APPROVER_IDS=42" in text
     assert "JARVIS_PERSONAL_TARGETS=discord:personal,telegram:42" in text and "OTHER=1" in text
     assert "sendMessage" in sent
+
+
+def test_pair_accepts_any_private_message_and_explains_a_conflict(tmp_path, monkeypatch):
+    from donna import phone
+
+    env = tmp_path / "v.env"
+    env.write_text("")
+    monkeypatch.setenv("DONNA_TELEGRAM_BOT_TOKEN", "123456:abc")
+
+    def hi(method, **p):
+        if method == "getMe":
+            return {"username": "DonnaBot"}
+        if method == "getUpdates" and p.get("timeout"):
+            return {"result": [{"update_id": 9, "message": {"text": "hi", "chat": {"id": 7, "type": "private"},
+                                                            "from": {"id": 7}}}]}
+        return {"result": []}
+    monkeypatch.setattr(phone, "call", hi)
+    assert phone.pair(5, str(env)) == "PHONE     OK - paired with Telegram user 7"
+
+    def busy(method, **p):
+        if method == "getMe":
+            return {"username": "DonnaBot"}
+        if method == "getUpdates":
+            return {"error": "Conflict: terminated by other getUpdates request"}
+        return {"result": []}
+    monkeypatch.setattr(phone, "call", busy)
+    monkeypatch.setattr(phone.time, "sleep", lambda s: None)
+    clock = iter(range(0, 10_000, 30))
+    monkeypatch.setattr(phone.time, "time", lambda: next(clock))
+    out = phone.pair(120, str(env))
+    assert out.startswith("PHONE     not paired") and "systemctl stop vertex1-phone" in out

@@ -1,6 +1,6 @@
 // D.O.N.N.A Google bridge - runs inside your own Google account, so no password is ever given to DONNA.
 // It READS new inbox emails (read or unread), your calendar (with guest addresses), which of your sent emails
-// are still unanswered (subjects only), and report attachments (.csv / .xlsx / .xls).
+// are still unanswered (subjects only), and report attachments (.csv / .xlsx / .xls, and from v6 cTrader's zipped .html EOD report).
 // It WRITES only: a draft reply when you ask for one (!draft 12), an event in your own calendar when you ask for one
 // (!diary add / !diary block - no guests, so no invitations), DONNA's encrypted nightly backup to the
 // "DONNA backups" folder in your Drive, and an email TO YOU if DONNA's server stops checking in (uptime alert).
@@ -8,10 +8,10 @@
 // Set-up (5 minutes, once) is in DONNA.md under "Email and calendar without a password".
 // After pasting a newer copy: Deploy > Manage deployments > pencil > Version: New version > Deploy (the link stays the same).
 
-var VERSION = 5;
+var VERSION = 6;
 var WATCH_MINUTES = 30;      // email me if DONNA hasn't checked in for this long
 var BACKUPS_KEPT = 14;
-var REPORT_FILE = /\.(csv|xlsx|xls)$/i;
+var REPORT_FILE = /\.(csv|xlsx|xls|zip|html|htm)$/i;   // v6: cTrader's zipped HTML EOD report
 var REPORT_MAX_BYTES = 8 * 1024 * 1024;
 
 function setup() {
@@ -112,7 +112,7 @@ function sent_(days, max) {
 // spreadsheet attachments of the last few days: names and sizes only - DONNA asks for the ones it hasn't seen
 function reports_(days, max) {
   var out = [];
-  var query = 'has:attachment newer_than:' + days + 'd -in:trash -in:spam (filename:csv OR filename:xlsx OR filename:xls)';
+  var query = 'has:attachment newer_than:' + days + 'd -in:trash -in:spam (filename:csv OR filename:xlsx OR filename:xls OR filename:zip OR filename:html)';
   GmailApp.search(query, 0, 50).forEach(function (t) {
     t.getMessages().forEach(function (m) {
       m.getAttachments({includeInlineImages: false}).forEach(function (a, i) {

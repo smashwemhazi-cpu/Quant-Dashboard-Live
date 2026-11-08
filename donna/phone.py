@@ -7,7 +7,7 @@ so the server needs no public web address. Only the owner's Telegram account is 
 the bot gets nothing.
 
   python -m donna.phone          run the bot
-  python -m donna.phone pair     one-time setup: send /start to your bot, this saves your chat id
+  python -m donna.phone pair     one-time setup: tap Start (or send hi) to your bot, this saves your chat id
 """
 from __future__ import annotations
 
@@ -208,35 +208,59 @@ def set_env(values: dict[str, str], path: str = ENV_FILE) -> None:
     open(path, "w").write("\n".join(out) + "\n")
 
 
-def pair(wait_seconds: int = 180, path: str = ENV_FILE) -> str:
-    """Wait for the owner to send /start to the bot, then save their chat id and add the phone to the
-    personal targets (morning brief, urgent alerts)."""
+def pair(wait_seconds: int = 600, path: str = ENV_FILE) -> str:
+    """Wait for the owner to message the bot (Start, /start or any text), then save their chat id and add the
+    phone to the personal targets (morning brief, urgent alerts). Says what went wrong if nothing arrives."""
     if not token():
         return "No bot token yet."
     me = call("getMe")
     if "error" in me:
-        return f"The bot token was refused by Telegram: {me['error']}"
-    call("deleteWebhook")
-    print(f"Now open Telegram on your phone, search for @{me.get('username')}, tap Start (or send /start).")
-    end, offset = time.time() + wait_seconds, 0
+        return f"PHONE     not paired - Telegram refused the bot token: {me['error']}. Run vertex1-connect phone again."
+    hook = call("deleteWebhook")
+    if "error" in hook:
+        print(f"  (Telegram: {hook['error']})")
+    print(f"Now open Telegram on your phone, search for @{me.get('username')}, open it and tap Start "
+          f"(or just send it: hi). I'll wait {wait_seconds // 60} minutes.", flush=True)
+    end, offset, last_note, errors, others = time.time() + wait_seconds, 0, time.time(), [], 0
     while time.time() < end:
         r = call("getUpdates", offset=offset, timeout=20, allowed_updates=["message"])
+        if "error" in r:
+            errors.append(r["error"])
+            print(f"  Telegram says: {r['error']}", flush=True)
+            time.sleep(5)
+            continue
         for u in r.get("result") or []:
             offset = max(offset, int(u["update_id"]) + 1)
             m = u.get("message") or {}
-            if (m.get("text") or "").startswith("/start") and (m.get("chat") or {}).get("type") == "private":
-                chat, user = str(m["chat"]["id"]), str(m["from"]["id"])
-                current = dict(line.split("=", 1) for line in open(path).read().splitlines()
-                               if "=" in line and not line.lstrip().startswith("#")) if os.path.exists(path) else {}
-                targets = [t for t in current.get("JARVIS_PERSONAL_TARGETS", "discord:personal").strip('"').split(",")
-                           if t and not t.startswith("telegram:")] + [f"telegram:{chat}"]
-                set_env({"DONNA_TELEGRAM_CHAT_ID": chat, "DONNA_TELEGRAM_APPROVER_IDS": user,
-                         "JARVIS_PERSONAL_TARGETS": ",".join(targets)}, path)
-                call("getUpdates", offset=offset, timeout=0)     # mark /start as read
-                call("sendMessage", chat_id=chat, text="Paired. I'm D.O.N.N.A - your morning brief and urgent "
-                     "alerts will come here too. Try /tasks or /today.")
-                return f"PHONE     OK - paired with Telegram user {user}"
-    return "PHONE     not paired - no /start arrived in time. Run: vertex1-connect phone"
+            if (m.get("chat") or {}).get("type") != "private" or not m.get("from"):
+                others += 1                          # a group or channel message: not you in a private chat
+                continue
+            chat, user = str(m["chat"]["id"]), str(m["from"]["id"])
+            current = dict(line.split("=", 1) for line in open(path).read().splitlines()
+                           if "=" in line and not line.lstrip().startswith("#")) if os.path.exists(path) else {}
+            targets = [t for t in current.get("JARVIS_PERSONAL_TARGETS", "discord:personal").strip('"').split(",")
+                       if t and not t.startswith("telegram:")] + [f"telegram:{chat}"]
+            set_env({"DONNA_TELEGRAM_CHAT_ID": chat, "DONNA_TELEGRAM_APPROVER_IDS": user,
+                     "JARVIS_PERSONAL_TARGETS": ",".join(targets)}, path)
+            call("getUpdates", offset=offset, timeout=0)     # mark it as read
+            call("sendMessage", chat_id=chat, text="Paired. I'm D.O.N.N.A - your morning brief and urgent "
+                 "alerts will come here too. Try /tasks or /today.")
+            return f"PHONE     OK - paired with Telegram user {user}"
+        if time.time() - last_note >= 60:
+            last_note = time.time()
+            print(f"  still waiting for your message to @{me.get('username')}... "
+                  f"({max(0, int(end - time.time()) // 60)} min left)", flush=True)
+    if any("conflict" in e.lower() for e in errors):
+        why = ("another program is already reading this bot's messages (Telegram: 'Conflict'). "
+               "Run: systemctl stop vertex1-phone   then vertex1-connect phone again")
+    elif errors:
+        why = f"Telegram answered with an error: {errors[-1]}"
+    elif others:
+        why = "messages arrived, but from a group, not from you in a private chat with the bot"
+    else:
+        why = (f"nothing reached @{me.get('username')}. Check it is exactly that bot (the name BotFather gave you), "
+               "open it and tap Start or send hi")
+    return f"PHONE     not paired - {why}. Run: vertex1-connect phone (press Enter to keep the saved token)"
 
 
 if __name__ == "__main__":
