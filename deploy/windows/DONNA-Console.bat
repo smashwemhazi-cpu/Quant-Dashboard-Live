@@ -84,6 +84,8 @@ if not exist "%KEY%" (
   start "DONNA Console" "%DONNA_BAT%"
   exit /b 0
 )
+rem an older "start with Windows" shortcut (a minimised black window) is switched to the hidden one
+if exist "%STARTUP_LNK%" call :startup_shortcut
 call :linked && goto quiet_open
 call :launch_hidden
 for /l %%i in (1,1,30) do (

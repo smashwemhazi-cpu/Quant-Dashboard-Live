@@ -5,6 +5,12 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-09 · Day by day as a picture; startup always hidden
+
+**What was done:** Market vs me › Day by day is now one line a day: the market's move, a buys/sells bar, your net as a bar on one shared scale coloured with/against the market, and a one-line verdict ("Right side, still lost: entries, exits or size"). Tap a day for the full story and a button to its rules check. Filters show only days with / against the market, and "Table" brings back every number. The console file also switches any older "start with Windows" shortcut to the hidden one each time it runs.
+
+**Why:** SH asked whether the long day-by-day text would read better as a graph.
+
 ## 2026-11-09 · Market hours, Syntellicore off, cTrader API for trade history, console with no window at all
 
 **What was done:**
