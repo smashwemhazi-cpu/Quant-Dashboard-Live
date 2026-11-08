@@ -34,6 +34,7 @@ def test_agents_board_shows_ok_waiting_failing_and_run_now(tmp_path, monkeypatch
 
     monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
     monkeypatch.setattr(scheduler, "ALERT_TARGETS", [])
+    monkeypatch.setattr(scheduler, "market_closed", lambda name, now=None: False)   # a weekday, market open
     now = time.time()
     scheduler.save_last("daily_wrap", now - 3600)
     scheduler.save_last("inbox_triage", now - 600)

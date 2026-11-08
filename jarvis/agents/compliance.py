@@ -239,11 +239,13 @@ def kris() -> list[dict[str, Any]]:
     from jarvis.agents import ib
 
     s = ib.summary()
-    kri("IBs paid more than their clients earned", None if "error" in s else
-        sum(any(f["rule"] == "IB_REBATE_ABOVE_REVENUE" for f in x["flags"]) for x in s["ibs"]), 1, 2)
+    if not s.get("off"):      # a source DONNA doesn't use (Syntellicore switched off) gets no indicator at all
+        kri("IBs paid more than their clients earned", None if "error" in s else
+            sum(any(f["rule"] == "IB_REBATE_ABOVE_REVENUE" for f in x["flags"]) for x in s["ibs"]), 1, 2)
     q = bo.kyc_summary()
-    kri("KYC docs pending > 2 days", None if "error" in q else len(q["pending_over_2d"]), 3, 10, source="docs")
-    kri("Oldest pending KYC (days)", None if "error" in q else q["oldest_pending_days"], 3, 14, source="docs")
+    if not q.get("off"):
+        kri("KYC docs pending > 2 days", None if "error" in q else len(q["pending_over_2d"]), 3, 10, source="docs")
+        kri("Oldest pending KYC (days)", None if "error" in q else q["oldest_pending_days"], 3, 14, source="docs")
     b = bo.book_summary()
     kri("Accounts near stop-out", None if "error" in b else len(b["margin_alerts"]), 1, 3, source="eod")
     kri("Largest client share of equity %", None if "error" in b or not b["top_account"] else

@@ -934,10 +934,23 @@ def score_one(key: str, now: datetime | None = None, tg: dict[str, dict[str, Any
     return t
 
 
+# KPIs built only on an export from a source DONNA may not use (jarvis.core.markets.source_off): while it is switched
+# off they are left out of every score and listed as "not used", never as missing or red
+EXPORT_OF: dict[str, str] = {"crm_conversion": "leads", "crm_stale_leads": "leads", "co_kyc_pending": "docs"}
+
+
+def unused() -> list[str]:
+    """KPI keys whose only source is switched off (Syntellicore)."""
+    from jarvis.core import markets
+
+    return [k for k, kind in EXPORT_OF.items() if markets.source_off(kind)]
+
+
 def scorecard(dept: str | None = None, now: datetime | None = None) -> list[dict[str, Any]]:
     now = now or datetime.now(timezone.utc)
     tg = targets()
-    keys = [k for k, t in tg.items() if dept is None or t["dept"] == dept]
+    off = set(unused())
+    keys = [k for k, t in tg.items() if (dept is None or t["dept"] == dept) and k not in off]
     states = _states() if any(k in SOURCES for k in keys) else None
     return [score_one(k, now, tg, states) for k in keys]
 
@@ -962,7 +975,7 @@ def brake(rows: list[dict[str, Any]] | None = None, now: datetime | None = None)
     """Protect KPIs that are red and should slow growth down: the names of what's wrong, or []."""
     if rows is None:
         tg = targets()
-        rows = [score_one(k, now, tg) for k in BRAKE_KEYS]
+        rows = [score_one(k, now, tg) for k in BRAKE_KEYS if k not in unused()]
     return [r["name"] for r in rows if r["key"] in BRAKE_KEYS and r["status"] == "RED"]
 
 
@@ -983,6 +996,9 @@ def scorecard_text(dept: str | None = None, now: datetime | None = None) -> str:
         g = sorted([r for r in rows if r["dept"] == key], key=lambda r: ORDER[r["status"]])
         if g:
             L += ["", name.upper()] + [_line(r) for r in g]
+    off = [targets()[k]["name"] for k in unused() if dept is None or STARTER[k][0] == dept]
+    if off:
+        L += ["", "NOT USED (Syntellicore is switched off, so these are not scored): " + "; ".join(off)]
     L += ["", "Change a target: !kpi set <name> <target> [amber]   All names: !kpi targets   One lead: !kpi lead 12"]
     return "\n".join(L)
 

@@ -213,6 +213,10 @@ def review(client: Any = None) -> str:
     for e in judged:
         L.append(f"RESULT: experiment #{e['id']} {e['status'].upper()} - {exp_line(e)}")
     if not data:
+        from jarvis.core import markets
+
+        if markets.source_off("leads"):
+            return "\n".join(L + ["The growth review reads the CRM leads export, which is " + markets.NOT_USED + "."])
         return "\n".join(L + ["NO DATA - upload the Syntellicore leads/customers export so I can review growth."])
     if client is None and not os.getenv("ANTHROPIC_API_KEY"):
         return "\n".join(L + ["ANTHROPIC_API_KEY not set - the growth review needs the Claude API.", "", data])
@@ -265,6 +269,10 @@ class CopilotAgent(Agent):
         today = today or date.fromisoformat(_today())
         if today.weekday() != GROWTH_WEEKDAY:
             return {"skipped": "not review day"}
+        from jarvis.core import markets
+
+        if markets.source_off("leads"):   # the review is written from the CRM export: nothing to review, no nag
+            return {"skipped": "CRM leads " + markets.NOT_USED}
         text = review()
         if not send:
             return {"text": text}

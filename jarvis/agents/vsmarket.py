@@ -103,7 +103,7 @@ def joined(days: int) -> tuple[pd.DataFrame, dict[str, Any]]:
 
     d = edge.load(days)
     if d.empty:
-        return d, {"error": "NO DATA - no closed trades yet (cTrader feed not connected and no statement uploaded)"}
+        return d, {"error": "NO DATA - no closed trades yet (they come from your cTrader account by themselves once it is connected - !status)"}
     gap = (d.start - d.t.shift()).dt.total_seconds() / 60
     d["tilt"] = (d.net.shift() < 0) & (gap < TILT_MIN)
     d["big"] = d["size"].isin(["1.5-3x usual", "over 3x usual"])

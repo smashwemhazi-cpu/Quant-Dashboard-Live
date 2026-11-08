@@ -71,7 +71,7 @@ def discipline(days: int = 30) -> dict[str, Any]:
 
     d = edge.load(days * 2 + 1)
     if d.empty:
-        return {"error": "NO DATA - no closed trades yet (cTrader feed or !journal upload)"}
+        return {"error": "NO DATA - no closed trades yet (they come from your cTrader account by themselves - !status)"}
     lim = _limits()
     cut = d.t.max() - pd.Timedelta(days=days)
     rows = _day_rows(d, lim)

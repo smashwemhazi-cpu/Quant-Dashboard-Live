@@ -86,7 +86,7 @@ def facts(today: date | None = None) -> dict[str, Any]:
         "kri": {s: sum(1 for k in kris if str(k["status"]).upper() == s) for s in ("RED", "AMBER", "GREEN", "STALE")},
         "kri_red": [f"{k['kri']}: {k['value']}"[:110] for k in kris if str(k["status"]).upper() == "RED"][:3],
         "feeds_old": [r["name"] for r in fd if r["state"] in ("old", "never") and r["kind"] != "live"],
-        "feeds_total": sum(1 for r in fd if r["kind"] != "live"),
+        "feeds_total": sum(1 for r in fd if r["kind"] != "live" and r["state"] != "off"),
         "equity": (snaps[0]["equity"], snaps[-1]["equity"]) if snaps else None,
         "closed_pnl": round(sum(t["net"] or 0 for t in trades), 2), "closed_trades": len(trades),
     }

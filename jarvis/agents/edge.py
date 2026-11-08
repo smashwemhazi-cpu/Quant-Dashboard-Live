@@ -294,7 +294,7 @@ def replay(d: pd.DataFrame) -> list[dict[str, Any]]:
 def report(days: int = DAYS) -> dict[str, Any]:
     d = load(days)
     if d.empty:
-        return {"error": "NO DATA - no closed trades yet (cTrader feed not connected and no statement uploaded)"}
+        return {"error": "NO DATA - no closed trades yet (they come from your cTrader account by themselves once it is connected - !status)"}
     s = stats(d.net)
     held = d[d.hold_min.notna()].copy()
     if len(held):

@@ -174,7 +174,7 @@ def needs_you() -> list[str]:
         old = sorted({backoffice.data_age(s) for s in ("docs", "eod", "activity")} - {(None, None)})
         old = [(a, n) for a, n in old if n > backoffice.STALE_DAYS]
         if old:
-            items.append((1, f"Back-office exports are {max(n for _, n in old)} days old - risk numbers can't be "
+            items.append((1, f"Back-office exports are {max(n for _, n in old)} working days old - risk numbers can't be "
                              "trusted until fresh ones are uploaded (Vertex1-Upload)"))
         overdue = [c for c in compliance.list_cases() if c["due"] and c["due"] < today]
         if overdue:

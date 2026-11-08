@@ -27,7 +27,7 @@ from typing import Any
 
 import pandas as pd
 
-from jarvis.core import audit
+from jarvis.core import audit, markets
 from jarvis.core.config import settings
 from jarvis.core.registry import Agent, register, tool
 
@@ -491,6 +491,8 @@ def book_summary() -> dict[str, Any]:
 
 
 def kpi_summary() -> dict[str, Any]:
+    if markets.source_off("kpi"):
+        return {"error": "CRM KPIs " + markets.NOT_USED, "off": True}
     with _db() as c:
         dates = [r[0] for r in c.execute("SELECT DISTINCT asof FROM bo_kpi ORDER BY asof DESC LIMIT 2")]
         if not dates:
@@ -504,15 +506,23 @@ STALE_DAYS = int(os.getenv("JARVIS_DATA_STALE_DAYS", "3"))
 
 
 def data_age(kind: str, today: date | None = None) -> tuple[str | None, int | None]:
-    """(export date, age in days) of the newest ingested export of this kind: eod, docs, activity, streams, kpi."""
+    """(export date, age in WORKING days) of the newest ingested export of this kind: eod, docs, activity, streams,
+    kpi. Reports are made Monday to Friday, so Friday's report is still current on Sunday. A source DONNA doesn't
+    use (Syntellicore while switched off) has no age at all: it never counts as old or missing."""
+    from jarvis.core import markets
+
+    if markets.source_off(kind):
+        return None, None
     with _db() as c:
         row = c.execute("SELECT value FROM bo_meta WHERE key = ?", (f"last_{kind}",)).fetchone()
     if not row:
         return None, None
-    return row[0], ((today or date.today()) - date.fromisoformat(row[0][:10])).days
+    return row[0], markets.working_days_between(date.fromisoformat(row[0][:10]), today or date.today())
 
 
 def kyc_summary(today: pd.Timestamp | None = None) -> dict[str, Any]:
+    if markets.source_off("docs"):
+        return {"error": "KYC documents " + markets.NOT_USED, "off": True}
     today = (today or pd.Timestamp.now()).normalize()
     with _db() as c:
         d = pd.read_sql_query("SELECT * FROM bo_docs", c)
@@ -598,7 +608,9 @@ def report_lines(team: bool = False) -> list[str]:
     L: list[str] = []
     flags = 0  # client-level items withheld from the team version
     k = kpi_summary()
-    if "error" in k:
+    if k.get("off"):
+        pass                                   # Syntellicore not used: no CRM section at all
+    elif "error" in k:
         L.append(f"CRM KPIs: {k['error']}")
     else:
         v, p = k["kpis"], k["prev"]
@@ -681,8 +693,11 @@ def report_lines(team: bool = False) -> list[str]:
             if s["markup_changed"]:
                 L.append(f"  Markup changed on {len(s['markup_changed'])} symbols since {s['prev_asof']} - confirm intended")
     q = kyc_summary()
-    L.append("")
-    if "error" in q:
+    if not q.get("off"):
+        L.append("")
+    if q.get("off"):
+        pass                                   # Syntellicore not used: no KYC queue section
+    elif "error" in q:
         L.append(f"KYC: {q['error']}")
     else:
         L.append(f"KYC QUEUE: {q['pending_docs']} docs pending for {q['pending_customers']} customers "

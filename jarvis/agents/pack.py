@@ -52,6 +52,10 @@ def _oblig_lines() -> list[str]:
 def _growth_lines() -> list[str]:
     from jarvis.agents import copilot
 
+    from jarvis.core import markets
+
+    if markets.source_off("leads"):
+        return ["CRM leads: " + markets.NOT_USED + "."]
     f = copilot.facts()
     return f.splitlines() if f else ["No leads export received yet."]
 

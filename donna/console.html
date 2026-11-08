@@ -219,8 +219,8 @@
   const SVGNS = "http://www.w3.org/2000/svg";
   const STATE_CLS = { "running": "running", "partly waiting on setup": "waiting", "needs a fix": "fix", "on demand": "demand" };
   const STATE_COL = { running: "#38d996", waiting: "#f5b942", fix: "#ff6b7d", demand: "#8ea3c4" };
-  const JOB_CLS = { ok: "running", waiting: "waiting", failing: "fix", not_run: "demand" };
-  const JOB_TXT = { ok: "OK", waiting: "waiting on setup", failing: "failing", not_run: "not run yet" };
+  const JOB_CLS = { ok: "running", waiting: "waiting", failing: "fix", resting: "demand", not_run: "demand" };
+  const JOB_TXT = { ok: "OK", waiting: "waiting on setup", failing: "failing", resting: "resting, market closed", not_run: "not run yet" };
   function el(tag, attrs, parent) {
     const e = document.createElementNS(SVGNS, tag);
     Object.entries(attrs || {}).forEach(([k, v]) => { if (v !== null && v !== undefined) e.setAttribute(k, v); });
