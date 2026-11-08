@@ -3,6 +3,7 @@
   !tasks                         open tasks, overdue first
   !done 12 [13 ...]              mark tasks done (or click the ✓ button under !tasks)
   !undo 12                       put a task ticked by mistake back on the list
+  !task 12 / !email 14           what it's about, where it came from, and the next step
   !edit 12 due friday            change a task's date, urgency (urgent / normal) or title
   !add Call LP about XAU spreads | 2026-10-24 | high     (date and priority optional)
   !today                         the my-day brief (calendar, tasks, inbox, trading, bots)
@@ -50,6 +51,7 @@ HELP = ("D.O.N.N.A commands:\n"
         "!tasks                     open tasks\n"
         "!done 12 13                mark tasks done (or click the ✓ buttons under !tasks)\n"
         "!undo 12                   put task 12 back if you ticked it by mistake\n"
+        "!task 12   !email 14       what a task or email is about, the email itself, and the next step\n"
         "!edit 12 due friday        change a task: due <date|tomorrow|none>, urgent, normal, title <new words>\n"
         "!add <title> | YYYY-MM-DD | high/medium/low\n"
         "!draft 12 <note>           reply to task 12's email, saved in Gmail Drafts (never sent)\n"
@@ -285,6 +287,12 @@ def handle(text: str, channel: str = "") -> str | None:
             return "Usage: !done 12 13"
         res = [f"Task {i} {'marked done' if assistant.complete_task(i) else 'not found, or already done'}." for i in ids]
         return "\n".join(res) + "\n\n" + tasks_text()
+    if cmd == "!task":
+        m = re.fullmatch(r"\s*#?(\d+)\s*", rest)
+        return assistant.task_detail(int(m.group(1))) if m else "Usage: !task 4 - what task 4 is about and what to do next"
+    if cmd == "!email":
+        m = re.fullmatch(r"\s*[Ee]?(\d+)\s*", rest)
+        return assistant.email_detail(int(m.group(1))) if m else "Usage: !email 14 - email E14 in full and what to do next"
     if cmd in ("!undo", "!reopen"):
         ids = [int(x) for x in re.findall(r"\d+", rest)]
         if not ids:

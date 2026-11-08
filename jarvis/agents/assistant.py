@@ -196,7 +196,8 @@ def tasks_text() -> str:
     i = rows[0]["id"]
     L += ["", "WHAT YOU CAN TYPE (or click a task's ✓ button below / in the console)",
           f"!done {i} - task {i} is finished      !undo {i} - put it back if ticked by mistake",
-          f"!edit {i} due friday - change the date (also: urgent, normal, title <new words>)"]
+          f"!edit {i} due friday - change the date (also: urgent, normal, title <new words>)",
+          f"!task {i} - what it's about, the email behind it, and the next step"]
     if eg:
         L.append(f"!draft {eg} - I write the email reply for task {eg}, you check it and press send")
     return "\n".join(L)
@@ -464,10 +465,108 @@ def draft_reply(task_id: int, note: str = "", client: Any = None) -> dict[str, A
     return {"draft": text, "saved": True}
 
 
+# ------------------------------------------------------------------ "what is this?" - one task or email in full
+_NEXT_STEP = {
+    "regulator": "Read it in full today and note any deadline; it's from a regulator.",
+    "kyc_compliance": "Check the client's file and KYC documents, then reply.",
+    "payments": "Check the payment in the back office or PSP portal first, then reply.",
+    "liquidity_provider": "Check it against the LP agreement or price feed, then reply.",
+    "client": "Check the client's account, then reply. If it's a complaint, log it: !complaints.",
+}
+
+
+def next_step(e: dict[str, Any] | None, task: dict[str, Any] | None = None) -> str:
+    """One plain suggestion for what to do next, from the rules (no Claude needed)."""
+    if task and task.get("status") == "done":
+        return f"Nothing - task {task['id']} is ticked done. Ticked by mistake? !undo {task['id']}"
+    if e is None:
+        return (f"Do it, then tick it: !done {task['id']}" if task else "Nothing to do.")
+    open_id = task["id"] if task and task.get("status") == "open" else None
+    if e["category"] in ("newsletter", "vendor_marketing", "spam") or looks_bulk(
+            e["subject"] or "", (e["summary"] or "").removeprefix("[rules]"), f"@{e['sender_domain']}"):
+        return ("It's a promotion or newsletter - no answer needed."
+                + (f" Tick the task away: !done {open_id}" if open_id else "")
+                + f" To stop seeing this sender: !waiting mute {e['sender_domain']}")
+    if not e["needs_reply"]:
+        return "No reply needed - it's for your information." + (f" Tick it when done: !done {open_id}" if open_id else "")
+    step = _NEXT_STEP.get(e["category"], "Read it, then reply.")
+    if open_id:
+        step += f" Type !draft {open_id} and I'll write the reply into your Gmail Drafts for you to check and send."
+    return step + " Dealt with it another way? " + (f"!done {open_id}" if open_id else f"!waiting done E{e['ref']}")
+
+
+def _email_lines(e: dict[str, Any], full: bool = True) -> list[str]:
+    from urllib.parse import quote
+
+    when = str(e["received"])[:16].replace("T", " ")
+    L = [f"From: {e['sender_domain']}", f"Received: {when} UTC",
+         f"Subject: {e['subject']}",
+         f"Sorted as: {str(e['category']).replace('_', ' ')}, {'urgent' if e['urgency'] == 'high' else e['urgency']}"
+         f"{', needs your reply' if e['needs_reply'] else ''}"]
+    summary = str(e["summary"] or "").removeprefix("[rules]").strip()
+    body = ""
+    if full and google_bridge.configured():
+        try:
+            m = google_bridge.call("message", id=e["msg_id"])
+            body = re.sub(r"\s+", " ", mask(str(m.get("body") or ""))).strip() if "error" not in m else ""
+        except Exception:  # noqa: BLE001 - the stored summary still answers
+            body = ""
+    if body:
+        L += ["", "What it says (start of the email):", body[:700] + ("..." if len(body) > 700 else "")]
+    elif summary:
+        L += ["", "What it says (summary):", summary[:400]]
+    if str(e["msg_id"]).startswith("<"):
+        L += ["", "Open it in Gmail: https://mail.google.com/mail/u/0/#search/rfc822msgid%3A"
+              + quote(str(e["msg_id"]).strip("<>"), safe="")]
+    return L
+
+
+def _email_row(c: sqlite3.Connection, ref: int | None = None, msg_id: str | None = None) -> dict[str, Any] | None:
+    row = c.execute("SELECT rowid AS ref, * FROM email_seen WHERE " + ("rowid = ?" if ref is not None else "msg_id = ?"),
+                    (ref if ref is not None else msg_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def task_detail(task_id: int, full: bool = True) -> str:
+    """!task 4: what task 4 is about, where it came from and what to do next."""
+    with _db() as c:
+        t = c.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if not t:
+            return f"There's no task {task_id}. Type !tasks to see your list."
+        t = dict(t)
+        e = _email_row(c, msg_id=t["source_ref"]) if t["source"] == "email" else None
+    L = [task_line(t) + (" (done)" if t["status"] == "done" else ""), ""]
+    if e:
+        L += ["Where it came from: an email (E" + str(e["ref"]) + ")"] + _email_lines(e, full)
+    else:
+        src = {"discord": "you added it in Discord", "manual": "you added it", "console": "you added it in the console"}
+        L.append("Where it came from: " + src.get(t["source"], f"{t['source']}"))
+        if t.get("detail"):
+            L.append("Note: " + str(t["detail"])[:400])
+    L += ["", "NEXT STEP", next_step(e, t)]
+    return "\n".join(L)
+
+
+def email_detail(ref: int, full: bool = True) -> str:
+    """!email 14: one email DONNA sorted, in full, and what to do next."""
+    with _db() as c:
+        e = _email_row(c, ref=ref)
+        if not e:
+            return f"There's no email E{ref}. Type !waiting to see the emails waiting on you."
+        t = c.execute("SELECT * FROM tasks WHERE source_ref = ? ORDER BY status = 'open' DESC, id LIMIT 1",
+                      (e["msg_id"],)).fetchone()
+    t = dict(t) if t else None
+    L = [f"EMAIL E{ref}"] + _email_lines(e, full)
+    if t:
+        L += ["", "Task from it: " + task_line(t) + (" (done)" if t["status"] == "done" else "")]
+    L += ["", "NEXT STEP", next_step(e, t)]
+    return "\n".join(L)
+
+
 def inbox_status(hours: int = 24) -> dict[str, Any]:
     since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     with _db() as c:
-        rows = [dict(r) for r in c.execute("SELECT * FROM email_seen WHERE processed_at >= ? ORDER BY "
+        rows = [dict(r) for r in c.execute("SELECT rowid AS ref, * FROM email_seen WHERE processed_at >= ? ORDER BY "
                                            "CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END", (since,))]
     return {"emails": len(rows), "needs_reply": [r for r in rows if r["needs_reply"]],
             "high": [r for r in rows if r["urgency"] == "high"]}

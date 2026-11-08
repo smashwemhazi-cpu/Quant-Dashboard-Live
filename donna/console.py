@@ -61,11 +61,17 @@ def state() -> dict[str, Any]:
         c = assistant.calendar_events()
         return c if "error" in c else c["events"][:12]
 
+    def _promo(r: dict[str, Any]) -> bool:   # promos and newsletters never crowd the inbox panel
+        return r["category"] in ("newsletter", "vendor_marketing", "spam") or assistant.looks_bulk(
+            r["subject"] or "", str(r["summary"] or "").removeprefix("[rules]"), f"@{r['sender_domain']}")
+
     def mail() -> dict[str, Any]:
         ib = assistant.inbox_status()
         return {"connected": assistant.inbox_connected(), "analysed_24h": ib["emails"],
-                "urgent": [{"subject": r["subject"][:90], "summary": r["summary"][:160]} for r in ib["high"][:5]],
-                "reply": [{"subject": r["subject"][:90], "from": r["sender_domain"]} for r in ib["needs_reply"][:5]]}
+                "urgent": [{"ref": r["ref"], "subject": r["subject"][:90], "summary": r["summary"][:160]}
+                           for r in ib["high"] if not _promo(r)][:5],
+                "reply": [{"ref": r["ref"], "subject": r["subject"][:90], "from": r["sender_domain"]}
+                          for r in ib["needs_reply"] if not _promo(r)][:5]}
 
     def kris() -> Any:
         ks = compliance.kris()
