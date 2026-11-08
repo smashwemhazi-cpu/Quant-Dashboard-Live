@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEPLOY = ROOT / "deploy"
 
 
-@pytest.mark.parametrize("script", ["install.sh", "vertex1-connect", "vertex1-update", "vertex1-backup"])
+@pytest.mark.parametrize("script", ["install.sh", "vertex1-connect", "vertex1-update", "vertex1-backup", "vertex1-console-key"])
 def test_deploy_scripts_parse(script):
     subprocess.run(["bash", "-n", str(DEPLOY / script)], check=True)
 
@@ -141,3 +141,56 @@ def test_auto_update_does_not_print_first_time_setup_steps():
     assert gate < install.index('echo "Next:"')
     assert "VERTEX1_SKIP_APT=1 bash" in (DEPLOY / "vertex1-update").read_text()
     assert "LogLevel=ERROR" in (DEPLOY / "windows" / "DONNA-Console.bat").read_text()
+
+
+_PUB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGq0v3Jm0x5Yb0d9yR7mQm3Vt1rS2cJdXbH1kP8uWQ7e donna-console"
+
+
+def _console_key(tmp_path, stdin):
+    import os
+
+    auth = tmp_path / "ssh" / "authorized_keys"
+    run = subprocess.run(["bash", str(DEPLOY / "vertex1-console-key")], input=stdin, capture_output=True, text=True,
+                         env={**os.environ, "VERTEX1_AUTH_KEYS": str(auth)})
+    return run, auth
+
+
+def test_console_key_is_locked_to_donnas_link_only(tmp_path):
+    run, auth = _console_key(tmp_path, _PUB + "\r\n")  # Windows sends CRLF
+    assert run.returncode == 0, run.stderr
+    line = auth.read_text().strip()
+    assert line.startswith('restrict,port-forwarding,permitopen="127.0.0.1:8080",command="')
+    assert "exec sleep infinity" in line and line.endswith(" donna-console")
+    assert (auth.stat().st_mode & 0o777) == 0o600
+    again, _ = _console_key(tmp_path, _PUB)
+    assert again.returncode == 0 and "already" in again.stdout
+    assert len(auth.read_text().splitlines()) == 1
+
+
+def test_console_key_keeps_existing_keys_and_refuses_junk(tmp_path):
+    auth = tmp_path / "ssh" / "authorized_keys"
+    auth.parent.mkdir()
+    auth.write_text("ssh-rsa AAAAB3Nza existing")  # no trailing newline
+    run, _ = _console_key(tmp_path, _PUB)
+    lines = auth.read_text().splitlines()
+    assert run.returncode == 0 and lines[0] == "ssh-rsa AAAAB3Nza existing" and lines[1].startswith("restrict,")
+    for junk in ["", "ssh-rsa AAAAB3Nza x", 'ssh-ed25519 AAAA" ,command="sh"', "ssh-ed25519 AAAA donna;rm"]:
+        bad, _ = _console_key(tmp_path, junk)
+        assert bad.returncode == 2
+    assert len(auth.read_text().splitlines()) == 2
+    import os   # the console sends the key as arguments (no stdin needed for the password prompt)
+    other = _PUB.replace("AAAAIGq0", "AAAAIGq1").split()
+    run = subprocess.run(["bash", str(DEPLOY / "vertex1-console-key"), *other], capture_output=True, text=True,
+                         env={**os.environ, "VERTEX1_AUTH_KEYS": str(auth)})
+    assert run.returncode == 0 and len(auth.read_text().splitlines()) == 3
+
+
+def test_console_runs_hidden_and_reconnects_with_its_own_key():
+    bat = (DEPLOY / "windows" / "DONNA-Console.bat").read_bytes()
+    assert b"\r\n" in bat and b"\n" not in bat.replace(b"\r\n", b"")  # CRLF so cmd's goto/labels are reliable
+    text = bat.decode()
+    for label in ["link", "boot", "stop", "setup", "open", "password", "linked", "launch_hidden", "kill_link"]:
+        assert f"\r\n:{label}\r\n" in text
+    assert "vertex1-console-key" in text and "BatchMode=yes" in text and "IdentitiesOnly=yes" in text
+    assert "donna_console_ed25519" in text and "-WindowStyle Hidden" in text and "goto again" in text
+    assert "vertex1-console-key" in (DEPLOY / "install.sh").read_text()

@@ -395,9 +395,13 @@ def poll() -> dict[str, Any]:
     try:   # PAD checks of the owner's own trades; a problem there must never stop the feed
         from jarvis.agents import pad
 
-        pad.record(login, snap["positions"], snap["closed"], snap["equity"])
+        new_flags = pad.record(login, snap["positions"], snap["closed"], snap["equity"]).get("new_flags", [])
     except Exception as e:
+        new_flags = []
         audit.log("ctrader_feed", "pad_error", {"error": f"{type(e).__name__}: {str(e)[:200]}"})
+    from jarvis.agents import guard   # live discipline taps (cool-off, trade count, PAD flags); never raises
+
+    guard.check(login, snap.get("balance"), new_flags)
     if snap["synced_to_ms"]:
         _mark_synced(login, snap["synced_to_ms"])
     audit.log("ctrader_feed", "snapshot", {"positions": len(snap["positions"]), "unpriced": snap["unpriced"],

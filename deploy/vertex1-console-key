@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Lets the DONNA Console on SH's PC connect by itself, with no password and no black window.
+# DONNA-Console.bat sends this PC's public key once, over a normal password login:
+#   ssh root@server vertex1-console-key ssh-ed25519 AAAA... donna-console     (or the key on stdin)
+# The key is locked down on the server: it can ONLY open the private link to DONNA's console
+# (127.0.0.1:8080). No shell, no files, no other ports. Your normal password login is unchanged.
+# Remove a PC: delete its "donna-console" line from /root/.ssh/authorized_keys.
+set -euo pipefail
+AUTH=${VERTEX1_AUTH_KEYS:-/root/.ssh/authorized_keys}
+LINK_CMD='systemctl is-active -q vertex1-donna || systemctl enable -q --now vertex1-donna; exec sleep infinity'
+
+if (( $# )); then line="$*"; else IFS= read -r line || true; fi
+line=${line%$'\r'}
+if [[ ! $line =~ ^ssh-ed25519\ ([A-Za-z0-9+/]+={0,2})(\ [A-Za-z0-9._@-]*)?$ ]]; then
+  echo "That is not a DONNA console key - nothing was changed." >&2
+  exit 2
+fi
+body=${BASH_REMATCH[1]}
+
+install -d -m 700 "$(dirname "$AUTH")"
+touch "$AUTH" && chmod 600 "$AUTH"
+if grep -qF "$body" "$AUTH"; then
+  echo "This PC already has its DONNA console key."
+  exit 0
+fi
+[[ -s $AUTH && -n $(tail -c1 "$AUTH") ]] && echo >> "$AUTH"   # never glue our line onto the last one
+printf 'restrict,port-forwarding,permitopen="127.0.0.1:8080",command="%s" ssh-ed25519 %s donna-console\n' \
+  "$LINK_CMD" "$body" >> "$AUTH"
+echo "Done: this PC can now open DONNA's console link by itself."

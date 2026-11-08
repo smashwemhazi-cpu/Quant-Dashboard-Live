@@ -282,13 +282,29 @@ cTrader already emails you the "Accounts EOD report" every evening, from trade@a
 
 Attach your policy PDFs, Word files or text files in Discord to a message that says `!policy add`. Then ask: `!policy what does our AML policy say about PEPs?`, or ask the console out loud. You get the three passages that answer it, each with the document and page. These are the words themselves, not a summary, and the search runs on the server with no Claude credit. `!policy list` shows what she has read; `!policy remove <name>` forgets one. A scanned PDF has no text to search, so export it as a text PDF or Word file.
 
+## Discipline guard (live, on your phone)
+
+DONNA watches your own trades as they happen (read-only, every 5 minutes) and taps you on your phone and in Discord the moment one of your rules is at risk. She never places, changes or closes a trade.
+- **Cool-off:** a losing trade just closed, so no new trade for 15 minutes. Your own history (`!edge`) shows trades opened within 5 minutes of a loss lose money while the rest make money.
+- **Too soon:** you opened a trade inside that cool-off (one tap per cool-off, however many trades follow).
+- **Big loss:** a single loss bigger than 1% of the balance: put the hard stop in before the next entry.
+- **Trade count:** a heads-up at 8 of 10 trades today, and a stop at 10 (PAD s.6.2).
+- **Losing run:** 3 losses in a row today: stop for the day.
+- **PAD flags:** any new PAD policy flag (no stop, risk over 2%, restricted symbol, no pre-clearance...) as soon as it is seen.
+
+Each tap goes out once, only for trades from the last 30 minutes, at any hour you are trading; `!quiet 2h` still silences them. `!guard` shows today's state. Settings: `DONNA_COOLOFF_MIN` (15), `DONNA_GUARD_LOSS_PCT` (1), `DONNA_GUARD_STREAK` (3), `DONNA_GUARD=0` to switch off.
+
 ## Your week on one page
 
 Every Friday afternoon (`DONNA_WEEKLY_WEEKDAY`, `JARVIS_WEEKLY_UTC_HOUR`) DONNA sends a one-page PDF to your personal channel and phone. It has four big numbers (tasks closed, replies you owe, emails sorted, KPIs in red) and a bar chart of each day. It also shows what slipped, what's due next week, your account, the compliance indicators, the KPI scorecard, how fresh the data is, and "Start next week with": the three things to do first. Any time: `!weekly` in Discord (PDF attached), `/weekly` on the phone, or in the console open http://localhost:8765/console/weekly.pdf.
 
 ## DONNA Console (her face and voice)
 
-Double-click **DONNA-Console.bat** on your PC and type your server password. A window opens with:
+Double-click **DONNA-Console.bat** on your PC. **The first time only** it sets this PC up: type your server password once, and press Y if you want DONNA to connect by herself whenever Windows starts. After that there is **no black window to keep open**: the private link runs hidden in the background, reconnects by itself after sleep, a Wi-Fi drop or a server restart, and double-clicking the file just opens her window (instantly if the link is already up). Closing her window does not disconnect anything.
+
+The PC gets its own key for this. On the server the key is locked down: it can only open the link to DONNA's console, with no shell and no files, so your normal password login is unchanged (`deploy/vertex1-console-key`). To stop the background link and stop it starting with Windows, press Win+R, type `cmd`, and run `"%USERPROFILE%\OneDrive\Desktop\DONNA-Console.bat" stop` (use the path where your file is). If the key ever stops working (for example the server was rebuilt), the file says so and offers to set the PC up again, or to use your password just that once.
+
+A window opens with:
 - her animated orb;
 - your calendar, inbox highlights, tasks and risk panels, refreshed every minute;
 - **Your agents**: the seven duties from her mandate, each with a light (green running, amber waiting on setup, red needs a fix). Click a duty for the `!hq` view, or **details** for every agent. Ask "what can you do?" for her mandate.
@@ -305,11 +321,11 @@ How to use it:
 **On another Windows PC** (Windows 10 or 11, nothing to install):
 1. Download the file: open https://raw.githubusercontent.com/smashwemhazi-cpu/Quant-Dashboard-Live/main/deploy/windows/DONNA-Console.bat, press Ctrl+S, and save it to the Desktop as `DONNA-Console.bat` (choose "All files" as the type if Windows offers ".txt"). Or copy the file from your first PC on a USB stick or by email to yourself.
 2. Double-click it. The first time only, Windows asks "Are you sure you want to continue connecting (yes/no)?". Type `yes` and press Enter. That is the PC meeting your server for the first time.
-3. Type your server password (nothing shows while you type) and press Enter. The console opens by itself.
+3. Type your server password once (nothing shows while you type) and press Enter, then Y or N for starting with Windows. The console opens by itself, and from then on that PC connects without a password or a window.
 If Windows shows "Windows protected your PC", click **More info → Run anyway**: the file is a plain text script you can open in Notepad to read.
 
 Privacy and limits:
-- The console is not on the internet. It travels inside the same private SSH link as your server login, and it closes when you close the black window.
+- The console is not on the internet. It travels inside a private SSH link to your server, which only your PC can open.
 - Speech recognition in Edge and Chrome sends your voice to Microsoft or Google to turn into text. If that is not acceptable for a conversation, type instead.
 - She needs Claude API credit to talk. Commands like `!tasks` work without it.
 
