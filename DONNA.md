@@ -201,8 +201,14 @@ Schedule the cTrader and Syntellicore reports to be emailed to simba@vertex1brok
 The same DONNA in your pocket: commands, ✓ buttons, Approve/Reject buttons, the morning brief, urgent alerts and the Friday page as a PDF. It needs no public web address.
 1. In Telegram, open **@BotFather**, send `/newbot`, give it a name (DONNA) and a username ending in `bot`. Copy the token it gives you.
 2. On the server: `vertex1-connect phone`, paste the token (nothing shows while you paste).
-3. When it says so, open your new bot in Telegram and tap **Start**. DONNA saves your account, so only you are answered. Strangers who find the bot get nothing.
+3. When it says so, open your new bot in Telegram and tap **Start** (or just send it `hi`). You have 10 minutes. DONNA saves your account, so only you are answered. Strangers who find the bot get nothing.
+
+If the bot doesn't answer: run `vertex1-connect phone` again and press Enter at the token question to keep the saved token. Then message the bot while it says "I'll wait 10 minutes". The bot only answers once the server shows `PHONE     OK - paired` and then `PHONE     active`. If pairing fails, the last line says why, for example the wrong bot or another program reading its messages.
 Then type the same commands with `/` or `!`: `/tasks` (with ✓ buttons), `/today`, `/waiting`, `/task 4`, `/policy gifts`, `/weekly`. You can also just ask "what's on today?".
+
+## cTrader's daily EOD report by email
+
+cTrader already emails you the "Accounts EOD report" every evening, from trade@alerts.ctrader.com, with `EOD_Report_USD.html.zip` attached. DONNA reads it by herself: balance, equity, margin and floating P&L per account (account numbers only, no names). It feeds the client-risk and margin KRIs, the KPIs and `!feeds`. It needs the Google bridge version 6. Paste the new `deploy/google-bridge.gs` at script.google.com, save, then Deploy > Manage deployments > pencil > Version: New version > Deploy. The link and key stay the same. cTrader's sender is always accepted, even when you have set your own report senders. You can also drop the zip into Discord as an upload.
 
 ## Ask your policies
 

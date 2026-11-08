@@ -58,7 +58,8 @@ ask ctrader DONNA_CTRADER_CLIENT_SECRET "10/12 cTrader Open API app Secret (hidd
 ask ctrader DONNA_CTRADER_ACCESS_TOKEN "11/12 Access token issued with the ACCOUNT INFO scope - not trading (hidden)" 1
 ask ctrader DONNA_CTRADER_REFRESH_TOKEN "12/12 Refresh token from the same screen (hidden)" 1
 ask radar JARVIS_YOUTUBE_API_KEY "Partner Radar: YouTube Data API key, starts AIza (hidden; Enter = skip)" 1
-case "$SECTION" in phone) echo "In Telegram, open @BotFather, send /newbot, pick a name (e.g. DONNA) and a username ending in bot. It gives you a token." ;; esac
+case "$SECTION" in phone) echo "In Telegram, open @BotFather, send /newbot, pick a name (e.g. DONNA) and a username ending in bot. It gives you a token."
+  if grep -q "^DONNA_TELEGRAM_BOT_TOKEN=.\+" "$ENV"; then echo "A bot token is already saved: press Enter to keep it."; fi ;; esac
 ask phone DONNA_TELEGRAM_BOT_TOKEN "DONNA on your phone: Telegram bot token from @BotFather (hidden; Enter = skip)" 1
 ask leads JARVIS_BRAVE_API_KEY "Lead Finder web search: Brave Search API key from api-dashboard.search.brave.com (hidden; Enter = skip)" 1
 case "$SECTION" in telegram) echo "From my.telegram.org > API development tools (log in with YOUR phone number):" ;; esac
@@ -203,6 +204,7 @@ if [ "$SECTION" = telegram ] && grep -q '^TG_API_HASH=.\+' "$ENV"; then
 fi
 if [ "$SECTION" = phone ] && grep -q '^DONNA_TELEGRAM_BOT_TOKEN=.\+' "$ENV"; then
   echo
+  systemctl stop vertex1-phone 2>/dev/null || true   # only one program may read the bot's messages at a time
   (set -a; . "$ENV"; cd /opt/vertex1/app; VERTEX1_ENV_FILE="$ENV" "$PY" -m donna.phone pair)
   if grep -q '^DONNA_TELEGRAM_APPROVER_IDS=.\+' "$ENV"; then
     systemctl enable -q vertex1-phone 2>/dev/null; systemctl restart vertex1-phone vertex1-scheduler; sleep 3

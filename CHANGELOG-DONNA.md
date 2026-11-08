@@ -5,6 +5,17 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-08 · cTrader's EOD email read by itself, and phone pairing that explains itself
+
+**What was done:**
+- **cTrader's daily "Accounts EOD report" email** (trade@alerts.ctrader.com, `EOD_Report_USD.html.zip`) is now read automatically. DONNA opens the zip in memory and reads the account table: login, balance, equity, margin and net unrealised P&L for the A-book and B-book. The report date is taken from the date printed inside the report. The data feeds the book summary, the margin and concentration KRIs, the KPIs and `!feeds`. Account numbers only, no names.
+- Google bridge **version 6**: it also picks up `.zip` and `.html` report attachments. cTrader's own sender is always accepted.
+- **Phone pairing:** SH tapped Start and got no answer. The bot only replies after pairing has finished, and pairing gave no feedback while it waited. Pairing now accepts Start or any message such as "hi", waits 10 minutes instead of 3, and prints "still waiting…" every minute. It shows any error Telegram sends. If it times out, it says why: wrong bot, another program reading the bot, or a group message instead of a private chat. `vertex1-connect phone` stops the phone service before pairing so the two don't fight over messages, and it says Enter keeps a saved token.
+
+**Why:** SH sent the cTrader EOD email and asked DONNA to pick it up, and reported that @Donnaconnect_bot didn't respond to Start.
+
+**Recommendation:** update the Google bridge to version 6 (a two-minute paste) so the EOD email flows in daily. Send a Match-Prime weekly summary sample when you have one.
+
 ## 2026-11-08 · Phone, policy search, data freshness and the weekly page
 
 **What was done:**

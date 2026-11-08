@@ -20,7 +20,7 @@ STALE_DAYS = int(os.getenv("JARVIS_DATA_STALE_DAYS", "3"))
 
 # kind, plain name, where it comes from, what goes stale without it
 EXPORTS = [
-    ("eod", "End-of-day accounts (equity, balance, margin)", "cTrader back office (cBroker) EOD report",
+    ("eod", "End-of-day accounts (equity, balance, margin)", "cTrader's daily 'Accounts EOD report' email (trade@alerts.ctrader.com) - read by itself",
      "client risk, margin alerts, KRIs"),
     ("docs", "Customer documents (KYC)", "Syntellicore customer documents export", "KYC KRIs, expiring documents"),
     ("activity", "Trading activity (volume, deals)", "cTrader back office activity report", "turnover alerts, KPIs"),
