@@ -424,12 +424,27 @@ def is_transient(e: Exception) -> bool:
 
 
 def market_closed(name: str, now: datetime | None = None) -> bool:
-    """FX week: Sunday ~21:00 UTC to Friday ~22:00 UTC. Outside it, a market job's blips are expected."""
+    """FX week: Sunday 21:00 UTC to Friday 22:00 UTC (jarvis.core.markets). Outside it, a market job's blips are
+    expected: the broker server is closed or in weekend maintenance."""
     if name not in MARKET_JOBS:
         return False
+    from jarvis.core import markets
+
+    return not markets.fx_open(now)
+
+
+def market_quiet(name: str, since: float, now: datetime | None = None) -> bool:
+    """True when a market job's run of failures is explained by the market being closed: it is closed now, or it
+    reopened less than FAIL_GRACE_MINUTES ago and the failures started while it was closed."""
+    if name not in MARKET_JOBS:
+        return False
+    from jarvis.core import markets
+
     now = now or datetime.now(timezone.utc)
-    wd, h = now.weekday(), now.hour
-    return (wd == 4 and h >= 22) or wd == 5 or (wd == 6 and h < 21)
+    start = datetime.fromtimestamp(since, timezone.utc)
+    if market_closed(name, now):
+        return True
+    return market_closed(name, start) and markets.open_hours_between(start, now) * 60 < FAIL_GRACE_MINUTES
 
 
 def _failing_since(name: str, now: float) -> float:
@@ -483,11 +498,15 @@ def job_failed(name: str, e: Exception) -> bool:
     started = _failing_since(name, now)   # also feeds the !agents board ("failing since ...")
     from jarvis.agents import alerts
 
+    if market_closed(name, datetime.fromtimestamp(now, timezone.utc)):
+        # weekend / holiday: the broker's server is closed or in maintenance, whatever the error says.
+        # Nothing to report; if it still fails once the market has been open a while, the rules below apply.
+        return False
     if is_transient(e):
         # a network blip or a broker server that is closed for the weekend fixes itself: say nothing unless
         # the job has been failing without a single success for FAIL_GRACE_MINUTES, and then one alert per day
         # whatever the wording of the error (each wording used to count as a new alert)
-        if market_closed(name) or now - started < FAIL_GRACE_MINUTES * 60:
+        if market_quiet(name, started, datetime.fromtimestamp(now, timezone.utc)) or now - started < FAIL_GRACE_MINUTES * 60:
             return False
         key = f"{name}|transient"
     else:

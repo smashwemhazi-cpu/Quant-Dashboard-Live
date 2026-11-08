@@ -552,7 +552,7 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
 
   // ------------------------------------------------------------ agents
   const DUTY = { running: "up", "partly waiting on setup": "warn", "needs a fix": "down", "on demand": "", "not started yet": "warn" };
-  const JOB = { ok: ["OK", "up"], waiting: ["waiting for setup", "warn"], failing: ["failing", "down"], not_run: ["not run yet", ""] };
+  const JOB = { ok: ["OK", "up"], waiting: ["waiting for setup", "warn"], failing: ["failing", "down"], resting: ["resting, market closed", ""], not_run: ["not run yet", ""] };
   function renderAgents(a) {
     if (!a || a.error) { $("ag-purpose").innerHTML = empty((a && a.error) || "No data"); $("ag-duties").innerHTML = ""; return; }
     $("ag-purpose").innerHTML = `<p style="margin:2px 0 8px;font-size:14.5px">${esc(a.purpose)}</p><p class="sub">What DONNA never does:</p><ul style="margin:0;padding-left:18px;font-size:13px">${a.boundaries.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>`;

@@ -17,7 +17,7 @@ def test_every_kpi_has_a_measure_and_an_empty_install_scores_cleanly(tmp_path, m
     assert set(kpi.MEASURES) == set(kpi.STARTER)
     assert {d for d, *_ in kpi.STARTER.values()} <= set(dict(kpi.DEPTS))
     rows = kpi.scorecard(now=NOW)
-    assert len(rows) == len(kpi.STARTER)
+    assert len(rows) == len(kpi.STARTER) - len(kpi.unused())
     assert all(r["status"] in kpi.ORDER for r in rows)
     assert not [r for r in rows if r["note"].startswith("unavailable")]     # no measure crashes on a fresh DB
     by = {r["key"]: r for r in rows}

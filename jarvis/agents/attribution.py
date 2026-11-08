@@ -127,6 +127,10 @@ def ib_report() -> list[dict[str, Any]]:
 def text(days: int = 90, by: str = "channel") -> str:
     r = report(days, by)
     if "error" in r:
+        from jarvis.core import markets
+
+        if markets.source_off("leads"):
+            return "Marketing attribution reads the CRM leads export, which is " + markets.NOT_USED + "."
         return r["error"] + ". Schedule the Syntellicore leads export to your email."
     L = [f"MARKETING ATTRIBUTION - leads created in the last {r['days']} days (CRM export {r['asof']}): "
          f"{r['leads']} leads, {r['ftd']} funded" + (f", spend {r['spend']:,.2f}" if r["spend"] else "")]

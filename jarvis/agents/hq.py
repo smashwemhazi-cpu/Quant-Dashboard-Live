@@ -128,7 +128,8 @@ def _ago(ts: float, now: float) -> str:
 
 
 def job_states(now: float | None = None) -> dict[str, dict[str, Any]]:
-    """State of every scheduled job: ok / waiting / failing / not_run, with when it last ran."""
+    """State of every scheduled job: ok / waiting / failing / resting / not_run, with when it last ran.
+    resting = a market job (cTrader) whose failures are explained by the market being closed (weekend, holiday)."""
     from jarvis import scheduler
 
     now = now or time.time()
@@ -149,6 +150,11 @@ def job_states(now: float | None = None) -> dict[str, dict[str, Any]]:
         st: dict[str, Any] = {"every": every, "at_hour": at_hour, "last": last.get(name)}
         if name in waiting:
             st.update(state="waiting", why=waiting[name][0])
+        elif name in failing and scheduler.market_quiet(name, failing[name], datetime.fromtimestamp(now, timezone.utc)):
+            from jarvis.core import markets
+
+            st.update(state="resting", why=markets.closed_note(datetime.fromtimestamp(now, timezone.utc))
+                      or "the market has only just reopened; it reconnects by itself")
         elif name in failing:
             st.update(state="failing", since=failing[name], why=errors.get(name, ""))
         elif name not in last:
@@ -159,7 +165,7 @@ def job_states(now: float | None = None) -> dict[str, dict[str, Any]]:
     return out
 
 
-ICON = {"ok": "OK", "waiting": "WAITING", "failing": "FAILING", "not_run": "not run yet"}
+ICON = {"ok": "OK", "waiting": "WAITING", "failing": "FAILING", "resting": "RESTING", "not_run": "not run yet"}
 
 
 def _job_line(name: str, st: dict[str, Any], now: float) -> str:
@@ -170,6 +176,8 @@ def _job_line(name: str, st: dict[str, Any], now: float) -> str:
     line = f" {ICON[st['state']]:<8} {name} ({when}{last})"
     if st["state"] == "waiting":
         line += f"\n           waiting for: {st['why']}"
+    elif st["state"] == "resting":
+        line += f"\n           resting: {st['why']}"
     elif st["state"] == "failing":
         line += f"\n           failing since {_ago(st['since'], now)}: {st['why']}"
     return line

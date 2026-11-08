@@ -106,6 +106,10 @@ def _frames() -> tuple[pd.DataFrame, pd.DataFrame, str | None]:
 
 def summary() -> dict[str, Any]:
     """Per-IB economics and flags from the latest IB report."""
+    from jarvis.core import markets
+
+    if markets.source_off("ib"):
+        return {"error": "IB commissions " + markets.NOT_USED, "off": True}
     ibr, act, asof = _frames()
     if asof is None:
         return {"error": "NO DATA - no IB / partner commission report received yet"}
@@ -166,6 +170,8 @@ def scan_flags(add: Any) -> None:
 
 def report_lines() -> list[str]:
     s = summary()
+    if s.get("off"):
+        return []
     if "error" in s:
         return ["IB CONTROL", " " + s["error"]]
     L = [f"IB CONTROL (report {s['asof']}): rebates {s['paid']:,.2f} vs est. revenue {s['revenue']:,.2f}"
@@ -190,6 +196,8 @@ def command(cmd: str, rest: str) -> str | None:
             return "The rate must be a number, e.g. !ib rate IB123 6.5"
         return f"Agreed rate for {parts[1]}: {float(parts[2]):g} per lot. Payments are checked against it from the next report."
     s = summary()
+    if s.get("off"):
+        return s["error"] + ". Turn it on with JARVIS_SYNTELLICORE=on once you have access to the CRM."
     if "error" in s:
         return s["error"] + ". Schedule the CRM's IB / partner commission report to your email, or upload it."
     if parts:

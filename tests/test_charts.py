@@ -133,7 +133,7 @@ def test_pad_and_kpis_are_plain_statements(client):
     personal.store_trades("123", _sh_like_trades())
     c = client.get("/api/charts/data", headers=API).json()["compliance"]
     rows = c["kpi"]["rows"]
-    assert len(rows) == len(kpi.STARTER) and all(r["why"] and r["word"] for r in rows)
+    assert len(rows) == len(kpi.STARTER) - len(kpi.unused()) and all(r["why"] and r["word"] for r in rows)
     order = [kpi.ORDER[r["status"]] for r in rows]
     assert order == sorted(order)                                    # worst first
     over = next(r for r in rows if r["key"] == "tr_overtrading")

@@ -69,11 +69,45 @@ def store_statement(d: pd.DataFrame, path: Path) -> tuple[str, int]:
                          "entry": num("entry price"), "exit": num("closing price"), "qty": num("closing quantity"),
                          "net": num("net"), "balance": num("balance")}).dropna(subset=["closed_utc", "net"])
     with _db() as c:
+        if api_live(c):
+            # the cTrader API is the source of truth for the trade history: a statement (emailed or uploaded) only
+            # fills in trades older than the oldest one the API has given, so nothing is ever counted twice
+            # (statement times and prices are rounded differently from the API's)
+            first = c.execute("SELECT MIN(closed_utc) FROM pt_trades WHERE account = ?", (account,)).fetchone()[0]
+            if first:
+                rows = rows[rows.closed_utc < first]
         before = c.execute("SELECT COUNT(*) FROM pt_trades").fetchone()[0]
         c.executemany("INSERT OR IGNORE INTO pt_trades (account, closed_utc, symbol, side, entry, exit, qty, net, "
                       "balance) VALUES (?,?,?,?,?,?,?,?,?)", rows.itertuples(index=False, name=None))
         added = c.execute("SELECT COUNT(*) FROM pt_trades").fetchone()[0] - before
     return account, added
+
+
+API_LIVE_OPEN_HOURS = float(os.getenv("DONNA_FEED_LIVE_OPEN_HOURS", "6"))
+
+
+def api_live(c: sqlite3.Connection | None = None, now: datetime | None = None) -> bool:
+    """True while the read-only cTrader feed is delivering: a snapshot within the last few MARKET hours (a weekend
+    or holiday with the broker's server closed doesn't count against it)."""
+    from jarvis.core import markets
+
+    def last(conn: sqlite3.Connection) -> Any:
+        try:
+            return conn.execute("SELECT MAX(ts) FROM position_snapshots").fetchone()[0]
+        except sqlite3.OperationalError:
+            return None
+    if c is None:
+        with _db() as conn:
+            ts = last(conn)
+    else:
+        ts = last(c)
+    if not ts:
+        return False
+    try:
+        t = datetime.fromisoformat(str(ts).replace(" ", "T")[:19]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return False
+    return markets.open_hours_between(t, now or datetime.now(timezone.utc)) <= API_LIVE_OPEN_HOURS
 
 
 def store_trades(account: str, trades: list[dict[str, Any]]) -> int:
@@ -105,7 +139,7 @@ def journal(account: str = "", days: int = 30) -> dict[str, Any]:
             account = os.getenv("JARVIS_PERSONAL_ACCOUNT") or (row[0] if row else "")
         d = pd.read_sql_query("SELECT * FROM pt_trades WHERE account = ? ORDER BY closed_utc", c, params=(account,))
     if d.empty:
-        return {"error": "NO DATA - no closed trades yet (cTrader feed not connected and no statement uploaded)"}
+        return {"error": "NO DATA - no closed trades yet (they come from your cTrader account by themselves once it is connected - !status)"}
     d["t"] = pd.to_datetime(d.closed_utc)
     d = d[d.t >= d.t.max() - pd.Timedelta(days=days)].reset_index(drop=True)
     n = d.net

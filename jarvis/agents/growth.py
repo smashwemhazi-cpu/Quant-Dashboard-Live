@@ -98,6 +98,10 @@ def store_leads(d: pd.DataFrame, m: dict[str, str | None], asof: str) -> int:
 
 
 def leads_summary(now: datetime | None = None) -> dict[str, Any]:
+    from jarvis.core import markets
+
+    if markets.source_off("leads"):
+        return {"error": "CRM leads " + markets.NOT_USED, "off": True}
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     with _db() as c:
         row = c.execute("SELECT MAX(asof) FROM bo_leads").fetchone()
@@ -218,6 +222,8 @@ def drafts_text(drafts: list[dict[str, Any]]) -> str:
 # ------------------------------------------------------------------ report
 def report_lines(team: bool = False) -> list[str]:
     s = leads_summary()
+    if s.get("off"):
+        return []
     if "error" in s:
         return [f"LEADS: {s['error']} (export the leads/customers list from Syntellicore and upload it)"]
     L = [f"LEADS (Syntellicore export {s['asof']}): {s['leads']} leads, {s['ftd']} funded | "

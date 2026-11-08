@@ -1,1 +1,2 @@
 deploy/windows/*.bat -text
+deploy/windows/*.vbs -text
