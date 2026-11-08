@@ -33,6 +33,9 @@
   .when { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 6px; }
   #tasks li { display: flex; gap: 8px; align-items: flex-start; }
   #tasks li .what { flex: 1; min-width: 0; }
+  [data-open] { cursor: pointer; }
+  [data-open]:hover { color: var(--accent); }
+  .msg a { color: var(--accent); }
   .done { padding: 2px 9px; border-radius: 8px; font-size: 13px; line-height: 1.4; color: var(--ok); flex: none; }
   .done:hover { background: rgba(56, 217, 150, .15); border-color: var(--ok); }
   .tag { white-space: nowrap; font-size: 11px; padding: 1px 6px; border-radius: 6px; margin-right: 6px; border: 1px solid currentColor; }
@@ -183,12 +186,12 @@
       $("attention").innerHTML = att.map((a) => `<div><b>Needs you</b>${esc(a)}</div>`).join("");
       const brainOff = att.some((a) => /^Claude/.test(a));
       list($("calendar"), s.calendar, (e) => `<li><span class="when">${esc(e.all_day ? "all day" : e.start.slice(11) + "–" + e.end)}</span>${esc(e.title)}</li>`, "Nothing scheduled");
-      list($("tasks"), s.tasks, (t) => `<li><span class="what"><span class="tag ${esc(t.priority)}">#${t.id}</span>${esc(t.title)}${t.overdue ? ` <span class="tag high">overdue ${esc(t.due)}</span>` : t.due ? ` <span class="hint">due ${esc(t.due)}</span>` : ""}</span><button type="button" class="done" data-done="${t.id}" title="Mark #${t.id} done">✓</button></li>`, "No open tasks - add one: !add Call the LP | 2026-11-02 | high");
+      list($("tasks"), s.tasks, (t) => `<li><span class="what" data-open="!task ${t.id}" title="What is task ${t.id} about? Click to see the email behind it and the next step"><span class="tag ${esc(t.priority)}">#${t.id}</span>${esc(t.title)}${t.overdue ? ` <span class="tag high">overdue ${esc(t.due)}</span>` : t.due ? ` <span class="hint">due ${esc(t.due)}</span>` : ""}</span><button type="button" class="done" data-done="${t.id}" title="Mark #${t.id} done">✓</button></li>`, "No open tasks - add one: !add Call the LP | 2026-11-02 | high");
       const m = s.mail || {};
       const mail = m.error ? m : [].concat(
-        (m.urgent || []).map((x) => ({ cls: "high", t: x.subject, d: x.summary })),
-        (m.reply || []).map((x) => ({ cls: "medium", t: x.subject, d: "reply needed · " + x.from })));
-      list($("mail"), mail, (x) => `<li><span class="tag ${x.cls}">${x.cls === "high" ? "urgent" : "reply"}</span>${esc(x.t)}<div class="hint">${esc(x.d)}</div></li>`,
+        (m.urgent || []).map((x) => ({ cls: "high", t: x.subject, d: x.summary, ref: x.ref })),
+        (m.reply || []).map((x) => ({ cls: "medium", t: x.subject, d: "reply needed · " + x.from, ref: x.ref })));
+      list($("mail"), mail, (x) => `<li data-open="!email ${Number(x.ref) || 0}" title="Click to read it and see the next step"><span class="tag ${x.cls}">${x.cls === "high" ? "urgent" : "reply"}</span>${esc(x.t)}<div class="hint">${esc(x.d)}</div></li>`,
         m.connected === false ? "Inbox not connected" : brainOff ? "Email sorting is paused until Claude credit is topped up"
           : `Nothing urgent (${m.analysed_24h || 0} analysed in 24h)`);
       const k = s.kris || {};
@@ -306,7 +309,11 @@
   function add(cls, text) {
     const d = document.createElement("div");
     d.className = "msg " + cls;
-    d.textContent = text;
+    // plain text, with web links made clickable (opened in the normal browser)
+    String(text).split(/(https:\/\/[^\s]+)/).forEach((part, i) => {
+      if (i % 2) { const a = document.createElement("a"); a.href = part; a.target = "_blank"; a.rel = "noopener"; a.textContent = part.startsWith("https://mail.google.com/") ? "Open in Gmail ↗" : part; d.appendChild(a); }
+      else d.appendChild(document.createTextNode(part));
+    });
     $("log").appendChild(d);
     $("log").scrollTop = $("log").scrollHeight;
   }
@@ -319,8 +326,8 @@
     try {
       const r = await api("/api/console/say", { text });
       add("her", r.reply);
-      speak(r.reply);
-      if (/^[!#](done|add|tasks)/i.test(text)) refresh();
+      speak(r.reply.replace(/https:\/\/\S+/g, ""));   // links are for clicking, not reading out
+      if (/^[!#](done|add|tasks|undo|edit)/i.test(text)) refresh();
     } catch (e) {
       add("her", "I couldn't reach the server: " + e.message);
       setMode("idle");
@@ -423,10 +430,17 @@
     if (e.code === "Space" && document.activeElement !== $("text") && !spaceDown) { spaceDown = true; e.preventDefault(); startListening(); }
   });
   document.addEventListener("keyup", (e) => { if (e.code === "Space" && spaceDown) { spaceDown = false; stopListening(); } });
-  // one click marks a task done (the same as typing !done 12)
+  // one click marks a task done (the same as typing !done 12); clicking the task itself shows what it's about
   $("tasks").addEventListener("click", (e) => {
     const b = e.target.closest("[data-done]");
-    if (b) { b.disabled = true; say("!done " + b.dataset.done); }
+    if (b) { b.disabled = true; say("!done " + b.dataset.done); return; }
+    const o = e.target.closest("[data-open]");
+    if (o) say(o.dataset.open);
+  });
+  // clicking an email in the inbox panel opens it: what it says, the task from it and the next step
+  $("mail").addEventListener("click", (e) => {
+    const o = e.target.closest("[data-open]");
+    if (o && !/ 0$/.test(o.dataset.open)) say(o.dataset.open);
   });
   // the agents panel: a duty opens DONNA's one view (!hq); "details" lists every agent and when it last ran
   $("agents").addEventListener("click", (e) => {

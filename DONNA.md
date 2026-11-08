@@ -207,6 +207,7 @@ Double-click **DONNA-Console.bat** on your PC and type your server password. A w
 How to use it:
 - **Hold the button or the space bar** to talk, and let go when you are done. She answers on screen and out loud.
 - Type commands exactly as in Discord, e.g. `!tasks`, `!done 12`, `!draft 12`, `!kri`.
+- **Click a task or an email** in the panels to see what it's about: where it came from, the start of the email itself (numbers and addresses masked), a link to open it in Gmail, and the next step. In Discord: `!task 4` or `!email 14`.
 - **Tick a task off** with the ✓ button next to it in the Tasks panel. In Discord, every `!tasks` list has a ✓ button for each task under it. Ticked one by mistake? `!undo 12`. To change a task: `!edit 12 due friday` (or `due tomorrow`, `due none`), `!edit 12 urgent`, `!edit 12 normal`, `!edit 12 title Call FinPrime back`.
 - The 🔊 button mutes her. The menu next to it picks her voice; the choice is remembered.
 

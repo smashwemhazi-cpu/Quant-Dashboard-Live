@@ -5,6 +5,15 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-08 · See what a task or email is about, and the next step
+
+**What was done:**
+- `!task 4` and `!email 14` show where the item came from, the start of the email itself (numbers and addresses masked), a link to open it in Gmail, the task made from it, and one plain NEXT STEP. For example: "Check the payment in the back office first, then reply. Type !draft 4 and I'll write the reply", or "It's a promotion, no answer needed".
+- Console: click a task's title or an email in the Inbox panel and the same view appears. Gmail links are clickable and aren't read out loud.
+- Console Inbox panel: promotions and newsletters are left out, the same as `!waiting`.
+
+**Why:** SH asked how to see what a task or email refers to, so they know the next action.
+
 ## 2026-11-08 · Tick tasks off with a click, undo, and change a task
 
 **What was done:**
