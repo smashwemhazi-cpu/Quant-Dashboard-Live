@@ -104,6 +104,63 @@ def list_tasks(include_done: bool = False) -> list[dict[str, Any]]:
     return rows
 
 
+def reopen_task(task_id: int) -> bool:
+    """Undo a tick: put a task marked done back on the list."""
+    with _db() as c:
+        return c.execute("UPDATE tasks SET status = 'open', done_at = NULL WHERE id = ? AND status = 'done'",
+                         (task_id,)).rowcount == 1
+
+
+_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def parse_due(word: str, today: date | None = None) -> str | None:
+    """'2026-11-12', 'today', 'tomorrow', 'friday' or 'fri' -> YYYY-MM-DD; '' for 'none'; None if not a date."""
+    w = word.strip().lower()
+    today = today or datetime.now(LOCAL_TZ).date()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", w):
+        try:
+            return date.fromisoformat(w).isoformat()
+        except ValueError:
+            return None
+    if w in ("none", "no date", "clear", "-"):
+        return ""
+    if w == "today":
+        return today.isoformat()
+    if w == "tomorrow":
+        return (today + timedelta(days=1)).isoformat()
+    for i, d in enumerate(_WEEKDAYS):
+        if w in (d, d[:3]):
+            return (today + timedelta(days=(i - today.weekday() - 1) % 7 + 1)).isoformat()   # the next one
+    return None
+
+
+_PRIORITY_WORDS = {"urgent": "high", "high": "high", "normal": "medium", "medium": "medium", "low": "low"}
+
+
+def update_task(task_id: int, change: str) -> str:
+    """'due friday' / 'due none' / 'urgent' / 'low' / 'title New words' -> a plain answer."""
+    word, _, val = change.strip().partition(" ")
+    word, val = word.lower(), val.strip()
+    with _db() as c:
+        if not c.execute("SELECT 1 FROM tasks WHERE id = ? AND status = 'open'", (task_id,)).fetchone():
+            return f"Task {task_id} isn't open. Type !tasks to see your list."
+        if word == "due":
+            due = parse_due(val)
+            if due is None:
+                return "Say when: !edit 13 due friday, due tomorrow, due 2026-11-12 or due none"
+            c.execute("UPDATE tasks SET due = ? WHERE id = ?", (due or None, task_id))
+        elif word in _PRIORITY_WORDS and not val:
+            c.execute("UPDATE tasks SET priority = ? WHERE id = ?", (_PRIORITY_WORDS[word], task_id))
+        elif word in ("title", "rename") and val:
+            c.execute("UPDATE tasks SET title = ? WHERE id = ?", (val[:200], task_id))
+        else:
+            return ("What should change? For example: !edit 13 due friday, !edit 13 urgent, !edit 13 normal, "
+                    "!edit 13 title Call FinPrime back")
+        t = dict(c.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone())
+    return "Updated " + task_line(t)
+
+
 def _nice_date(iso: str) -> str:
     try:
         return f"{date.fromisoformat(iso):%a %d %b}"
@@ -136,7 +193,10 @@ def tasks_text() -> str:
         if ts:
             L += ["", title] + [task_line(t, today) for t in ts]
     eg = next((t["id"] for t in rows if t["title"].lower().startswith("reply")), None)
-    L += ["", "WHAT YOU CAN TYPE", f"!done {rows[0]['id']} - mark task {rows[0]['id']} as finished"]
+    i = rows[0]["id"]
+    L += ["", "WHAT YOU CAN TYPE (or click a task's ✓ button below / in the console)",
+          f"!done {i} - task {i} is finished      !undo {i} - put it back if ticked by mistake",
+          f"!edit {i} due friday - change the date (also: urgent, normal, title <new words>)"]
     if eg:
         L.append(f"!draft {eg} - I write the email reply for task {eg}, you check it and press send")
     return "\n".join(L)

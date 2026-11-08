@@ -1,7 +1,9 @@
 """D.O.N.N.A task commands in Discord.
 
   !tasks                         open tasks, overdue first
-  !done 12 [13 ...]              mark tasks done
+  !done 12 [13 ...]              mark tasks done (or click the ✓ button under !tasks)
+  !undo 12                       put a task ticked by mistake back on the list
+  !edit 12 due friday            change a task's date, urgency (urgent / normal) or title
   !add Call LP about XAU spreads | 2026-10-24 | high     (date and priority optional)
   !today                         the my-day brief (calendar, tasks, inbox, trading, bots)
   !ask <question>                ask D.O.N.N.A anything; she answers from the live agents (read-only)
@@ -46,7 +48,9 @@ HELP = ("D.O.N.N.A commands:\n"
         "!hq  !agents  !run <job>   one view across all agents / each agent's state / run one now\n"
         "!kpi  !kpi leads|trading|compliance|...   KPI scorecard (grow and protect); !kpi targets, !kpi set <name> <n>\n"
         "!tasks                     open tasks\n"
-        "!done 12 13                mark tasks done\n"
+        "!done 12 13                mark tasks done (or click the ✓ buttons under !tasks)\n"
+        "!undo 12                   put task 12 back if you ticked it by mistake\n"
+        "!edit 12 due friday        change a task: due <date|tomorrow|none>, urgent, normal, title <new words>\n"
         "!add <title> | YYYY-MM-DD | high/medium/low\n"
         "!draft 12 <note>           reply to task 12's email, saved in Gmail Drafts (never sent)\n"
         "!today                     my-day brief\n"
@@ -281,6 +285,17 @@ def handle(text: str, channel: str = "") -> str | None:
             return "Usage: !done 12 13"
         res = [f"Task {i} {'marked done' if assistant.complete_task(i) else 'not found, or already done'}." for i in ids]
         return "\n".join(res) + "\n\n" + tasks_text()
+    if cmd in ("!undo", "!reopen"):
+        ids = [int(x) for x in re.findall(r"\d+", rest)]
+        if not ids:
+            return "Usage: !undo 12"
+        res = [f"Task {i} {'is back on your list' if assistant.reopen_task(i) else 'was not ticked done'}." for i in ids]
+        return "\n".join(res) + "\n\n" + tasks_text()
+    if cmd == "!edit":
+        m = re.match(r"\s*#?(\d+)\s+(.+)", rest, re.S)
+        if not m:
+            return "Usage: !edit 12 due friday   (or: urgent, normal, title <new words>)"
+        return assistant.update_task(int(m.group(1)), m.group(2))
     if cmd == "!add":
         parts = [p.strip() for p in rest.split("|")]
         if not parts[0]:
@@ -430,6 +445,41 @@ def upload_reply(names: list[str], skipped: list[str]) -> str:
     return "\n".join(L)
 
 
+TICK_PREFIX = "donna:done:"
+TICK_COMMANDS = ("!tasks", "!done", "!add", "!undo", "!reopen", "!edit")
+
+
+def tick_ids(command: str) -> list[int]:
+    """Open tasks that get a ✓ button under the reply to this command (Discord allows 25 buttons)."""
+    if command.strip().split(" ")[0].lower() not in TICK_COMMANDS:
+        return []
+    return [t["id"] for t in assistant.list_tasks()][:25]
+
+
+def tick_view(ids: list[int], done: set[int] | None = None) -> Any:
+    """Buttons '✓ 12': a click marks task 12 done. custom_id carries the task id, so the buttons keep working
+    after DONNA restarts (on_interaction handles them, no in-memory state)."""
+    import discord
+
+    done = done or set()
+    view = discord.ui.View(timeout=None)
+    for i in ids:
+        view.add_item(discord.ui.Button(
+            label=f"Done ✓ {i}" if i in done else f"✓ {i}", custom_id=f"{TICK_PREFIX}{i}", disabled=i in done,
+            style=discord.ButtonStyle.success if i in done else discord.ButtonStyle.secondary))
+    return view
+
+
+def tick(task_id: int) -> str:
+    """What a ✓ click does: the same as !done <id>."""
+    t = next((t for t in assistant.list_tasks(include_done=True) if t["id"] == task_id), None)
+    if t is None:
+        return f"Task {task_id} doesn't exist."
+    if not assistant.complete_task(task_id):
+        return f"Task {task_id} was already done."
+    return f"Ticked: Task {task_id}: {t['title']}. Ticked by mistake? !undo {task_id}"
+
+
 def chunks(text: str) -> list[str]:
     from donna.channels import chunks as split
 
@@ -451,6 +501,27 @@ def main() -> None:
     async def on_ready() -> None:
         log.info("logged in as %s; command channels: %s; chat channels: %s", client.user,
                  os.getenv("DONNA_DISCORD_COMMAND_CHANNELS"), os.getenv("DONNA_DISCORD_CHAT_CHANNELS"))
+
+    @client.event
+    async def on_interaction(interaction: "discord.Interaction") -> None:
+        cid = str((interaction.data or {}).get("custom_id", ""))
+        if not cid.startswith(TICK_PREFIX):
+            return
+        if not allowed(interaction.user.id, getattr(interaction.channel, "name", "")):
+            await interaction.response.send_message("Only the owner can tick tasks here.", ephemeral=True)
+            return
+        task_id = int(cid.removeprefix(TICK_PREFIX))
+        msg = await asyncio.to_thread(tick, task_id)
+        ids, done = [], set()
+        for row in interaction.message.components if interaction.message else []:
+            for b in getattr(row, "children", []):
+                bid = str(getattr(b, "custom_id", "") or "")
+                if bid.startswith(TICK_PREFIX):
+                    ids.append(int(bid.removeprefix(TICK_PREFIX)))
+                    if getattr(b, "disabled", False):
+                        done.add(ids[-1])
+        await interaction.response.edit_message(view=tick_view(ids, done | {task_id}))
+        await interaction.followup.send(msg)
 
     @client.event
     async def on_message(message: "discord.Message") -> None:
@@ -523,8 +594,13 @@ def main() -> None:
             reply = f"Sorry - that failed ({type(e).__name__}). Details are in the server log."
         if reply is None:
             return
-        for part in chunks(reply):
-            await message.channel.send(part)
+        parts = chunks(reply)
+        ids = await asyncio.to_thread(tick_ids, message.content)
+        for n, part in enumerate(parts):
+            if n == len(parts) - 1 and ids:
+                await message.channel.send(part, view=tick_view(ids))   # ✓ buttons under the task list
+            else:
+                await message.channel.send(part)
 
     client.run(token, log_handler=None)
 

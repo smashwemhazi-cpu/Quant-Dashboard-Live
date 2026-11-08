@@ -5,6 +5,16 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-08 · Tick tasks off with a click, undo, and change a task
+
+**What was done:**
+- Discord: every `!tasks` list (and the reply to `!done`, `!add`, `!undo`, `!edit`) has a ✓ button per open task. One click marks it done, the button turns green, and DONNA confirms. The buttons keep working after DONNA restarts. The console already had a ✓ next to each task.
+- `!undo 12` puts a task ticked by mistake back on the list.
+- `!edit 12 due friday` / `due tomorrow` / `due 2026-11-12` / `due none`, `!edit 12 urgent` / `normal` / `low`, `!edit 12 title <new words>` change a task in place.
+- DONNA.md: three steps to use the console on another Windows PC.
+
+**Why:** SH asked to be able to tick or update a task without typing, and to have the console on a second PC.
+
 ## 2026-11-07 · Tasks and "My day" in plain words
 
 **What was done:** `!tasks` now groups your tasks into Overdue, Due today, Coming up and No date set, and writes each one as "Task 13: Reply to FinPrime - urgent, due Mon 09 Nov" instead of codes like "#13 H 2026-11-09". It ends with what you can type (`!done 13`, `!draft 13`). `!add` and `!done` answer the same way. In `!today`, the inbox lines say "URGENT" and "Waiting for your reply: ... from finprime.com" and point to `!waiting`.
