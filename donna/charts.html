@@ -94,6 +94,35 @@
   .duty .lbl { color: var(--muted); font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase; margin: 10px 0 2px; }
   .duty p { margin: 2px 0; font-size: 13.5px; }
   .duty ul { margin: 2px 0; padding-left: 18px; font-size: 13px; }
+  .dd-row { border-bottom: 1px solid var(--line); }
+  .dd-row summary { list-style: none; cursor: pointer; display: grid; align-items: center; gap: 10px; padding: 7px 4px;
+    grid-template-columns: 64px minmax(110px, 130px) 52px 64px 92px minmax(120px, 1fr) minmax(150px, 1.1fr); font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  .dd-row summary::-webkit-details-marker { display: none; }
+  .dd-row summary:hover { background: rgba(120, 170, 255, .06); border-radius: 8px; }
+  .dd-row .sym { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dd-row .mkt { text-align: right; } .dd-row .sym .ph { display: none; }
+  .dd-side { display: flex; height: 8px; border-radius: 4px; overflow: hidden; gap: 2px; background: transparent; }
+  .dd-side i { display: block; height: 100%; }
+  .dd-side .b { background: #c9d6ee; border-radius: 4px 0 0 4px; } .dd-side .s { background: #4d5f80; border-radius: 0 4px 4px 0; }
+  .dd-side .b:only-child, .dd-side .s:only-child { border-radius: 4px; }
+  .dd-net { position: relative; height: 18px; }
+  .dd-net .axis { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--grid); }
+  .dd-net .bar { position: absolute; top: 5px; height: 8px; }
+  .dd-net .bar.pos { left: 50%; border-radius: 0 4px 4px 0; } .dd-net .bar.neg { right: 50%; border-radius: 4px 0 0 4px; }
+  .dd-net .val { position: absolute; top: -1px; font-size: 12.5px; color: var(--text); white-space: nowrap; }
+  .dd-verdict { font-size: 13px; }
+  .dd-verdict .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .dd-more { padding: 2px 4px 10px 78px; font-size: 13px; color: var(--muted); }
+  .dd-more .facts { color: var(--text); margin-bottom: 4px; }
+  .dd-head { display: grid; gap: 10px; padding: 0 4px 4px; grid-template-columns: 64px minmax(110px, 130px) 52px 64px 92px minmax(120px, 1fr) minmax(150px, 1.1fr);
+    color: var(--muted); font-size: 12px; font-weight: 600; }
+  .dd-head .mkt { text-align: right; }
+  @media (max-width: 760px) {
+    .dd-head { display: none; }
+    .dd-row summary { grid-template-columns: 56px 1fr 60px; grid-template-areas: "d s m" "side side side" "net net net" "v v v"; row-gap: 5px; }
+    .dd-row .d { grid-area: d; } .dd-row .sym { grid-area: s; } .dd-row .tr { display: none; } .dd-row .sym .ph { display: inline; } .dd-row .mkt { grid-area: m; } .dd-row .dd-side { grid-area: side; }
+    .dd-row .dd-net { grid-area: net; } .dd-row .dd-verdict { grid-area: v; } .dd-more { padding-left: 4px; }
+  }
   .daylist .row { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
   .daylist .row b { font-variant-numeric: tabular-nums; }
   @media (max-width: 520px) { .grid2, .markets { grid-template-columns: 1fr; } body { padding: 12px; } }
@@ -160,7 +189,8 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
     <div class="panel"><h2>Day in detail</h2><p class="sub"><label>Day <select id="vs-pick"></select></label> · what happened and your rules checked trade by trade</p><div id="vs-detail"></div></div>
   </div>
   <div class="grid2" id="vs-groups"></div>
-  <div class="panel" style="margin-bottom:14px"><h2>Day by day</h2><p class="sub">Latest first. "Lean" is your size-weighted side: +1 all buys, -1 all sells.</p><div id="vs-table"></div></div>
+  <div class="panel" style="margin-bottom:14px"><h2>Day by day</h2><p class="sub">Latest first. One line a day: the market's move, your side (buys vs sells), your net as a bar coloured by whether you traded with or against the market. Tap a day for the full story.</p>
+    <div class="filters" id="vs-filter" role="group" aria-label="Show days"></div><div id="vs-table"></div></div>
   <div class="panel"><h2>Week by week</h2><div id="vs-weeks"></div></div>
   <p class="note" id="vs-caveat" style="margin-top:12px"></p>
 </section>
@@ -391,7 +421,7 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
 
   function renderVs(x) {
     const ids = ["vs-bottom", "vs-tiles", "vs-price", "vs-days", "vs-detail", "vs-groups", "vs-table", "vs-weeks", "vs-caveat"];
-    if (!x || x.error) { ids.forEach((id) => { $(id).innerHTML = ""; }); $("vs-bottom").innerHTML = empty((x && x.error) || "No data"); $("vs-pick").innerHTML = ""; return; }
+    if (!x || x.error) { ids.forEach((id) => { $(id).innerHTML = ""; }); $("vs-bottom").innerHTML = empty((x && x.error) || "No data"); $("vs-pick").innerHTML = ""; $("vs-filter").innerHTML = ""; return; }
     const bl = x.bottom_line, m = x.main, al = Object.fromEntries(x.by_alignment.map((a) => [a.key, a]));
     const alc = { with: css("--ok"), against: css("--bad"), "two-way": css("--s3"), flat: css("--muted") };
     $("vs-bottom").innerHTML = `<div class="panel bl" style="margin-bottom:14px"><h2>Bottom line</h2>`
@@ -435,15 +465,63 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
     $("vs-groups").innerHTML = grp("Your side vs the trend going in", `Known before you trade (yesterday's close vs its 20/50-day averages). Needs ${x.min_group}+ trades to call it.`, x.trend_side)
       + grp("With or against the day's move", "Hindsight: tells you whether you read the day, not a signal.", x.day_move)
       + grp("Calm, normal and wild days", "The day's range against its usual range (under 0.7x calm, over 1.5x wild).", x.mood);
-    const rows = [...x.rows].reverse();
-    $("vs-table").innerHTML = `<table><tr><th>Day</th><th>Symbol</th><th class="n">Market</th><th>Range</th><th>Trend in</th><th class="n">Trades</th><th class="n">Buys</th><th class="n">Lean</th><th class="n">Net</th><th></th><th>What happened</th></tr>`
-      + rows.map((r) => `<tr><td>${esc(day(r.date))}</td><td>${esc(r.symbol)}</td><td class="n ${cls(r.chg_pct)}">${pct(r.chg_pct, 1)}</td><td>${esc(r.mood)}</td><td>${esc(r.trend_in)}</td>`
-        + `<td class="n">${r.trades}</td><td class="n">${r.buy_share}%</td><td class="n">${r.lean > 0 ? "+" : ""}${num(r.lean, 2)}</td><td class="n ${cls(r.net)}">${money(r.net)}</td>`
-        + `<td><span class="pill al-${r.alignment}">${esc(r.alignment_text)}</span></td><td class="why">${esc(r.explanation)}</td></tr>`).join("") + "</table>";
+    renderDayByDay(x, alc);
     $("vs-weeks").innerHTML = !x.weekly.length ? empty("Not enough weeks yet.") : `<table><tr><th>Week of</th><th class="n">${esc(m.name)}</th><th class="n">Trades</th><th class="n">Your buys</th><th class="n">Net</th><th></th></tr>`
       + [...x.weekly].reverse().map((w) => `<tr><td>${esc(day(w.week))}</td><td class="n ${cls(w.chg_pct)}">${pct(w.chg_pct, 1)}</td><td class="n">${w.trades}</td><td class="n">${w.buy_share}%</td><td class="n ${cls(w.net)}">${money(w.net)}</td><td><span class="pill al-${w.alignment}">${esc(w.alignment_text)}</span></td></tr>`).join("") + "</table>";
     const miss = Object.entries(x.missing || {});
     $("vs-caveat").textContent = bl.caveat + "." + (miss.length ? " Not compared (no market prices): " + miss.map(([k, v]) => `${k} (${v} trades)`).join(", ") + "." : "");
+  }
+
+  // Day by day: one line a day (market move, your side, your net as a bar on one shared $ scale coloured by
+  // with/against the market, a one-line verdict); the long explanation opens on tap. "Table" keeps every number.
+  let ddFilter = "all", ddTable = false;
+  function ddVerdict(r) {
+    if (r.alignment === "with") return r.net >= 0 ? "Right side, and it paid" : "Right side, still lost: entries, exits or size";
+    if (r.alignment === "against") return r.net < 0 ? "Against the move, and it cost you" : "Against the move, got away with it";
+    if (r.alignment === "two-way") return "Both ways, no clear side";
+    return "Flat day: timing and costs decided it";
+  }
+  function renderDayByDay(x, alc) {
+    const all = [...x.rows].reverse();
+    const counts = { all: all.length };
+    all.forEach((r) => { counts[r.alignment] = (counts[r.alignment] || 0) + 1; });
+    const opts = [["all", "All days"], ["with", "With the market"], ["against", "Against the market"], ["two-way", "Two-way"], ["flat", "Flat"]]
+      .filter(([k]) => k === "all" || counts[k]);
+    $("vs-filter").innerHTML = opts.map(([k, t]) => `<button type="button" data-f="${k}" aria-pressed="${ddFilter === k}">${esc(t)} (${counts[k]})</button>`).join("")
+      + `<button type="button" data-t="1" aria-pressed="${ddTable}" style="margin-left:auto">Table</button>`;
+    $("vs-filter").querySelectorAll("button[data-f]").forEach((b) => { b.onclick = () => { ddFilter = b.dataset.f; renderDayByDay(x, alc); }; });
+    $("vs-filter").querySelector("button[data-t]").onclick = () => { ddTable = !ddTable; renderDayByDay(x, alc); };
+    const rows = all.filter((r) => ddFilter === "all" || r.alignment === ddFilter);
+    if (!rows.length) { $("vs-table").innerHTML = empty("No days of this kind."); return; }
+    if (ddTable) {
+      $("vs-table").innerHTML = `<table><tr><th>Day</th><th>Symbol</th><th class="n">Market</th><th>Range</th><th>Trend in</th><th class="n">Trades</th><th class="n">Buys</th><th class="n">Lean</th><th class="n">Net</th><th></th><th>What happened</th></tr>`
+        + rows.map((r) => `<tr><td>${esc(day(r.date))}</td><td>${esc(r.symbol)}</td><td class="n ${cls(r.chg_pct)}">${pct(r.chg_pct, 1)}</td><td>${esc(r.mood)}</td><td>${esc(r.trend_in)}</td>`
+          + `<td class="n">${r.trades}</td><td class="n">${r.buy_share}%</td><td class="n">${r.lean > 0 ? "+" : ""}${num(r.lean, 2)}</td><td class="n ${cls(r.net)}">${money(r.net)}</td>`
+          + `<td><span class="pill al-${r.alignment}">${esc(r.alignment_text)}</span></td><td class="why">${esc(r.explanation)}</td></tr>`).join("") + "</table>";
+      return;
+    }
+    const big = Math.max(1, ...all.map((r) => Math.abs(r.net)));        // one $ scale for every day, so bars compare
+    const head = `<div class="dd-head" aria-hidden="true"><span>Day</span><span>Symbol</span><span class="mkt">Trades</span><span class="mkt">Market</span><span>Your buys / sells</span><span>Your net</span><span>Verdict</span></div>`;
+    $("vs-table").innerHTML = head + rows.map((r) => {
+      const w = Math.max(1.5, Math.abs(r.net) / big * 50), pos = r.net >= 0, c = alc[r.alignment];
+      const buys = r.buy_share, sells = 100 - buys;
+      const side = `<span class="dd-side" title="${buys}% buys, ${sells}% sells" aria-label="${buys}% buys, ${sells}% sells">`
+        + (buys ? `<i class="b" style="width:${buys}%"></i>` : "") + (sells ? `<i class="s" style="width:${sells}%"></i>` : "") + `</span>`;
+      const val = pos ? "right:calc(50% + 6px)" : "left:calc(50% + 6px)";   // the amount sits across the zero line: never clipped
+      const net = `<span class="dd-net"><span class="axis"></span><span class="bar ${pos ? "pos" : "neg"}" style="width:${w}%;background:${c}"></span>`
+        + `<span class="val" style="${val}">${esc(money(r.net))}</span></span>`;
+      return `<details class="dd-row" data-day="${esc(r.date)}"><summary>`
+        + `<span class="d">${esc(day(r.date))}</span><span class="sym">${esc(r.symbol)}<span class="ph"> · ${r.trades} trade${r.trades === 1 ? "" : "s"}</span></span><span class="mkt tr">${r.trades}</span>`
+        + `<span class="mkt ${cls(r.chg_pct)}">${pct(r.chg_pct, 1)}</span>${side}${net}`
+        + `<span class="dd-verdict"><span class="dot" style="background:${c}"></span>${esc(ddVerdict(r))}</span></summary>`
+        + `<div class="dd-more"><div class="facts">${esc(r.mood)} day, trend going in ${esc(r.trend_in)} · ${buys}% buys · <span class="al-${r.alignment}">${esc(r.alignment_text)}</span></div>`
+        + `${esc(r.explanation)}<div style="margin-top:6px"><button type="button" data-open="${esc(r.date)}">Rules and trades for this day</button></div></div></details>`;
+    }).join("")
+      + `<div class="legend" style="margin-top:8px"><span><i style="background:#c9d6ee"></i>Buys</span><span><i style="background:#4d5f80"></i>Sells</span>`
+      + `<span><i style="background:var(--ok)"></i>With the market</span><span><i style="background:var(--bad)"></i>Against the market</span><span><i style="background:var(--s3)"></i>Two-way</span><span><i style="background:var(--muted)"></i>Flat day</span></div>`;
+    $("vs-table").querySelectorAll("button[data-open]").forEach((b) => { b.onclick = () => {
+      const pick = $("vs-pick"); if ([...pick.options].some((o) => o.value === b.dataset.open)) { pick.value = b.dataset.open; pick.onchange(); }
+      $("vs-detail").scrollIntoView({ behavior: "smooth", block: "start" }); }; });
   }
 
   // ------------------------------------------------------------ PAD & KPIs
