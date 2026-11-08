@@ -41,6 +41,8 @@ POLICY: dict[str, tuple[str, str]] = {
     "urgent_email": (IMPORTANT, "an urgent email you haven't opened yet"),
     "meeting_soon": (IMPORTANT, "a meeting starting soon, with its brief"),
     "deadline": (IMPORTANT, "a compliance deadline or obligation due within 2 days"),
+    "discipline": (IMPORTANT, "your own trading as it happens: cool-off after a loss, trades used today, losses in a row, "
+                              "PAD flags; sent at any hour you are trading"),
     "approval": (IMPORTANT, "something waiting for your OK (a meeting invitation, a reply)"),
     "desk_risk": (IMPORTANT, "execution or LP slippage outside limits"),
     "bots": (IMPORTANT, "a cBot on your account stopped"),
@@ -52,6 +54,7 @@ POLICY: dict[str, tuple[str, str]] = {
     "reports_loaded": (NOTICE, "reports picked up from your email"),
     "info": (LOG, "everything else"),
 }
+LIVE_KINDS = {"discipline"}  # you are at the screen when these happen: no alert hours, no hourly cap (the guard self-limits)
 CORE_JOBS = {"inbox_triage", "heartbeat"}          # these failing for hours is DONNA being down
 CORE_DOWN_HOURS = float(os.getenv("JARVIS_ALERT_CORE_DOWN_HOURS", "6"))
 REPEAT_MINUTES = int(os.getenv("JARVIS_ALERT_REPEAT_MINUTES", "30"))
@@ -136,6 +139,8 @@ def raise_alert(kind: str, text: str, key: str = "", now: datetime | None = None
                               (IMPORTANT, hour_ago)).fetchone()[0]
         if level == CRITICAL:
             status = "sent"
+        elif kind in LIVE_KINDS:
+            status = "held" if quiet else "sent"
         elif level == IMPORTANT:
             status = "sent" if in_hours(now) and not quiet and sent_hour < PER_HOUR else "held"
         elif level == NOTICE:

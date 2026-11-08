@@ -37,6 +37,7 @@ cp "$SRC"/deploy/systemd/*.service "$SRC"/deploy/systemd/*.timer /etc/systemd/sy
 install -m 755 "$SRC/deploy/vertex1-connect" /usr/local/bin/vertex1-connect
 install -m 755 "$SRC/deploy/vertex1-update" /usr/local/bin/vertex1-update
 install -m 755 "$SRC/deploy/vertex1-backup" /usr/local/bin/vertex1-backup
+install -m 755 "$SRC/deploy/vertex1-console-key" /usr/local/bin/vertex1-console-key
 systemctl daemon-reload
 systemctl enable -q --now vertex1-update.timer  # hands-off updates from now on
 systemctl enable -q --now vertex1-backup.timer  # nightly database backups, 14 days kept

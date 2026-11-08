@@ -5,6 +5,19 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-09 · Console without a black window, and a live discipline guard on your phone
+
+**What was done:**
+- **No more cmd window for the console.** DONNA-Console.bat now sets each PC up once (server password once, then optional "start with Windows"). After that the private link runs hidden, reconnects by itself after sleep or a Wi-Fi drop, and double-clicking just opens her window. The PC's key is locked down on the server to DONNA's console link only (no shell, no files); the normal password login is unchanged. If the key stops working, the file offers to set up again or use the password once. `DONNA-Console.bat stop` switches the background link off.
+- **Discipline guard** (`!guard`): live taps on your phone and in Discord while you trade, from your own rules and history: a 15-minute cool-off after a loss, "too soon" if you trade inside it, a single loss over 1% of the balance, 8 and 10 trades a day (PAD s.6.2), 3 losses in a row, and every new PAD flag the moment it is seen (until now PAD flags were only in the reports). Read-only, once per event, any hour you are trading, silenced by `!quiet`.
+- New alert kind "discipline" in the alert policy.
+
+**Why:** SH asked whether the cmd window must stay open (it did: it carried the link) and asked for DONNA to work in their favour like a real Jarvis. The scorecard's worst KPI is re-entries within 5 minutes of a loss (83 in 30 days, -$258 over the period), and the rule replay shows a 15-minute wait and a 1% hard stop would both have made money. A tap at the moment it happens beats a report the next day.
+
+**What you'll notice:** download the new DONNA-Console.bat once (same link as before) and double-click it; type the server password one last time. Your phone starts getting cool-off taps after losing trades.
+
+**Recommendation:** keep the guard on for two weeks, then look at `!discipline` and the PAD & KPIs tab: clean days and "Re-entries within 5 min of a loss" should move. Top up Claude credit when ready (paid, SH's call): that turns on her full conversation, drafting and the spoken briefing in her own words.
+
 ## 2026-11-08 · DONNA as your PA: definition of done, alert policy, meetings, wake word, weekly analysis
 
 **What was done:**

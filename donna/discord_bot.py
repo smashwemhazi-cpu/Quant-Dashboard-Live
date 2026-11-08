@@ -54,6 +54,7 @@ HELP = ("D.O.N.N.A commands:\n"
         "                           and your rules checked trade by trade (default: your latest trading day)\n"
         "!vsmarket  !vsmarket 60    market vs you over a period: with or against the trend, day by day and week by week\n"
         "!discipline  !streak       your trading days against your own rules: clean days, streak, what they made\n"
+        "!guard                     live discipline guard: cool-off after a loss, trades used today, losses in a row\n"
         "!meet jo@x.com | tomorrow | Intro call | 45m   book a meeting; the invitation goes only after you Approve\n"
         "!meet E14 | 2026-11-12 10:00 | Account opening   the same, with the sender of email 14; !meet = waiting ones\n"
         "!alerts  !alerts policy  !ack  !quiet 2h   what pinged you and what was held back; what deserves a ping\n"
@@ -353,8 +354,8 @@ def handle(text: str, channel: str = "") -> str | None:
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
     from jarvis.agents import complaints, ib, str_pack
 
-    from jarvis.agents import (alerts, attribution, campaigns, desk, edge, feeds, followup, hq, kpi, leadfinder, meetings,
-                               pad, policies, radar, review, screening, vsmarket, weekly, workflow)
+    from jarvis.agents import (alerts, attribution, campaigns, desk, edge, feeds, followup, guard, hq, kpi, leadfinder,
+                               meetings, pad, policies, radar, review, screening, vsmarket, weekly, workflow)
 
     reply = (complaints.command(cmd, rest) or str_pack.command(cmd, rest) or ib.command(cmd, rest)
              or leadfinder.command(cmd, rest) or radar.command(cmd, rest) or campaigns.command(cmd, rest) or attribution.command(cmd, rest)
@@ -363,7 +364,7 @@ def handle(text: str, channel: str = "") -> str | None:
              or feeds.command(cmd, rest) or policies.command(cmd, rest) or weekly.command(cmd, rest)
              or alerts.command(cmd, rest) or meetings.command(cmd, rest) or desk.command(cmd, rest)
              or edge.command(cmd, rest) or vsmarket.command(cmd, rest)
-             or review.command(cmd, rest))
+             or review.command(cmd, rest) or guard.command(cmd, rest))
     if reply is not None:
         return reply
     reply = compliance_commands(cmd, rest)
