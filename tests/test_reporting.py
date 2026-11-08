@@ -88,3 +88,21 @@ def test_weekly_runs_on_fridays_only(tmp_path, monkeypatch):
     agent = weekly.WeeklyAgent()
     assert agent.friday(send=False, today=date(2026, 11, 12)) == {"skipped": "not the weekly day"}
     assert agent.friday(send=False, today=date(2026, 11, 13))["bytes"] > 1000
+
+
+def test_trade_history_follows_the_live_ctrader_feed_over_a_weekend(tmp_path, monkeypatch):
+    import sqlite3
+    from datetime import date
+
+    monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
+    from jarvis.agents import feeds
+
+    with sqlite3.connect(tmp_path / "s.db") as c:
+        c.execute("CREATE TABLE position_snapshots (ts TEXT)")
+        c.execute("INSERT INTO position_snapshots VALUES ('2026-11-08T18:00:00')")
+        c.execute("CREATE TABLE pt_trades (closed_utc TEXT)")
+        c.execute("INSERT INTO pt_trades VALUES ('2026-11-06 20:00:00')")
+    row = [r for r in feeds.status(date(2026, 11, 8)) if r["name"] == "Your trade history"][0]
+    assert row["state"] == "live"
+    assert "🟢 Your trade history: from your cTrader account by itself; last closed trade 2026-11-06" \
+        in feeds.feeds_text(date(2026, 11, 8))
