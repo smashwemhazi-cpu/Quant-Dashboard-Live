@@ -35,6 +35,9 @@ from jarvis.core.config import settings
 from jarvis.core.registry import Agent, register, tool
 
 LOCAL_TZ = ZoneInfo(os.getenv("JARVIS_LOCAL_TZ", "UTC"))
+# how far back each inbox check looks (it runs every 15 minutes; mail already sorted is skipped). Read or unread,
+# in the inbox or archived: with bridge v7 an email you opened or archived on your phone is still noticed.
+MAIL_LOOKBACK_DAYS = max(1, min(int(os.getenv("JARVIS_MAIL_LOOKBACK_DAYS", "3")), 14))
 # sorting and drafting email is routine work: the smallest, cheapest model is plenty and stretches the credit
 TRIAGE_MODEL = os.getenv("JARVIS_TRIAGE_MODEL", "claude-haiku-5-5")
 MAX_BODY_CHARS = 6000
@@ -332,8 +335,8 @@ def _imap_mail(c: sqlite3.Connection, max_messages: int) -> Iterator[dict[str, s
     with imaplib.IMAP4_SSL(settings.imap_host) as m:
         m.login(settings.imap_user, settings.imap_password)
         m.select("INBOX", readonly=True)
-        since = (date.today() - timedelta(days=2)).strftime("%d-%b-%Y")
-        _, data = m.search(None, f'(UNSEEN SINCE "{since}")')
+        since = (date.today() - timedelta(days=MAIL_LOOKBACK_DAYS)).strftime("%d-%b-%Y")
+        _, data = m.search(None, f'(SINCE "{since}")')     # read or unread: mail opened on the phone counts too
         for num in data[0].split()[-max_messages:]:
             _, hdr = m.fetch(num, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
             raw_id = email.message_from_bytes(hdr[0][1]).get("Message-ID", "").strip() or f"num:{num.decode()}"
@@ -350,22 +353,25 @@ def _imap_mail(c: sqlite3.Connection, max_messages: int) -> Iterator[dict[str, s
 
 
 def _bridge_mail(c: sqlite3.Connection, max_messages: int) -> Iterator[dict[str, str]]:
-    r = google_bridge.call("mail", days=2, max=max_messages)
+    r = google_bridge.call("mail", days=MAIL_LOOKBACK_DAYS, max=max_messages)
     if "error" in r:
         raise ConnectionError(r["error"])
+    c.execute("CREATE TABLE IF NOT EXISTS email_replied (msg_id TEXT PRIMARY KEY, at TEXT)")
     for m in r.get("messages", []):
         raw_id = str(m.get("id") or "").strip()
         if raw_id and m.get("answered"):  # you replied after DONNA sorted it: it no longer counts as a reply owed
             c.execute("UPDATE email_seen SET needs_reply = 0 WHERE msg_id = ? AND needs_reply = 1", (raw_id,))
+            c.execute("INSERT OR IGNORE INTO email_replied VALUES (?, ?)", (raw_id, _now()))   # for reply times
         if raw_id and not c.execute("SELECT 1 FROM email_seen WHERE msg_id = ?", (raw_id,)).fetchone():
-            # bridge v4 also sends read mail; one you've opened or answered is counted, not chased
+            # read mail counts too: an email you opened on your phone still gets its tasks and stays owed until
+            # you answer it. Only one you've already answered is "handled". Opened mail never pings you.
             yield {"id": raw_id, "received": str(m.get("date") or _now()), "from": str(m.get("from", "")),
                    "subject": str(m.get("subject", "")), "body": str(m.get("body", "")),
-                   "handled": m.get("unread") is False or bool(m.get("answered")),
+                   "handled": bool(m.get("answered")), "opened": m.get("unread") is False,
                    "answered": bool(m.get("answered"))}
 
 
-def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
+def triage_inbox(max_messages: int = 40, client: Any = None) -> dict[str, Any]:
     if not inbox_connected():
         return {"error": "NO DATA - inbox not connected (Google bridge, or JARVIS_IMAP_HOST / _USER / _PASSWORD)"}
     import anthropic
@@ -402,7 +408,8 @@ def triage_inbox(max_messages: int = 25, client: Any = None) -> dict[str, Any]:
                     add_task(t["title"], t["due"], t["priority"], f"From email: {subject}", "email", m["id"], conn=c)
                     for t in r["tasks"]]
                 entry = {"subject": subject, "from_domain": domain, **r, "task_ids": [i for i in ids if i],
-                         **({"handled": True} if m.get("handled") else {})}
+                         **({"handled": True} if m.get("handled") else {}),
+                         **({"opened": True} if m.get("opened") else {})}
                 try:
                     from jarvis.agents import complaints
 
@@ -700,8 +707,8 @@ class AssistantAgent(Agent):
         return {"done": complete_task(task_id)}
 
     @tool()
-    def triage(self, max_messages: int = 25) -> dict[str, Any]:
-        """Read new unread emails (read-only), classify them, and turn required actions into tasks."""
+    def triage(self, max_messages: int = 40) -> dict[str, Any]:
+        """Read new emails, read or unread (read-only), classify them, and turn required actions into tasks."""
         return triage_inbox(max_messages)
 
     @tool()

@@ -126,7 +126,7 @@ def test_bridge_v5_gap_fixes():
     sent = gs.split("function sent_")[1].split("\n}\n")[0]
     cal = gs.split("function calendar_")[1].split("\n}\n")[0]
     assert "isDraft()" in mail and "!n.isDraft()" in mail and "isDraft()" in sent
-    assert "getCreators()" in cal and "getMyStatus()" in cal and "var VERSION = 6;" in gs
+    assert "getCreators()" in cal and "getMyStatus()" in cal and "var VERSION = 7;" in gs
 
 
 def test_declined_meetings_are_not_part_of_the_day(monkeypatch):

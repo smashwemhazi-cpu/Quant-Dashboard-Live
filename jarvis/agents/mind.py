@@ -453,15 +453,15 @@ class MindAgent(Agent):
     def nudge(self, midday: bool = False) -> dict[str, Any]:
         """Scheduler hook (not a Brain tool): meeting reminders, plus the midday check when midday=True.
         Delivers to JARVIS_PERSONAL_TARGETS."""
-        msgs = meeting_nudges() + ([m] if midday and (m := midday_check()) else [])
+        meetings = meeting_nudges()
+        mid = [m] if midday and (m := midday_check()) else []
+        msgs = meetings + mid
         res: dict[str, Any] = {"nudges": msgs}
         if msgs:
-            from jarvis.agents.personal import PERSONAL_TARGETS
+            from jarvis.agents import alerts
 
-            if PERSONAL_TARGETS:
-                from donna.channels import broadcast
-
-                res["delivery"] = broadcast("\n\n".join(msgs), PERSONAL_TARGETS, title="D.O.N.N.A heads-up")
+            res["delivery"] = {m[:60]: alerts.raise_alert("meeting_soon" if m in meetings else "midday", m)
+                               for m in msgs}
         return res
 
     @tool()

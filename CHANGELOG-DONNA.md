@@ -5,6 +5,33 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-08 · DONNA as your PA: definition of done, alert policy, meetings, wake word, weekly analysis
+
+**What was done:**
+- **Definition of done** (`!desk`). The goal is now written down: DONNA knows where everything is, is your PA and coordinates everything. It is measured by eight outcomes over the last 7 days, compared with the 7 days before, each with a target: every email sorted within 30 min, no reply owed over 2 working days, replies within 24h, overdue tasks 3 or fewer, closed ≥ added, 5h of focus time, meetings 40% of the week or less, nothing waiting for your OK over a day. The "Run your day" duty is now "Be your PA".
+- **Your workflow, defined.** Fixed period, fixed numbers and a week-on-week comparison. Each Friday's numbers are saved, so the next week shows the trend.
+- **Weekly analysis** (`!analysis`, and page 2 of the Friday PDF):
+  - your trades: net, win rate, profit factor, worst run, best and worst symbol, oversized losses, overtrading days
+  - your work flow
+  - every agent and job: running, failing, waiting, most frequent failures, alerts raised
+  - KPIs: which slipped and which recovered
+  - the PA standard
+- **Alert policy** (`!alerts`, `!alerts policy`, `!ack`, `!quiet 2h`). One place decides what deserves a ping, on four levels:
+  - Critical pings any hour and repeats until `!ack`.
+  - Important pings during 07:00–21:00, at most 4 an hour.
+  - Notice waits for your next morning or evening message.
+  - Log is never sent.
+
+  The same alert goes out once a day at most. Job failures no longer ping you, unless DONNA's email or heartbeat has been down for 6 hours. Email you already opened never pings.
+- **Mail you opened or archived on your phone** is now noticed. DONNA reads read and unread mail, in the inbox or archived (bridge v7), over the last 3 days. Opened mail still gets its tasks and stays owed until you answer. Your reply times are recorded.
+- **Meetings** (`!meet`). DONNA picks a free slot or uses your time, holds it in your calendar and prepares the invitation. It goes out only when you tap Approve (Discord or phone). Reject removes the hold. Works from an email (`!meet E14 | ...`) after triage.
+- **Wake word** in the console: switch on 👂 and say "Donna, what's on today?".
+- Google bridge **version 7**: archived and read mail, meeting invitations after Approve, removing DONNA's own holds.
+
+**Why:** SH set out what was missing: a written goal, email read on the phone, a diary DONNA can write to (with checks), a defined workflow analysis, an alert policy, the wake word, and a weekly analysis of trades, work flow, agents and KPIs.
+
+**Recommendation:** paste bridge v7 (one paste covers v6 too), then watch `!desk` for two weeks before changing any target.
+
 ## 2026-11-08 · cTrader's EOD email read by itself, and phone pairing that explains itself
 
 **What was done:**

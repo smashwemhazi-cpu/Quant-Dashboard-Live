@@ -72,6 +72,7 @@ ACTION_TTL = {  # a stale action must not be executable hours later
     "SEND_REPLY": timedelta(hours=24),
     "DEPLOY_STRATEGY": timedelta(days=7),
     "DISPATCH_OUTREACH": timedelta(days=3),
+    "SEND_INVITE": timedelta(days=3),   # a meeting invitation DONNA prepared (!meet)
 }
 
 def _now() -> datetime:
@@ -315,11 +316,25 @@ def exec_deploy_demo(row: sqlite3.Row) -> str:
     return f"copied to DEMO deploy folder {dest}"
 
 
+def exec_send_invite(row: sqlite3.Row) -> str:
+    from jarvis.agents import meetings
+
+    return meetings.send(row)
+
+
+def cancel_invite(row: sqlite3.Row) -> None:
+    from jarvis.agents import meetings
+
+    meetings.cancel(row)
+
+
 EXECUTORS: dict[str, Callable[[sqlite3.Row], str]] = {
+    "SEND_INVITE": exec_send_invite,       # only after SH's Approve on that exact invitation
     "BROADCAST_SIGNAL": exec_broadcast,
     "SEND_REPLY": exec_send_reply,
     "DEPLOY_STRATEGY": exec_deploy_demo,   # DEMO only - never a live server
 }
+ON_REJECT: dict[str, Callable[[sqlite3.Row], None]] = {"SEND_INVITE": cancel_invite}
 # Executed by an external worker that holds the session (lead monitor's Telegram user account).
 DEFERRED = {"DISPATCH_OUTREACH"}
 
@@ -339,6 +354,11 @@ def decide(action_id: str, approve: bool, who: str) -> dict[str, Any]:
         row = c.execute("SELECT * FROM actions WHERE action_id = ?", (action_id,)).fetchone()
     audit(who, "approved" if approve else "rejected", {"action_id": action_id})
     if not approve:
+        try:
+            if row["action_type"] in ON_REJECT:
+                ON_REJECT[row["action_type"]](row)
+        except Exception as e:  # noqa: BLE001 - tidy-up only; the rejection itself stands
+            log.warning("after reject %s: %s", action_id, e)
         return {"status": "REJECTED", "action_id": action_id}
     if row["action_type"] in DEFERRED:
         return {"status": "APPROVED", "action_id": action_id, "result": "queued for worker"}

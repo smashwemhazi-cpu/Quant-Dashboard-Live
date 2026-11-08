@@ -140,6 +140,8 @@ def test_repeated_job_failures_alert_once(monkeypatch, tmp_path):
     sent = []
     import donna.channels as ch
     monkeypatch.setattr(ch, "broadcast", lambda text, targets, title: sent.append(text) or {})
+    from jarvis.agents import alerts   # failures now go through the alert policy: count what is raised
+    monkeypatch.setattr(alerts, "raise_alert", lambda kind, text, key="", now=None: sent.append(text) or "held")
     monkeypatch.setattr(scheduler, "ALERT_TARGETS", ["discord:personal"])
     monkeypatch.setattr(scheduler.audit, "log", lambda *a, **k: None)
     monkeypatch.setattr(scheduler, "FAIL_GRACE_MINUTES", 0)
@@ -283,6 +285,8 @@ def test_blips_and_weekend_failures_stay_quiet(monkeypatch, tmp_path):
     sent = []
     import donna.channels as ch
     monkeypatch.setattr(ch, "broadcast", lambda text, targets, title: sent.append(text) or {})
+    from jarvis.agents import alerts   # failures now go through the alert policy: count what is raised
+    monkeypatch.setattr(alerts, "raise_alert", lambda kind, text, key="", now=None: sent.append(text) or "held")
     monkeypatch.setattr(scheduler, "ALERT_TARGETS", ["discord:personal"])
     monkeypatch.setattr(scheduler.audit, "log", lambda *a, **k: None)
     sat = datetime(2026, 11, 7, 6, 4, tzinfo=timezone.utc)

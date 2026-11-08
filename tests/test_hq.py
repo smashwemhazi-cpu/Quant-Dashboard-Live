@@ -44,7 +44,7 @@ def test_agents_board_shows_ok_waiting_failing_and_run_now(tmp_path, monkeypatch
     assert states["daily_wrap"]["state"] == "ok" and states["inbox_triage"]["state"] == "waiting"
     assert states["execution"]["state"] == "failing" and states["weekly_pack"]["state"] == "not_run"
     text = hq.agents_text(now)
-    assert "RUN YOUR DAY  [partly waiting on setup]" in text and "WATCH THE DESK AND THE MARKETS  [needs a fix]" in text
+    assert "BE YOUR PA  [partly waiting on setup]" in text and "WATCH THE DESK AND THE MARKETS  [needs a fix]" in text
     assert "OK       daily_wrap" in text and "last ran 60m ago" in text and "Google refused" in text
 
     ran = []

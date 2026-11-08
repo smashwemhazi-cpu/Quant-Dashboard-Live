@@ -154,11 +154,13 @@ def test_alert_delivery_only_for_chosen_events(monkeypatch):
     monkeypatch.setattr(scheduler, "ALERT_TARGETS", ["discord:personal"])
     import donna.channels as ch
     monkeypatch.setattr(ch, "broadcast", lambda text, targets, title: sent.append((title, text)) or {})
+    from jarvis.agents import alerts   # desk alerts go through the alert policy (important = ping in hours)
+    monkeypatch.setattr(alerts, "raise_alert", lambda kind, text, key="", now=None: sent.append((kind, text)) or "sent")
     monkeypatch.setattr(scheduler.audit, "log", lambda *a, **k: None)
     scheduler.notify("execution_alert", {"fill_rate_pct": 95.1})
     scheduler.notify("retention_scan", [{"client": "x"}])   # not in the default alert list
     scheduler.notify("morning_brief", "Good morning")
-    assert sent == [("D.O.N.N.A execution alert", "fill_rate_pct: 95.1"), ("D.O.N.N.A morning brief", "Good morning")]
+    assert sent == [("desk_risk", "Execution alert:\nfill_rate_pct: 95.1"), ("D.O.N.N.A morning brief", "Good morning")]
 
 
 def test_free_chat_needs_named_users(monkeypatch):
@@ -228,4 +230,5 @@ def test_scheduler_remembers_runs_and_reports_failures(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "ALERT_TARGETS", ["discord:personal"])
     monkeypatch.setattr(scheduler.audit, "log", lambda *a, **k: None)
     scheduler.job_failed("daily_wrap", RuntimeError("feed down"))
-    assert sent == ["D.O.N.N.A job failed"]
+    from jarvis.agents import alerts   # a failing job is a notice: held for the next message, not a ping
+    assert sent == [] and [r["kind"] for r in alerts.status_rows()] == ["job_failed"]
