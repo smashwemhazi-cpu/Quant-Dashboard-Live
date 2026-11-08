@@ -93,3 +93,16 @@ def test_helpers():
     assert charts.thin(list(range(10)), 4) == [0, 3, 6, 9]
     assert charts._watch_key("US100") == "NAS100" and charts._watch_key("GBPUSD.r") == "GBPUSD"
     assert charts._watch_key("AAPL") is None
+
+
+def test_my_edge_tab(client):
+    from jarvis.agents import personal
+
+    trades = [{"closed_utc": f"2026-11-0{1 + i // 4} {9 + i % 4}:00:00.000000", "symbol": "EURUSD", "side": "BUY",
+               "entry": 1 + i / 1e4, "exit": 1, "qty": 1000, "net": n, "balance": 1000 + n}
+              for i, n in enumerate([3, -5, 2, 2, -4, 3, 3, -6])]
+    personal.store_trades("123", trades)
+    e = client.get("/api/charts/data", headers=API).json()["edge"]
+    assert e["overall"]["trades"] == 8 and e["overall"]["breakeven_win_rate"] > 50
+    assert {r["rule"] for r in e["replay"]} >= {"cooldown", "cap_losses"} and e["behaviour"]["others"]["trades"]
+    assert 'data-tab="edge"' in client.get("/charts", headers=LOCAL).text
