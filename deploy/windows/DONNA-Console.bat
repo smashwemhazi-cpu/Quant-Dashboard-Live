@@ -5,8 +5,8 @@ rem nothing is put on the public internet.
 rem First time only: it makes a key for this PC and asks for your SERVER password once. After that the link
 rem runs hidden in the background, reconnects by itself, and no black window has to stay open.
 rem The key can only open DONNA's console link on the server: no shell, no files (deploy/vertex1-console-key).
-rem   DONNA.vbs                the no-window way to open her: double-click it instead of this file (it runs
-rem                            this file hidden; first time only it shows this window for the password)
+rem   DONNA icon (Desktop)     the no-window way to open her. This file makes it the first time it connects: a
+rem                            plain Windows shortcut running this file through conhost --headless (no window).
 rem   DONNA-Console.bat        open the console (starts the hidden link if it isn't running)
 rem   DONNA-Console.bat stop   stop the hidden link and stop it starting with Windows
 set "SERVER=root@178.62.67.163"
@@ -70,19 +70,20 @@ goto startlink
 
 :open
 echo DONNA is connected. Her window opens in a moment; you can close this one.
-if not defined DONNA_VBS echo Tip: open her with DONNA.vbs instead and no black window shows at all.
+call :desktop_shortcut
+if exist "%STARTUP_LNK%" call :startup_shortcut
+echo From now on open her with the DONNA icon on your Desktop: no black window at all.
 start "" powershell -NoProfile -WindowStyle Hidden -Command "for ($i = 0; $i -lt 240; $i++) { try { $r = Invoke-WebRequest -UseBasicParsing -Uri '%URL%' -TimeoutSec 5; if ($r.StatusCode -eq 200) { try { Start-Process msedge.exe -ArgumentList '--app=%URL% --start-maximized' } catch { Start-Process '%URL%' }; exit } } catch { }; Start-Sleep 2 }"
 ping -n 3 127.0.0.1 >nul
 exit /b 0
 
 :quiet
-rem Started hidden by DONNA.vbs: no window at all. Anything that needs SH (first-time setup, a link that won't
+rem Started by the DONNA Desktop icon through conhost --headless: no window at all. Anything that needs SH (first-time setup, a link that won't
 rem come up) reopens this file in a normal window.
 if not exist "%KEY%" (
   start "DONNA Console" "%DONNA_BAT%"
   exit /b 0
 )
-if exist "%STARTUP_LNK%" if defined DONNA_VBS call :startup_shortcut
 call :linked && goto quiet_open
 call :launch_hidden
 for /l %%i in (1,1,30) do (
@@ -142,12 +143,13 @@ powershell -NoProfile -WindowStyle Hidden -Command "$q = [char]34; Start-Process
 exit /b 0
 
 :startup_shortcut
-rem Start the link with Windows. Through DONNA.vbs when there is one: no window at sign-in, not even minimised.
-if defined DONNA_VBS (
-  powershell -NoProfile -WindowStyle Hidden -Command "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:STARTUP_LNK); $s.TargetPath = (Join-Path $env:SystemRoot 'System32\wscript.exe'); $s.Arguments = [char]34 + $env:DONNA_VBS + [char]34 + ' boot'; $s.WindowStyle = 7; $s.Save()"
-) else (
-  powershell -NoProfile -WindowStyle Hidden -Command "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:STARTUP_LNK); $s.TargetPath = $env:DONNA_BAT; $s.Arguments = 'boot'; $s.WindowStyle = 7; $s.Save()"
-)
+rem Start the link with Windows, through conhost --headless: no window at sign-in, not even minimised.
+powershell -NoProfile -WindowStyle Hidden -Command "$q = [char]34; $s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:STARTUP_LNK); $s.TargetPath = (Join-Path $env:SystemRoot 'System32\conhost.exe'); $s.Arguments = '--headless ' + $env:ComSpec + ' /c ' + $q + $q + $env:DONNA_BAT + $q + ' boot' + $q; $s.WindowStyle = 7; $s.Save()"
+exit /b 0
+
+:desktop_shortcut
+rem The DONNA icon on the Desktop: a plain Windows shortcut (no script) that runs this file with no window.
+powershell -NoProfile -WindowStyle Hidden -Command "$q = [char]34; $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'DONNA.lnk'; $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk); $s.TargetPath = (Join-Path $env:SystemRoot 'System32\conhost.exe'); $s.Arguments = '--headless ' + $env:ComSpec + ' /c ' + $q + $q + $env:DONNA_BAT + $q + ' quiet' + $q; $s.WorkingDirectory = (Split-Path $env:DONNA_BAT); $s.Description = 'Open DONNA'; $e = @(${env:ProgramFiles(x86)}, $env:ProgramFiles) | ForEach-Object { Join-Path $_ 'Microsoft\Edge\Application\msedge.exe' } | Where-Object { Test-Path $_ } | Select-Object -First 1; if ($e) { $s.IconLocation = $e + ',0' }; $s.Save()"
 exit /b 0
 
 :kill_link

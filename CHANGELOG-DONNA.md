@@ -11,11 +11,11 @@ or keys, and nothing paid is signed up for without your OK.
 - **Market-hours aware checks** (`jarvis/core/markets.py`). FX, metals, indices and stocks follow the 5-day week (Sunday 21:00 to Friday 22:00 UTC, closed 25 Dec and 1 Jan); crypto trades 7/7. While the market is closed a failing cTrader connection (server closed or in weekend maintenance) sends no alert and shows as **RESTING** on `!agents`, `!hq`, the console and the charts Agents tab, not FAILING; it only counts as a problem if it is still failing an hour after the market reopens. `!feeds` judges the cTrader account on market hours and says when markets are closed. Back-office report ages are counted in working days, so Friday's report is still current on Sunday.
 - **Syntellicore switched off** (no access). CRM KPIs, CRM leads, customer documents / KYC and IB commissions now show as "not used" in `!feeds`; they are left out of the daily report, the KRIs, the KPI scorecard (listed as NOT USED), the "needs you" nags, the weekly page and the growth review. Turn it back on with `JARVIS_SYNTELLICORE=on` in /etc/vertex1/vertex1.env.
 - **Trade history from the cTrader API.** The API is the source of truth; a statement (emailed or uploaded) is optional backup and only fills in trades older than the API's history, so nothing is ever counted twice. DONNA no longer mentions statement uploads.
-- **DONNA.vbs:** a launcher that opens the console with no black window at all, keeps the console file up to date by itself, and moves "start with Windows" onto it too.
+- **DONNA icon:** the console file now puts a DONNA icon on the Desktop that opens her with no black window at all (a plain shortcut through Windows' `conhost.exe --headless`), and "start with Windows" uses it too. The first try, a DONNA.vbs launcher, was blocked by Microsoft Defender (script launchers that download and run a file look like malware), so it was removed the same evening.
 
 **Why:** SH asked (8 Nov) that weekends and closed markets stop producing failures, that Syntellicore stays off for now, that trade history comes from the API they already granted, and for a console with no cmd window.
 
-**Recommendations:** use DONNA.vbs from now on (the old DONNA-Console.bat on the Desktop can be deleted). When Syntellicore access arrives, set `JARVIS_SYNTELLICORE=on` and ask back office to email the exports.
+**Recommendations:** open DONNA with the Desktop icon from now on; keep DONNA-Console.bat where it is (the icon runs it). Leave Microsoft Defender on. When Syntellicore access arrives, set `JARVIS_SYNTELLICORE=on` and ask back office to email the exports.
 
 ## 2026-11-09 · !feeds: trade history no longer red over a weekend
 

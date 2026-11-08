@@ -196,16 +196,12 @@ def test_console_runs_hidden_and_reconnects_with_its_own_key():
     assert "vertex1-console-key" in (DEPLOY / "install.sh").read_text()
 
 
-def test_vbs_launcher_opens_the_console_with_no_window():
-    vbs = (DEPLOY / "windows" / "DONNA.vbs").read_bytes()
-    assert b"\r\n" in vbs and b"\n" not in vbs.replace(b"\r\n", b"")
-    text = vbs.decode()
-    assert '""" " & arg, 0, False' in text                 # set up: the console file runs hidden (style 0)
-    assert '"""", 1, False' in text                         # first time only: a normal window for the password
-    assert "donna_console_ed25519" in text and "DONNA_VBS" in text and "deploy/windows/DONNA-Console.bat" in text
+def test_desktop_icon_opens_the_console_with_no_window():
+    assert not (DEPLOY / "windows" / "DONNA.vbs").exists()     # Defender flags script launchers: none shipped
     bat = (DEPLOY / "windows" / "DONNA-Console.bat").read_bytes().decode()
-    for label in ["quiet", "quiet_open", "failed", "startup_shortcut"]:
+    for label in ["quiet", "quiet_open", "failed", "startup_shortcut", "desktop_shortcut"]:
         assert f"\r\n:{label}\r\n" in bat
-    assert 'if /i "%~1"=="quiet" goto quiet' in bat and "wscript.exe" in bat
+    assert 'if /i "%~1"=="quiet" goto quiet' in bat and "conhost.exe" in bat and "'--headless '" in bat
+    assert "' quiet'" in bat and "' boot'" in bat and "wscript.exe" not in bat.lower()
     quiet = bat[bat.index("\r\n:quiet\r\n"):bat.index("\r\n:boot\r\n")]
     assert "start \"\" powershell" not in quiet and "choice" not in quiet   # nothing that would pop a window
