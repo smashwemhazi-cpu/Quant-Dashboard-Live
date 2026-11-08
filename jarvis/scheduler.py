@@ -250,6 +250,12 @@ def job_weekly_pack() -> None:
         notify("weekly_pack", r.get("delivery"))
 
 
+def job_weekly_picture() -> None:
+    r = agents()["weekly"].friday(send=True)
+    if "skipped" not in r:
+        notify("weekly_picture", r.get("delivery"))
+
+
 def job_pad_pack() -> None:
     r = agents()["pad"].monthly(send=True)
     if "skipped" not in r:
@@ -290,6 +296,7 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("evening", 60 * 24, int(os.getenv("JARVIS_SHUTDOWN_UTC_HOUR", "16")), job_evening),
     ("growth_review", 60 * 24, int(os.getenv("JARVIS_GROWTH_UTC_HOUR", "5")), job_growth_review),  # on DONNA_GROWTH_WEEKDAY
     ("weekly_pack", 60 * 24, int(os.getenv("JARVIS_PACK_UTC_HOUR", "5")), job_weekly_pack),  # PDF on DONNA_PACK_WEEKDAY
+    ("weekly_picture", 60 * 24, int(os.getenv("JARVIS_WEEKLY_UTC_HOUR", "13")), job_weekly_picture),  # Fridays
     ("pad_pack", 60 * 24, int(os.getenv("JARVIS_PACK_UTC_HOUR", "5")), job_pad_pack),  # PDF on DONNA_PAD_PACK_DAY
     ("heartbeat", 10, None, job_heartbeat),                                                # uptime watchdog
     ("sanctions_lists", 60 * 24, int(os.getenv("JARVIS_SANCTIONS_UTC_HOUR", "3")), job_sanctions_lists),

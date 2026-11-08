@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 PAGE = Path(__file__).with_name("console.html")
@@ -128,6 +128,7 @@ INTENTS = [
     (re.compile(r"\b(kris?|risk indicators?|how (?:is|are) (?:the )?risk)\b", re.I), "!kri"),
     (re.compile(r"\b(open )?cases\b", re.I), "!cases"),
     (re.compile(r"\b(positions?|exposure|my risk)\b", re.I), "!risk"),
+    (re.compile(r"\b(how fresh|data fresh|my data|feeds?|exports?|reports? (?:up to date|fresh|old))\b", re.I), "!feeds"),
     (re.compile(r"\b(status|what(?:'s| is) (?:broken|not working|connected))\b", re.I), "!status"),
 ]
 
@@ -148,6 +149,8 @@ def reply(text: str) -> str:
     text = text.strip()
     if text.startswith(("!", "#")):
         return discord_bot.handle(text, channel="console") or "I don't know that command - try !help"
+    if re.search(r"\bpolic(?:y|ies)\b", text, re.I) and len(text.split()) >= 3:
+        return discord_bot.handle("!policy " + text, channel="console") or ""   # "what does our AML policy say..."
     cmd = intent(text)
     if cmd:
         return discord_bot.handle(cmd, channel="console") or ""
@@ -166,6 +169,14 @@ def console_str_pdf(case_id: int) -> Any:
         raise HTTPException(404, str(e)) from e
     return Response(pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'inline; filename="{str_pack.filename(case_id)}"', "Cache-Control": "no-store"})
+
+
+@router.get("/console/weekly.pdf", dependencies=[Depends(tunnel_only)])
+def console_weekly_pdf() -> Response:
+    from jarvis.agents import weekly
+
+    return Response(weekly.build_pdf(), media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{weekly.filename()}"'})
 
 
 @router.get("/api/console/wake", dependencies=[Depends(console_api)])

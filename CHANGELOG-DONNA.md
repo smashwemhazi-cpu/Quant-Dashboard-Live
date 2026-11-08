@@ -5,6 +5,18 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-08 · Phone, policy search, data freshness and the weekly page
+
+**What was done:**
+- **DONNA on your phone (Telegram):** new service `vertex1-phone`, set up with `vertex1-connect phone`. It answers the same commands as Discord with / or !, shows ✓ buttons under task lists, and has Approve/Reject buttons on anything waiting for your OK. The morning brief, alerts and the Friday page also go to the phone. Only your Telegram account is answered.
+- **Ask your policies:** `!policy add` with files attached, then `!policy <question>` gives the passage with the document and page (full-text search on the server, no Claude needed). The console answers spoken "what does our policy say about…" questions too.
+- **Data freshness:** `!feeds` lists every report and connection, how old each is, what goes stale without it, and how to put reports on autopilot by email. `vertex1-connect email` now asks for the report sender address.
+- **Your week on one page:** a one-page PDF with four big numbers, a daily bar chart, what slipped, what's due, account, compliance, KPIs, data freshness and the first three moves for next week. It comes automatically on Fridays, or any time with `!weekly`.
+
+**Why:** SH asked to build all five recommendations and to make reporting visible and doable.
+
+**Recommendation:** top up Claude credit (SH's call, paid). Then DONNA's sorting, drafts and chat run at full strength instead of on rules.
+
 ## 2026-11-08 · See what a task or email is about, and the next step
 
 **What was done:**

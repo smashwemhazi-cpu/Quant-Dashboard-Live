@@ -380,11 +380,13 @@ async def notify_admin(action_id: str, action_type: str, dest: str, preview: str
         return
     # Plain text on purpose: Markdown breaks (HTTP 400) on '_', '*' or backticks in previews.
     text = (f"DONNA approval required\nType: {action_type}\nTo: {dest}\n\n{preview[:1500]}\n\n"
-            f"/approve {action_id}\n/reject {action_id}")
+            f"Tap Approve or Reject below (or type /approve {action_id})")
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
-            async with s.post(url, json={"chat_id": TG_CHAT_ID, "text": text}) as r:
+            buttons = {"inline_keyboard": [[{"text": "✅ Approve", "callback_data": f"approve:{action_id}"},
+                                            {"text": "✖ Reject", "callback_data": f"reject:{action_id}"}]]}
+            async with s.post(url, json={"chat_id": TG_CHAT_ID, "text": text, "reply_markup": buttons}) as r:
                 if r.status != 200:
                     log.error("Telegram sendMessage %s: %s", r.status, (await r.text())[:300])
     except aiohttp.ClientError as e:

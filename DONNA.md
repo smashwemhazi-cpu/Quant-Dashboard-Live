@@ -193,7 +193,24 @@ Version 5 (optional) adds two read-only things. It lists **sent emails nobody ha
 Schedule the cTrader and Syntellicore reports to be emailed to simba@vertex1brokers.com. Every 30 minutes DONNA looks for new spreadsheet attachments (.csv, .xlsx, .xls) from the last 3 days.
 - Files she recognises by their columns (end-of-day, account activity, price streams, KPIs, documents, leads, statements) are loaded. The compliance checks then run straight away, and you get a "Picked up from your email" message.
 - Every other spreadsheet is deleted from the server at once, so a client's file never stays there.
-- To accept reports only from certain senders, set `JARVIS_REPORT_SENDERS=ctrader.com,syntellicore.com` in the settings file.
+- To accept reports only from certain senders, run `vertex1-connect email` and answer the "report senders" question (for example `ctrader.com,syntellicore.com`).
+- `!feeds` (or ask the console "how fresh is my data?") lists every report and connection with a green, red or white dot. It says how old each one is, what goes stale without it, and the three steps to put it on autopilot. The weekly page shows the same in one line.
+
+## DONNA on your phone (Telegram)
+
+The same DONNA in your pocket: commands, ✓ buttons, Approve/Reject buttons, the morning brief, urgent alerts and the Friday page as a PDF. It needs no public web address.
+1. In Telegram, open **@BotFather**, send `/newbot`, give it a name (DONNA) and a username ending in `bot`. Copy the token it gives you.
+2. On the server: `vertex1-connect phone`, paste the token (nothing shows while you paste).
+3. When it says so, open your new bot in Telegram and tap **Start**. DONNA saves your account, so only you are answered. Strangers who find the bot get nothing.
+Then type the same commands with `/` or `!`: `/tasks` (with ✓ buttons), `/today`, `/waiting`, `/task 4`, `/policy gifts`, `/weekly`. You can also just ask "what's on today?".
+
+## Ask your policies
+
+Attach your policy PDFs, Word files or text files in Discord to a message that says `!policy add`. Then ask: `!policy what does our AML policy say about PEPs?`, or ask the console out loud. You get the three passages that answer it, each with the document and page. These are the words themselves, not a summary, and the search runs on the server with no Claude credit. `!policy list` shows what she has read; `!policy remove <name>` forgets one. A scanned PDF has no text to search, so export it as a text PDF or Word file.
+
+## Your week on one page
+
+Every Friday afternoon (`DONNA_WEEKLY_WEEKDAY`, `JARVIS_WEEKLY_UTC_HOUR`) DONNA sends a one-page PDF to your personal channel and phone. It has four big numbers (tasks closed, replies you owe, emails sorted, KPIs in red) and a bar chart of each day. It also shows what slipped, what's due next week, your account, the compliance indicators, the KPI scorecard, how fresh the data is, and "Start next week with": the three things to do first. Any time: `!weekly` in Discord (PDF attached), `/weekly` on the phone, or in the console open http://localhost:8765/console/weekly.pdf.
 
 ## DONNA Console (her face and voice)
 

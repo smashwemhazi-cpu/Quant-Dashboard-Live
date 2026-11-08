@@ -34,9 +34,9 @@ DUTIES: list[dict[str, Any]] = [
     {"key": "day", "name": "Run your day",
      "promise": "Sorts your inbox, keeps your task list and diary, reminds you before meetings, and opens "
                 "and closes each day with one message.",
-     "agents": ["assistant", "workflow", "rhythm", "mind"],
-     "jobs": ["inbox_triage", "morning", "evening", "my_day", "shutdown", "nudges", "midday"],
-     "commands": "!today !tasks !add !done !draft !waiting !diary !workflow !morning !evening",
+     "agents": ["assistant", "workflow", "rhythm", "mind", "weekly"],
+     "jobs": ["inbox_triage", "morning", "evening", "my_day", "shutdown", "nudges", "midday", "weekly_picture"],
+     "commands": "!today !tasks !task !add !done !draft !waiting !diary !workflow !morning !evening !weekly !policy !feeds",
      "proof": "Morning message by 08:00 your time; urgent unread email reaches you within 15 minutes."},
     {"key": "compliance", "name": "Keep the firm compliant",
      "promise": "Runs the AML/KYC and execution rules on every back-office report, keeps the case and "
