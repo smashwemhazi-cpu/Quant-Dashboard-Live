@@ -4,6 +4,7 @@ Shows, from DONNA's own records (no Claude credit needed, nothing is sent anywhe
   - the account: equity curve from the read-only cTrader feed, drawdown from the peak, today's daily-loss line
   - risk now: open risk vs the limit, room before the daily-loss stop, positions without a hard stop
   - closed trades: cumulative P&L, P&L per day and per symbol, win rate, profit factor, expectancy
+  - my edge: win rate vs break-even, behaviour after losses, results by symbol / session / size, rule replay
   - markets: daily closes of the report watchlist with 20/50-day averages, moves, volatility and trend,
     with the entry and stop of any open position drawn on its chart
   - compliance: PAD flags and the trading KPIs
@@ -154,6 +155,13 @@ def trades(days: int = TRADE_DAYS) -> dict[str, Any]:
             "big_losses": len(j["big_losses"])}
 
 
+# ------------------------------------------------------------------ my edge
+def edge(days: int = TRADE_DAYS) -> dict[str, Any]:
+    from jarvis.agents import edge as e
+
+    return e.report(days)
+
+
 # ------------------------------------------------------------------ compliance
 def compliance() -> dict[str, Any]:
     from jarvis.agents import kpi, pad
@@ -184,7 +192,7 @@ def charts_data() -> dict[str, Any]:
 
     return {"now": datetime.now(assistant.LOCAL_TZ).strftime("%a %d %b %Y %H:%M"),
             "account": _section(account), "risk": _section(risk), "trades": _section(trades),
-            "compliance": _section(compliance)}
+            "edge": _section(edge), "compliance": _section(compliance)}
 
 
 # ------------------------------------------------------------------ markets

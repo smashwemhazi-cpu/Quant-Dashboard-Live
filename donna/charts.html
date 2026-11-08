@@ -50,8 +50,8 @@
   .card-head .px { font-variant-numeric: tabular-nums; font-weight: 600; }
   .stats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 2px 0 4px; }
   .up { color: var(--ok); } .down { color: var(--bad); } .warn { color: var(--warn); }
-  .pill { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
-  #pos-table, #kpi-table, #pad-table { overflow-x: auto; }   /* a wide table scrolls inside its panel on a phone */
+  .pill { display: inline-block; white-space: nowrap; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+  #pos-table, #kpi-table, #pad-table, #ed-beh, #ed-replay, #ed-groups .panel { overflow-x: auto; }   /* a wide table scrolls inside its panel on a phone */
   table { width: 100%; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
@@ -74,6 +74,7 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
 <nav role="tablist">
   <button role="tab" data-tab="account" aria-selected="true">My account</button>
   <button role="tab" data-tab="trades" aria-selected="false">Closed trades</button>
+  <button role="tab" data-tab="edge" aria-selected="false">My edge</button>
   <button role="tab" data-tab="markets" aria-selected="false">Markets</button>
   <button role="tab" data-tab="compliance" aria-selected="false">PAD &amp; KPIs</button>
 </nav>
@@ -95,6 +96,16 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
     <div class="panel"><h2>Net P&amp;L per day</h2><div class="chart" id="day-chart"></div></div>
   </div>
   <div class="panel"><h2>Net P&amp;L per symbol</h2><div class="chart" id="sym-chart"></div></div>
+</section>
+
+<section id="tab-edge" hidden>
+  <p class="note">Where your own trades make and lose money. A group needs enough trades before DONNA calls it an edge or a leak; below that it says "too few to tell". Same report in Discord: <b>!edge</b>.</p>
+  <div class="tiles" id="ed-tiles"></div>
+  <div class="grid2">
+    <div class="panel"><h2>Behaviour after a loss</h2><div id="ed-beh"></div></div>
+    <div class="panel"><h2>Rule replay: same trades, rule followed</h2><p class="sub">Best case: it cannot know what you would have done instead of a skipped trade. "Both halves" = it helped in the first and the second half of the period.</p><div id="ed-replay"></div></div>
+  </div>
+  <div class="grid2" id="ed-groups"></div>
 </section>
 
 <section id="tab-markets" hidden>
@@ -272,6 +283,32 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
       tip: (i) => `${esc(s[i].symbol)}: ${esc(money(s[i].net))} · ${s[i].trades} trades · ${pct(s[i].win_rate, 0, false)} won` });
   }
 
+  function renderEdge(x) {
+    if (!x || x.error) { $("ed-tiles").innerHTML = ""; $("ed-beh").innerHTML = empty((x && x.error) || "No data"); $("ed-replay").innerHTML = ""; $("ed-groups").innerHTML = ""; return; }
+    const s = x.overall, b = x.behaviour, t = x.tail, gap = x.gap_to_breakeven;
+    $("ed-tiles").innerHTML = [
+      tile("Win rate", pct(s.win_rate, 0, false), `you need ${fin(s.breakeven_win_rate) ? pct(s.breakeven_win_rate, 0, false) : "–"} to break even`, fin(gap) ? (gap >= 0 ? "up" : "down") : ""),
+      tile("Win size vs loss size", fin(s.payoff) ? s.payoff.toFixed(2) + "x" : "–", `avg win ${money(s.avg_win)} · avg loss ${money(s.avg_loss)}`, fin(s.payoff) ? (s.payoff >= 1 ? "up" : "warn") : ""),
+      tile("To break even", fin(x.loss_to_breakeven) ? money(x.loss_to_breakeven) : "already there", fin(x.loss_to_breakeven) ? "smaller average loss needed" : "expectancy is positive", fin(x.loss_to_breakeven) ? "warn" : "up"),
+      tile("Worst 10% of losses", t.losses ? pct(t.worst_10pct_share, 0, false) : "–", t.losses ? `of all money lost (${money(t.worst_10pct_sum)})` : "", t.worst_10pct_share > 35 ? "down" : ""),
+      tile("Trades a day", num(x.trades_per_day, 1), `${s.trades} trades · ${esc(day(x.from))} to ${esc(day(x.to))}`),
+    ].join("");
+    const brow = (k, r) => `<tr><td>${k}</td><td class="n">${r.trades}</td><td class="n">${pct(r.win_rate, 0, false)}</td><td class="n ${cls(r.expectancy)}">${money(r.expectancy)}</td><td class="n ${cls(r.net)}">${money(r.net)}</td></tr>`;
+    $("ed-beh").innerHTML = `<table><tr><th></th><th class="n">Trades</th><th class="n">Won</th><th class="n">Per trade</th><th class="n">Net</th></tr>`
+      + brow("Within 5 min of a loss", b.after_loss_fast) + brow("All other trades", b.others) + brow("After 2+ losses in a row", b.after_2_losses)
+      + brow("After a win", b.after_a_win) + brow("Bigger size right after a loss", b.size_up_after_loss) + "</table>"
+      + (t.over_cap ? `<p class="sub" style="margin-top:8px">${t.over_cap} losses were bigger than 1% of the balance. Largest ${money(t.largest)}${fin(t.largest_pct_balance) ? ` (${num(t.largest_pct_balance, 1)}% of the balance)` : ""}.</p>` : "");
+    $("ed-replay").innerHTML = `<table><tr><th>Rule</th><th class="n">Change</th><th class="n">Skipped</th><th class="n">Worst run</th><th>Both halves</th></tr>`
+      + x.replay.map((r) => `<tr><td>${esc(r.label)}</td><td class="n ${cls(r.change)}">${money(r.change)}</td><td class="n">${r.skipped}</td><td class="n">${money(r.max_drawdown)}</td><td><span class="pill ${r.both_halves ? "up" : ""}">${r.both_halves ? "yes" : "no"}</span></td></tr>`).join("") + "</table>";
+    const vc = (v) => /edge/.test(v) ? (v.startsWith("clear") ? "up" : "") : /leak/.test(v) ? (v.startsWith("clear") ? "down" : "warn") : "";
+    const grp = (title, rows, note = "") => `<div class="panel"><h2>${esc(title)}</h2>${note ? `<p class="sub">${esc(note)}</p>` : ""}` + (!rows.length ? empty("Not known yet.")
+      : `<table><tr><th></th><th class="n">Trades</th><th class="n">Won</th><th class="n">Per trade</th><th class="n">Net</th><th>Verdict</th></tr>` + rows.map((r) =>
+        `<tr><td>${esc(r.group)}</td><td class="n">${r.trades}</td><td class="n">${pct(r.win_rate, 0, false)}</td><td class="n ${cls(r.expectancy)}">${money(r.expectancy)}</td><td class="n ${cls(r.net)}">${money(r.net)}</td><td><span class="pill ${vc(r.verdict)}">${esc(r.verdict)}</span></td></tr>`).join("") + "</table>") + "</div>";
+    $("ed-groups").innerHTML = grp("Symbols", [...x.symbol].reverse()) + grp("Sessions (UTC)", x.session) + grp("Direction", x.direction)
+      + grp("Trade size vs your usual", x.size) + grp("Trade number in the day", x.nth) + grp("Weekday", x.weekday)
+      + grp("Hold time", x.hold, x.hold_known ? `${x.hold_known} trades with a known open time` : "Only trades seen live by the cTrader feed carry an open time.");
+  }
+
   function renderCompliance(c) {
     const pad = c.pad || {}, kpi = c.kpi || {}, k = kpi.counts || {};
     $("co-tiles").innerHTML = [
@@ -328,7 +365,7 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
   // ------------------------------------------------------------ loading
   let marketsLoaded = false, lastData = null, lastMarkets = null;
   function renderData() { const d = lastData; if (!d) return;
-    renderBanners(d.risk || {}); renderAccount(d.account || {}, d.risk || {}); renderTrades(d.trades || {}); renderCompliance(d.compliance || {}); }
+    renderBanners(d.risk || {}); renderAccount(d.account || {}, d.risk || {}); renderTrades(d.trades || {}); renderEdge(d.edge); renderCompliance(d.compliance || {}); }
   let resizeTimer = 0;   // charts are drawn at their real width: redraw when the window or the tab changes
   const redraw = () => { renderData(); if (lastMarkets) renderMarkets(lastMarkets); };
   window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(redraw, 200); });

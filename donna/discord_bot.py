@@ -48,6 +48,8 @@ HELP = ("D.O.N.N.A commands:\n"
         "!mandate                   what I do for you, how you can tell, and what I never do\n"
         "!desk                      your PA standard: the eight outcomes that mean 'done', green/amber/red\n"
         "!analysis                  the weekly analysis: your trades, work flow, agents and jobs, KPIs\n"
+        "!edge  !edge 30            your trading edge: break-even win rate, behaviour after losses, best/worst\n"
+        "                           symbols and sessions, and which rules would have helped (default 90 days)\n"
         "!meet jo@x.com | tomorrow | Intro call | 45m   book a meeting; the invitation goes only after you Approve\n"
         "!meet E14 | 2026-11-12 10:00 | Account opening   the same, with the sender of email 14; !meet = waiting ones\n"
         "!alerts  !alerts policy  !ack  !quiet 2h   what pinged you and what was held back; what deserves a ping\n"
@@ -347,7 +349,7 @@ def handle(text: str, channel: str = "") -> str | None:
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
     from jarvis.agents import complaints, ib, str_pack
 
-    from jarvis.agents import (alerts, attribution, campaigns, desk, feeds, followup, hq, kpi, leadfinder, meetings,
+    from jarvis.agents import (alerts, attribution, campaigns, desk, edge, feeds, followup, hq, kpi, leadfinder, meetings,
                                pad, policies, radar, screening, weekly, workflow)
 
     reply = (complaints.command(cmd, rest) or str_pack.command(cmd, rest) or ib.command(cmd, rest)
@@ -355,7 +357,8 @@ def handle(text: str, channel: str = "") -> str | None:
              or screening.command(cmd, rest) or workflow.command(cmd, rest) or followup.command(cmd, rest)
              or hq.command(cmd, rest) or pad.command(cmd, rest) or kpi.command(cmd, rest)
              or feeds.command(cmd, rest) or policies.command(cmd, rest) or weekly.command(cmd, rest)
-             or alerts.command(cmd, rest) or meetings.command(cmd, rest) or desk.command(cmd, rest))
+             or alerts.command(cmd, rest) or meetings.command(cmd, rest) or desk.command(cmd, rest)
+             or edge.command(cmd, rest))
     if reply is not None:
         return reply
     reply = compliance_commands(cmd, rest)
