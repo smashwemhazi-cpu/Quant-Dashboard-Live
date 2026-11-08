@@ -43,6 +43,9 @@ def _db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS bot_events (instance TEXT, bot TEXT, ts TEXT, kind TEXT, msg TEXT,
             net REAL, equity REAL, PRIMARY KEY (instance, ts, msg));
     """)
+    # when each position was opened (UTC), for hold-time analysis; older rows and statements leave it empty
+    if "opened_utc" not in {r[1] for r in c.execute("PRAGMA table_info(pt_trades)")}:
+        c.execute("ALTER TABLE pt_trades ADD COLUMN opened_utc TEXT")
     return c
 
 
@@ -67,7 +70,8 @@ def store_statement(d: pd.DataFrame, path: Path) -> tuple[str, int]:
                          "net": num("net"), "balance": num("balance")}).dropna(subset=["closed_utc", "net"])
     with _db() as c:
         before = c.execute("SELECT COUNT(*) FROM pt_trades").fetchone()[0]
-        c.executemany("INSERT OR IGNORE INTO pt_trades VALUES (?,?,?,?,?,?,?,?,?)", rows.itertuples(index=False, name=None))
+        c.executemany("INSERT OR IGNORE INTO pt_trades (account, closed_utc, symbol, side, entry, exit, qty, net, "
+                      "balance) VALUES (?,?,?,?,?,?,?,?,?)", rows.itertuples(index=False, name=None))
         added = c.execute("SELECT COUNT(*) FROM pt_trades").fetchone()[0] - before
     return account, added
 
@@ -76,12 +80,18 @@ def store_trades(account: str, trades: list[dict[str, Any]]) -> int:
     """Closed trades from the live cTrader feed -> the journal. Returns how many were new."""
     if not trades:
         return 0
-    rows = [(account, t["closed_utc"], t["symbol"], t["side"], t["entry"], t["exit"], t["qty"], t["net"], t["balance"])
-            for t in trades]
+    rows = [(account, t["closed_utc"], t["symbol"], t["side"], t["entry"], t["exit"], t["qty"], t["net"], t["balance"],
+             t.get("opened_utc")) for t in trades]
     with _db() as c:
         before = c.execute("SELECT COUNT(*) FROM pt_trades").fetchone()[0]
-        c.executemany("INSERT OR IGNORE INTO pt_trades VALUES (?,?,?,?,?,?,?,?,?)", rows)
-        return c.execute("SELECT COUNT(*) FROM pt_trades").fetchone()[0] - before
+        c.executemany("INSERT OR IGNORE INTO pt_trades (account, closed_utc, symbol, side, entry, exit, qty, net, "
+                      "balance, opened_utc) VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+        added = c.execute("SELECT COUNT(*) FROM pt_trades").fetchone()[0] - before
+        # a trade stored before its open time was known gets it the next time the feed sees it
+        c.executemany("UPDATE pt_trades SET opened_utc = ? WHERE account = ? AND closed_utc = ? AND symbol = ? AND "
+                      "entry = ? AND exit = ? AND opened_utc IS NULL",
+                      [(r[9], r[0], r[1], r[2], r[4], r[5]) for r in rows if r[9]])
+        return added
 
 
 def _session(h: int) -> str:

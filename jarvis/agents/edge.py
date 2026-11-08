@@ -62,11 +62,13 @@ def load(days: int = DAYS, account: str = "") -> pd.DataFrame:
     d["t"] = pd.to_datetime(d.closed_utc, format="mixed")
     d = d[d.t >= d.t.max() - pd.Timedelta(days=days)].reset_index(drop=True)
     d["ck"], d["nk"] = d.closed_utc.str[:19], d.net.round(2)
-    if len(opens):
-        opens = opens.assign(nk=opens.nk.round(2)).drop_duplicates(["ck", "nk"])
-        d = d.merge(opens, on=["ck", "nk"], how="left")
-    else:
+    if "opened_utc" not in d:
         d["opened_utc"] = None
+    if len(opens):     # trades stored before pt_trades kept the open time: take it from the PAD records
+        opens = opens.assign(nk=opens.nk.round(2)).drop_duplicates(["ck", "nk"]).rename(columns={"opened_utc": "pad_open"})
+        d = d.merge(opens, on=["ck", "nk"], how="left")
+        d["opened_utc"] = d.opened_utc.fillna(d.pad_open)
+        d = d.drop(columns=["pad_open"])
     d["opened"] = pd.to_datetime(d.opened_utc, format="mixed", errors="coerce")
     d["hold_min"] = (d.t - d.opened).dt.total_seconds() / 60
     d["start"] = d.opened.fillna(d.t)   # when the decision was made (close time if the open is unknown)
@@ -156,10 +158,14 @@ def loss_tail(d: pd.DataFrame) -> dict[str, Any]:
     worst = losses.iloc[:k]
     cap = (d.bal_before * LOSS_CAP_PCT / 100)
     over = d[(d.net < 0) & (-d.net > cap)]
+    big = d.loc[losses.index[0]]
+    pct = -big.net / big.bal_before * 100 if pd.notna(big.bal_before) else None
     return {"losses": int(len(losses)), "worst_10pct_count": k, "worst_10pct_sum": round(float(worst.sum()), 2),
             "worst_10pct_share": round(float(worst.sum() / losses.sum() * 100), 1),
-            "largest": round(float(losses.iloc[0]), 2),
-            "largest_pct_balance": round(float((d.net / d.bal_before * -100).max()), 1) if d.bal_before.notna().any() else None,
+            "largest": round(float(losses.iloc[0]), 2), "largest_when": big.t.strftime("%d %b"),
+            "largest_symbol": str(big.symbol),
+            "largest_balance_before": None if pct is None else round(float(big.bal_before), 2),
+            "largest_pct_balance": None if pct is None else round(float(pct), 1),
             "over_cap": int(len(over)), "over_cap_cost": round(float((over.net + cap[over.index]).sum()), 2)}
 
 
@@ -224,7 +230,7 @@ RULES: list[tuple[str, str]] = [
     ("max_trades", f"At most {MAX_TRADES_DAY} trades a day"),
     ("daily_stop", f"Stop for the day once down {DAILY_STOP_PCT:g}% of the balance"),
     ("loss_streak", f"Stop for the day after {MAX_LOSS_STREAK} losses in a row"),
-    ("cap_losses", f"Hard stop: no single loss bigger than {LOSS_CAP_PCT:g}% of the balance (best case)"),
+    ("cap_losses", f"Hard stop: no single loss bigger than {LOSS_CAP_PCT:g}% of the balance"),
     ("combined", "All five together"),
 ]
 
@@ -245,6 +251,19 @@ def apply_rule(d: pd.DataFrame, rule: str) -> pd.Series:
     return d.net.where(keep)
 
 
+def _stop_penalty(d: pd.DataFrame, net: pd.Series) -> float:
+    """What a hard stop would also cost: a stop tight enough to cut those big losses would knock out winners too.
+    Assume one typical (median) winning trade becomes a loss at the cap for every big loss the cap cut."""
+    capped = (net.notna()) & (net > d.net + 1e-9)            # trades whose loss the cap made smaller
+    n = int(capped.sum())
+    if not n:
+        return 0.0
+    wins = d.net[d.net > 0]
+    median_win = float(wins.median()) if len(wins) else 0.0
+    cap = float((-net[capped]).median())
+    return n * (median_win + cap)
+
+
 def replay(d: pd.DataFrame) -> list[dict[str, Any]]:
     base = stats(d.net)
     half = len(d) // 2
@@ -254,10 +273,18 @@ def replay(d: pd.DataFrame) -> list[dict[str, Any]]:
         net = apply_rule(d, key)
         s = stats(net)
         # robustness: does the rule help in each half on its own?
-        a = apply_rule(h1.reset_index(drop=True), key).sum() - h1.net.sum() if half else 0.0
-        b = apply_rule(h2.reset_index(drop=True), key).sum() - h2.net.sum() if half else 0.0
+        def gain(h: pd.DataFrame) -> float:
+            h = h.reset_index(drop=True)
+            r = apply_rule(h, key)
+            pen = _stop_penalty(h, r) if key in ("cap_losses", "combined") else 0.0
+            return float(r.sum() - h.net.sum() - pen)
+        a = gain(h1) if half else 0.0
+        b = gain(h2) if half else 0.0
+        change = round(s["net"] - base["net"], 2)
+        careful = round(change - _stop_penalty(d, net), 2) if key in ("cap_losses", "combined") else change
         out.append({"rule": key, "label": label, "trades": s["trades"], "skipped": base["trades"] - s["trades"],
-                    "net": s["net"], "change": round(s["net"] - base["net"], 2), "profit_factor": s["profit_factor"],
+                    "net": s["net"], "change": change, "conservative": careful, "best_case_only": careful != change,
+                    "profit_factor": s["profit_factor"],
                     "max_drawdown": s["max_drawdown"], "first_half": round(float(a), 2),
                     "second_half": round(float(b), 2), "both_halves": bool(a > 0 and b > 0)})
     return out
@@ -275,7 +302,8 @@ def report(days: int = DAYS) -> dict[str, Any]:
     d["nth_bucket"] = d.nth.map(nth_buckets)
     from jarvis.agents.personal import SESSIONS
 
-    return {
+    top = d.symbol.value_counts()
+    x = {
         "from": d.t.min().date().isoformat(), "to": d.t.max().date().isoformat(), "days": days,
         "overall": s, "trades_per_day": round(len(d) / max(1, d.day.nunique()), 1),
         "gap_to_breakeven": None if s["breakeven_win_rate"] is None else round(s["win_rate"] - s["breakeven_win_rate"], 1),
@@ -287,7 +315,53 @@ def report(days: int = DAYS) -> dict[str, Any]:
         "hold": by(held, "hold", [n for _, _, n in HOLD_BUCKETS]) if len(held) else [],
         "hold_known": int(len(held)),
         "behaviour": behaviour(d), "tail": loss_tail(d), "replay": replay(d), "min_group": MIN_GROUP,
+        "main_symbol": str(top.index[0]), "main_share": round(float(top.iloc[0] / len(d) * 100), 1),
     }
+    x["bottom_line"] = bottom_line(x)
+    return x
+
+
+def bottom_line(x: dict[str, Any]) -> dict[str, str]:
+    """Three plain lines: the biggest leak, what to do first, what is still unproven."""
+    b = x["behaviour"]
+    cands: list[tuple[float, str, str]] = []
+    f, o = b["after_loss_fast"], b["others"]
+    if f["trades"] >= MIN_GROUP and f["net"] < 0:
+        cands.append((f["net"], f"trades opened within {TILT_MIN} min of a loss: {f['trades']} trades, {_m(f['net'])} "
+                                f"(all your other trades: {_m(o['net'])})",
+                      f"wait {COOLDOWN_MIN:g} minutes after every losing trade"))
+    for r in x["size"]:
+        if r["group"] in ("1.5-3x usual", "over 3x usual") and r["trades"] >= MIN_GROUP and r["net"] < 0:
+            cands.append((r["net"], f"trades {r['group'].replace('usual', 'your usual size')}: {r['trades']} trades, "
+                                    f"{_m(r['net'])} ({_m(r['expectancy'])} each)",
+                          "keep every trade at your usual size: no doubling up"))
+    for key, word in (("session", "the {g} session (UTC)"), ("symbol", "{g}")):
+        for r in x[key]:
+            if r["verdict"] in ("clear leak", "maybe leak"):
+                cands.append((r["net"], f"{word.format(g=r['group'])}: {r['trades']} trades, {_m(r['net'])}",
+                              f"stop trading {word.format(g=r['group'])}"))
+    t = x["tail"]
+    if not cands and t.get("losses") and t["worst_10pct_share"] >= 40:   # only when nothing more specific stands out
+        cands.append((t["worst_10pct_sum"], f"a few big losses: your worst {t['worst_10pct_count']} losses are "
+                                                f"{t['worst_10pct_share']:.0f}% of all money lost",
+                      "put a hard stop on every trade before you open it"))
+    cands.sort(key=lambda c: c[0])
+    leak = "; then ".join(c[1] for c in cands[:2]) if cands else "nothing stands out yet"
+    first = " and ".join(dict.fromkeys(c[2] for c in cands[:2])) if cands else "keep trading as you are and recheck in 4 weeks"
+    robust = [r for r in x["replay"] if r["both_halves"] and r["conservative"] > 0 and r["rule"] != "combined"]
+    if robust:
+        best = max(robust, key=lambda r: r["conservative"])
+        first += f". Of the rules replayed, \"{best['label'].lower()}\" helped most and in both halves ({_m(best['conservative'])})"
+    unproven = []
+    if verdict(x["overall"]) not in ("clear edge",):
+        unproven.append(f"whether your setups themselves make money (overall result is {verdict(x['overall'])})")
+    if x["main_share"] >= 80:
+        unproven.append(f"anything outside {x['main_symbol']}: it is {x['main_share']:.0f}% of your trades, "
+                        "the other symbols have too few to judge")
+    if not x["hold_known"]:
+        unproven.append("hold time (open times are recorded from now on)")
+    return {"leak": leak[0].upper() + leak[1:], "first": first[0].upper() + first[1:],
+            "unproven": ("; ".join(unproven) or "nothing major")[0].upper() + ("; ".join(unproven) or "nothing major")[1:]}
 
 
 def _loss_to_breakeven(s: dict[str, Any]) -> float | None:
@@ -315,7 +389,13 @@ def report_lines(days: int = DAYS) -> list[str]:
     if "error" in x:
         return [f"MY EDGE: {x['error']}"]
     s = x["overall"]
-    L = [f"MY EDGE - {x['from']} to {x['to']} UTC, {s['trades']} trades ({x['trades_per_day']:g} a day)", ""]
+    bl = x["bottom_line"]
+    L = [f"MY EDGE - {x['from']} to {x['to']} UTC, {s['trades']} trades ({x['trades_per_day']:g} a day)", "",
+         "BOTTOM LINE", f" Biggest leak: {bl['leak']}.", f" Do this first: {bl['first']}.",
+         f" Still unproven: {bl['unproven']}.", ""]
+    if x["main_share"] >= 80:
+        L += [f" Note: {x['main_share']:.0f}% of these trades are {x['main_symbol']}, so this report is really about your "
+              f"{x['main_symbol']} trading.", ""]
     L.append("1. IS THERE AN EDGE?")
     L.append(f" Net {_m(s['net'])}. You win {s['win_rate']:.0f}% of trades. Average win {_m(s['avg_win'])}, "
              f"average loss {_m(s['avg_loss'])} (each win is {s['payoff'] or 0:.2f}x a loss).")
@@ -333,6 +413,8 @@ def report_lines(days: int = DAYS) -> list[str]:
     if f["trades"]:
         L.append(f" Trades opened within {TILT_MIN} min of a loss: {f['trades']}, net {_m(f['net'])}, "
                  f"{_m(f['expectancy'])} per trade vs {_m(o['expectancy'])} for all other trades.")
+        if f["net"] < 0 <= o["net"]:
+            L.append(f" Without those trades the period would be {_m(o['net'])} instead of {_m(s['net'])}.")
     if b["after_2_losses"]["trades"]:
         a2 = b["after_2_losses"]
         L.append(f" After 2+ losses in a row: {a2['trades']} trades, won {a2['win_rate']:.0f}%, net {_m(a2['net'])}.")
@@ -342,11 +424,13 @@ def report_lines(days: int = DAYS) -> list[str]:
     t = x["tail"]
     if t.get("losses"):
         L.append(f" Your worst {t['worst_10pct_count']} losses (10%) cost {_m(t['worst_10pct_sum'])} = "
-                 f"{t['worst_10pct_share']:.0f}% of all money lost. Largest single loss {_m(t['largest'])}"
-                 + (f" ({t['largest_pct_balance']:.1f}% of the balance)." if t["largest_pct_balance"] else "."))
+                 f"{t['worst_10pct_share']:.0f}% of all money lost.")
+        L.append(f" Largest single loss {_m(t['largest'])} on {t['largest_symbol']}, {t['largest_when']}"
+                 + (f": {t['largest_pct_balance']:.1f}% of the {_m(t['largest_balance_before'])} balance at that moment"
+                    if t["largest_pct_balance"] is not None else "")
+                 + f" (whole {x['days']} days; the PAD & KPIs tab shows the last 30 days only, so its figure can differ).")
         if t["over_cap"]:
-            L.append(f" {t['over_cap']} losses were bigger than {LOSS_CAP_PCT:g}% of the balance; a hard stop at "
-                     f"{LOSS_CAP_PCT:g}% would have saved up to {_m(-t['over_cap_cost'])}.")
+            L.append(f" {t['over_cap']} losses were bigger than {LOSS_CAP_PCT:g}% of the balance at the time.")
     L += ["", f"3. WHERE IT WORKS AND WHERE IT LEAKS (needs {x['min_group']}+ trades to call it)"]
     for title, key in (("Symbols", "symbol"), ("Sessions (UTC)", "session"), ("Direction", "direction"),
                        ("Trade size vs your usual", "size"), ("Trade number in the day", "nth"),
@@ -354,7 +438,7 @@ def report_lines(days: int = DAYS) -> list[str]:
         rows = x[key]
         if not rows:
             if key == "hold":
-                L.append(" Hold time: not known yet (only trades seen live by the cTrader feed carry an open time).")
+                L.append(" Hold time: not known yet. DONNA now records the open time of every new trade the cTrader feed sees.")
             continue
         if key == "symbol" and len(rows) > 8:
             rows = rows[-4:][::-1] + rows[:4]      # best 4, then worst 4
@@ -362,13 +446,16 @@ def report_lines(days: int = DAYS) -> list[str]:
         else:
             L.append(f" {title}:")
         L += [_row(r) for r in rows]
-    L += ["", "4. RULE REPLAY - same trades, as if you had followed the rule"]
+    L += ["", "4. RULE REPLAY - same trades, as if you had followed the rule (careful estimate first)"]
     for r in x["replay"]:
-        L.append(f"  {r['label']}: {_m(r['change'])} vs actual ({r['skipped']} trades skipped), net {_m(r['net'])}, "
-                 f"worst run {_m(r['max_drawdown'])}. "
+        est = (f"{_m(r['conservative'])} careful estimate, {_m(r['change'])} at best" if r["best_case_only"]
+               else f"{_m(r['change'])}")
+        L.append(f"  {r['label']}: {est} vs actual ({r['skipped']} trades skipped). "
                  + ("Helped in both halves - robust." if r["both_halves"] else "Not consistent across both halves."))
-    L += ["", " Replay is a guide, not a promise: it cannot know what you would have done instead of a skipped trade,",
-          " and the hard-stop line assumes perfect fills. Test any rule for 4 weeks before trusting it."]
+    L += ["", " How to read it: the skip rules assume you simply don't take those trades. The hard-stop lines can't see",
+          " inside a trade, so 'at best' assumes perfect fills and no winner ever touched the stop; the careful",
+          " estimate also assumes one typical winner is stopped out for every big loss the stop cuts.",
+          " Test any rule for 4 weeks before trusting it."]
     return L
 
 

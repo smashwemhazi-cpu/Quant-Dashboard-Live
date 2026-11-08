@@ -117,3 +117,68 @@ def test_command_and_help(db):
     assert "MY EDGE" in out and "RULE REPLAY" in out and "break even" in out
     assert "MY EDGE" in discord_bot.handle("!edge 30")
     assert "!edge" in discord_bot.HELP
+
+
+def test_hard_stop_has_a_careful_estimate(db):
+    from jarvis.agents import edge
+
+    _store([3, 3, -50, 3, 3, -2, -2, -2, -2, 3])
+    r = {x["rule"]: x for x in edge.report()["replay"]}
+    cap = r["cap_losses"]
+    # one big loss cut to ~-10; careful = best case minus one median win (3) and one cap (~10)
+    assert cap["best_case_only"] and cap["conservative"] == pytest.approx(cap["change"] - 3 - 10, abs=0.6)
+    assert not r["cooldown"]["best_case_only"] and r["cooldown"]["conservative"] == r["cooldown"]["change"]
+    assert "careful estimate" in edge.report_text()
+
+
+def test_bottom_line_names_the_leak_and_what_is_unproven(db, monkeypatch):
+    from jarvis.agents import edge
+
+    monkeypatch.setattr(edge, "MIN_GROUP", 3)
+    nets, gaps = [], []
+    for _ in range(4):                     # a loss, a fast losing re-entry, then two spaced wins
+        nets += [-4, -3, 2, 2]
+        gaps += [30, 2, 30, 30]
+    _store(nets, gaps=gaps, symbols=["XAUUSD"] * len(nets))
+    x = edge.report()
+    bl = x["bottom_line"]
+    assert "within 5 min of a loss" in bl["leak"] and "wait 15 minutes" in bl["first"].lower()
+    assert "XAUUSD" in bl["unproven"] and "hold time" in bl["unproven"]
+    assert x["main_symbol"] == "XAUUSD" and x["main_share"] == 100
+    text = edge.report_text()
+    assert text.index("BOTTOM LINE") < text.index("1. IS THERE AN EDGE?") and "really about your XAUUSD" in text
+    assert "Without those trades the period would be" in text
+
+
+def test_largest_loss_says_when_and_which_window(db):
+    from jarvis.agents import edge
+
+    _store([2, -30, 2], bal=100.0)
+    t = edge.report()["tail"]
+    assert t["largest"] == -30 and t["largest_balance_before"] == 102 and t["largest_pct_balance"] == 29.4
+    assert "last 30 days only" in edge.report_text()
+
+
+def test_open_time_is_kept_for_new_trades(db):
+    from jarvis.agents import edge, personal
+
+    row = {"closed_utc": "2026-11-02 08:30:00.000000", "symbol": "XAUUSD", "side": "buy", "entry": 2000.0,
+           "exit": 2001.0, "qty": 1, "net": 1.0, "balance": 1001.0}
+    assert personal.store_trades("123", [row]) == 1                       # first seen without the open time
+    assert personal.store_trades("123", [row | {"opened_utc": "2026-11-02 08:10:00"}]) == 0   # filled in later
+    x = edge.report()
+    assert x["hold_known"] == 1 and x["hold"][0]["group"] == "5-30 min"
+
+
+def test_old_journal_gets_the_new_column(db, tmp_path):
+    import sqlite3
+
+    from jarvis.agents import personal
+
+    c = sqlite3.connect(tmp_path / "s.db")
+    c.execute("CREATE TABLE pt_trades (account TEXT, closed_utc TEXT, symbol TEXT, side TEXT, entry REAL, exit REAL, "
+              "qty REAL, net REAL, balance REAL, PRIMARY KEY (account, closed_utc, symbol, entry, exit))")
+    c.commit()
+    c.close()
+    with personal._db() as c:
+        assert "opened_utc" in {r[1] for r in c.execute("PRAGMA table_info(pt_trades)")}
