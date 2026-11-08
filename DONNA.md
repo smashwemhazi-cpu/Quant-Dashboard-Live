@@ -207,7 +207,14 @@ Double-click **DONNA-Console.bat** on your PC and type your server password. A w
 How to use it:
 - **Hold the button or the space bar** to talk, and let go when you are done. She answers on screen and out loud.
 - Type commands exactly as in Discord, e.g. `!tasks`, `!done 12`, `!draft 12`, `!kri`.
+- **Tick a task off** with the ✓ button next to it in the Tasks panel. In Discord, every `!tasks` list has a ✓ button for each task under it. Ticked one by mistake? `!undo 12`. To change a task: `!edit 12 due friday` (or `due tomorrow`, `due none`), `!edit 12 urgent`, `!edit 12 normal`, `!edit 12 title Call FinPrime back`.
 - The 🔊 button mutes her. The menu next to it picks her voice; the choice is remembered.
+
+**On another Windows PC** (Windows 10 or 11, nothing to install):
+1. Download the file: open https://raw.githubusercontent.com/smashwemhazi-cpu/Quant-Dashboard-Live/main/deploy/windows/DONNA-Console.bat, press Ctrl+S, and save it to the Desktop as `DONNA-Console.bat` (choose "All files" as the type if Windows offers ".txt"). Or copy the file from your first PC on a USB stick or by email to yourself.
+2. Double-click it. The first time only, Windows asks "Are you sure you want to continue connecting (yes/no)?". Type `yes` and press Enter. That is the PC meeting your server for the first time.
+3. Type your server password (nothing shows while you type) and press Enter. The console opens by itself.
+If Windows shows "Windows protected your PC", click **More info → Run anyway**: the file is a plain text script you can open in Notepad to read.
 
 Privacy and limits:
 - The console is not on the internet. It travels inside the same private SSH link as your server login, and it closes when you close the black window.
