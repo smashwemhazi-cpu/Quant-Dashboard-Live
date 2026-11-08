@@ -77,7 +77,7 @@ def test_weekly_page_is_one_page_with_numbers(tmp_path, monkeypatch):
     pdf = weekly.build_pdf(date(2026, 11, 13))
     with pdfplumber.open(io.BytesIO(pdf)) as p:
         words = p.pages[0].extract_text()
-        assert len(p.pages) == 1 and "Your week on one page" in words and "What slipped" in words
+        assert len(p.pages) == 2 and "Your week on one page" in words and "What slipped" in words
     assert "YOUR WEEK" in b.handle("!weekly") and "console/weekly.pdf" in b.handle("!weekly")
 
 

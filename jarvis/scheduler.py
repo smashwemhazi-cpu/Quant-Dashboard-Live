@@ -30,6 +30,9 @@ ALERT_EVENTS = {e.strip() for e in os.getenv(
     "JARVIS_ALERT_EVENTS", "execution_alert,lp_slippage_alert,morning_brief").split(",") if e.strip()}
 
 
+DESK_ALERTS = {"execution_alert", "lp_slippage_alert"}   # these go through the alert protocol (jarvis/agents/alerts)
+
+
 def alert_text(payload: Any) -> str:
     if isinstance(payload, str):
         return payload
@@ -41,7 +44,15 @@ def alert_text(payload: Any) -> str:
 def notify(title: str, payload: Any) -> None:
     audit.log("scheduler", title, {"result": payload})
     log.info("%s: %s", title, str(payload)[:300])
-    if title in ALERT_EVENTS and ALERT_TARGETS and payload:
+    if title in DESK_ALERTS and title in ALERT_EVENTS and payload:
+        from jarvis.agents import alerts
+
+        try:
+            audit.log("scheduler", "alert_delivery", {"event": title, "delivery": alerts.raise_alert(
+                "desk_risk", f"{title.replace('_', ' ').capitalize()}:\n{alert_text(payload)}")})
+        except Exception as e:  # delivery problems must not stop the job loop
+            audit.log("scheduler", "alert_delivery_error", {"event": title, "error": str(e)})
+    elif title in ALERT_EVENTS and ALERT_TARGETS and payload:
         from donna.channels import broadcast
 
         try:
@@ -104,11 +115,10 @@ def job_report_mail() -> None:
         job_backoffice_ingest()
         from jarvis.agents.personal import PERSONAL_TARGETS
 
-        if PERSONAL_TARGETS:
-            from donna.channels import broadcast
+        from jarvis.agents import alerts
 
-            broadcast("Picked up from your email and loaded:\n" + "\n".join(f" {f['kind']}: {f['file']}" for f in saved),
-                      PERSONAL_TARGETS, title="D.O.N.N.A reports")
+        alerts.raise_alert("reports_loaded", "Picked up from your email and loaded: " +
+                           ", ".join(f"{f['kind']} ({f['file']})" for f in saved))
 
 
 def job_compliance_report() -> None:
@@ -128,8 +138,6 @@ def job_marketing_drafts() -> None:
 
 
 def job_inbox_triage() -> None:
-    from jarvis.agents.personal import PERSONAL_TARGETS
-
     r = agents()["assistant"].triage()
     if "error" in r and not r.get("processed"):
         raise RuntimeError(r["error"])   # mailbox refused or unreachable: shows in !status, alerts once
@@ -139,13 +147,17 @@ def job_inbox_triage() -> None:
     if all("error" in x for x in items):  # every email failed: say so instead of going quiet
         raise RuntimeError(f"email triage failed for all {len(items)} new emails: {items[0]['error'][:200]}")
     notify("inbox_triage", {"processed": len(items)})
-    urgent = [x for x in items if x.get("urgency") == "high" and "error" not in x and not x.get("handled")]
-    if urgent and PERSONAL_TARGETS:
-        from donna.channels import broadcast
+    from jarvis.agents import alerts
 
-        text = "\n".join(f"{x['subject'][:90]}\n  {x['summary'][:200]}" + (
-            f"\n  tasks #{', #'.join(map(str, x['task_ids']))}" if x.get("task_ids") else "") for x in urgent)
-        broadcast(text, PERSONAL_TARGETS, title="D.O.N.N.A urgent email")
+    for x in items:
+        if "error" in x or x.get("opened"):        # you've already seen it: no ping
+            continue
+        regulator = x.get("category") == "regulator" or bool(alerts.REGULATOR.search(x.get("from_domain", "")))
+        if not regulator and x.get("urgency") != "high":
+            continue
+        text = f"Email: {x['subject'][:90]}\n  {x['summary'][:200]}" + (
+            f"\n  Task {', '.join(map(str, x['task_ids']))} - !task {x['task_ids'][0]}" if x.get("task_ids") else "")
+        alerts.raise_alert("regulator_email" if regulator else "urgent_email", text)
 
 
 def job_my_day() -> None:
@@ -270,6 +282,12 @@ def job_evening() -> None:
     notify("evening", agents()["rhythm"].evening(send=True).get("delivery"))
 
 
+def job_alert_repeat() -> None:
+    from jarvis.agents import alerts
+
+    alerts.repeat_criticals()
+
+
 # (name, every_n_minutes, weekday_only_hour or None, fn)
 JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("execution", 15, None, job_execution),
@@ -299,6 +317,7 @@ JOBS: list[tuple[str, int, int | None, Callable[[], None]]] = [
     ("weekly_picture", 60 * 24, int(os.getenv("JARVIS_WEEKLY_UTC_HOUR", "13")), job_weekly_picture),  # Fridays
     ("pad_pack", 60 * 24, int(os.getenv("JARVIS_PACK_UTC_HOUR", "5")), job_pad_pack),  # PDF on DONNA_PAD_PACK_DAY
     ("heartbeat", 10, None, job_heartbeat),                                                # uptime watchdog
+    ("alert_repeat", 5, None, job_alert_repeat),                                           # unacknowledged criticals
     ("sanctions_lists", 60 * 24, int(os.getenv("JARVIS_SANCTIONS_UTC_HOUR", "3")), job_sanctions_lists),
     ("partner_radar", 60 * 24, int(os.getenv("JARVIS_RADAR_UTC_HOUR", "6")), job_partner_radar),  # on DONNA_RADAR_WEEKDAY
 ]
@@ -448,16 +467,16 @@ def job_failed(name: str, e: Exception) -> bool:
             audit.log("scheduler", "job_waiting", {"job": name, "reason": why, "error": str(e)[:300]})
         if why.startswith("nothing to read") or not _first_alert(f"{name}|waiting|{why}", time.time()):
             return True
-        if ALERT_TARGETS:
-            from donna.channels import broadcast
+        from jarvis.agents import alerts
 
-            broadcast(f"{why}.\nI've paused {name} until you reconnect (vertex1-connect), so it won't fill the log. "
-                      f"I'll still try every {WAIT_RETRY_HOURS:g}h in case it gets fixed elsewhere.",
-                      ALERT_TARGETS, title="D.O.N.N.A waiting for setup")
+        alerts.raise_alert("waiting_setup", f"{why}. I've paused {name} until you reconnect (vertex1-connect); "
+                           f"I'll still try every {WAIT_RETRY_HOURS:g}h.", key=f"{name}|waiting|{why}")
         return True
     audit.log("scheduler", "job_error", {"job": name, "error": str(e)})
     now = time.time()
     started = _failing_since(name, now)   # also feeds the !agents board ("failing since ...")
+    from jarvis.agents import alerts
+
     if is_transient(e):
         # a network blip or a broker server that is closed for the weekend fixes itself: say nothing unless
         # the job has been failing without a single success for FAIL_GRACE_MINUTES, and then one alert per day
@@ -467,14 +486,14 @@ def job_failed(name: str, e: Exception) -> bool:
         key = f"{name}|transient"
     else:
         key = f"{name}|{type(e).__name__}|{str(e)[:200]}"
-    if not _first_alert(key, now):
+    # a core job (email, heartbeat) down for hours is DONNA being down: critical. Anything else is a notice.
+    kind = "donna_down" if name in alerts.CORE_JOBS and now - started >= alerts.CORE_DOWN_HOURS * 3600 \
+        else "job_failed"
+    if not _first_alert(f"{kind}|{key}", now):
         return False
-    if ALERT_TARGETS:  # a silent failure is how a missing report goes unnoticed for a week
-        from donna.channels import broadcast
-
-        broadcast(f"The {name} job failed: {type(e).__name__}: {str(e)[:300]}\nIt will retry; you'll hear about "
-                  f"this again in {FAIL_REPEAT_HOURS:g}h at most if it keeps failing.",
-                  ALERT_TARGETS, title="D.O.N.N.A job failed")
+    hours = (now - started) / 3600
+    alerts.raise_alert(kind, f"The {name} job has been failing for {hours:.1f}h: {type(e).__name__}: "
+                             f"{str(e)[:300]}. It keeps retrying.", key=f"{kind}|{key}")
     return False
 
 

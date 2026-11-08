@@ -127,6 +127,9 @@ CHECKS: list[tuple[str, Callable[[], list[str]]]] = [
 ]
 
 
+KIND = {"positions": "trading_risk", "compliance": "deadline", "leads": "leads", "bots": "bots", "market": "market"}
+
+
 def check() -> list[str]:
     out = []
     for name, fn in CHECKS:
@@ -144,13 +147,21 @@ class WatchAgent(Agent):
 
     def watch(self, send: bool = True) -> dict[str, Any]:
         """Scheduler hook (not a Brain tool)."""
-        msgs = check()
+        from jarvis.agents import alerts
+
+        msgs: list[str] = []
         res: dict[str, Any] = {"nudges": msgs, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-        if msgs and send:
-            from jarvis.agents.personal import PERSONAL_TARGETS
-
-            if PERSONAL_TARGETS:
-                from donna.channels import broadcast
-
-                res["delivery"] = broadcast("\n\n".join(msgs), PERSONAL_TARGETS, title="D.O.N.N.A heads-up")
+        delivery: dict[str, str] = {}
+        for name, fn in CHECKS:
+            try:
+                got = fn()
+            except Exception as e:  # one dead source must not silence the others
+                audit.log("watch", "check_error", {"check": name, "error": str(e)})
+                continue
+            msgs += got
+            if send:      # the alert protocol decides: ping now, hold for the next message, or log
+                for m in got:
+                    delivery[m[:60]] = alerts.raise_alert(KIND.get(name, "info"), m)
+        if delivery:
+            res["delivery"] = delivery
         return res

@@ -46,6 +46,11 @@ log = logging.getLogger("donna.discord")
 LIMIT = 1900  # Discord allows 2000 characters per message; leave room for the code fence
 HELP = ("D.O.N.N.A commands:\n"
         "!mandate                   what I do for you, how you can tell, and what I never do\n"
+        "!desk                      your PA standard: the eight outcomes that mean 'done', green/amber/red\n"
+        "!analysis                  the weekly analysis: your trades, work flow, agents and jobs, KPIs\n"
+        "!meet jo@x.com | tomorrow | Intro call | 45m   book a meeting; the invitation goes only after you Approve\n"
+        "!meet E14 | 2026-11-12 10:00 | Account opening   the same, with the sender of email 14; !meet = waiting ones\n"
+        "!alerts  !alerts policy  !ack  !quiet 2h   what pinged you and what was held back; what deserves a ping\n"
         "!hq  !agents  !run <job>   one view across all agents / each agent's state / run one now\n"
         "!kpi  !kpi leads|trading|compliance|...   KPI scorecard (grow and protect); !kpi targets, !kpi set <name> <n>\n"
         "!tasks                     open tasks\n"
@@ -325,6 +330,13 @@ def handle(text: str, channel: str = "") -> str | None:
         return f"Draft saved in your Gmail Drafts - check it and press send yourself:\n\n{r['draft']}"
     if cmd == "!today":
         return assistant.my_day_text()
+    if cmd in ("!approve", "!reject"):
+        m = re.fullmatch(r"\s*([0-9a-f]{32})\s*", rest)
+        if not m:
+            from jarvis.agents import meetings
+
+            return meetings.command("!meet", "") or ""
+        return decide(m.group(1), cmd == "!approve")
     if cmd == "!ask":
         if not rest.strip():
             return "Usage: !ask <question>"
@@ -335,14 +347,15 @@ def handle(text: str, channel: str = "") -> str | None:
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
     from jarvis.agents import complaints, ib, str_pack
 
-    from jarvis.agents import (attribution, campaigns, feeds, followup, hq, kpi, leadfinder, pad, policies, radar,
-                               screening, weekly, workflow)
+    from jarvis.agents import (alerts, attribution, campaigns, desk, feeds, followup, hq, kpi, leadfinder, meetings,
+                               pad, policies, radar, screening, weekly, workflow)
 
     reply = (complaints.command(cmd, rest) or str_pack.command(cmd, rest) or ib.command(cmd, rest)
              or leadfinder.command(cmd, rest) or radar.command(cmd, rest) or campaigns.command(cmd, rest) or attribution.command(cmd, rest)
              or screening.command(cmd, rest) or workflow.command(cmd, rest) or followup.command(cmd, rest)
              or hq.command(cmd, rest) or pad.command(cmd, rest) or kpi.command(cmd, rest)
-             or feeds.command(cmd, rest) or policies.command(cmd, rest) or weekly.command(cmd, rest))
+             or feeds.command(cmd, rest) or policies.command(cmd, rest) or weekly.command(cmd, rest)
+             or alerts.command(cmd, rest) or meetings.command(cmd, rest) or desk.command(cmd, rest))
     if reply is not None:
         return reply
     reply = compliance_commands(cmd, rest)
@@ -469,6 +482,32 @@ def tick_ids(command: str) -> list[int]:
     return [t["id"] for t in assistant.list_tasks()][:25]
 
 
+APPROVE_PREFIX, REJECT_PREFIX = "donna:approve:", "donna:reject:"
+
+
+def decide(action_id: str, approve: bool) -> str:
+    """Approve or reject something waiting for SH's OK (a meeting invitation, a reply)."""
+    from donna import phone
+
+    return phone.decide(action_id, approve, "discord-owner")
+
+
+def approval_ids(reply: str) -> list[str]:
+    return list(dict.fromkeys(re.findall(r"!approve ([0-9a-f]{32})", reply or "")))[:4]
+
+
+def approval_view(action_id: str) -> Any:
+    """✅ Approve / ✖ Reject under an invitation; the id is in custom_id, so it works after a restart."""
+    import discord
+
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(label="✅ Approve", custom_id=APPROVE_PREFIX + action_id,
+                                    style=discord.ButtonStyle.success))
+    view.add_item(discord.ui.Button(label="✖ Reject", custom_id=REJECT_PREFIX + action_id,
+                                    style=discord.ButtonStyle.danger))
+    return view
+
+
 def tick_view(ids: list[int], done: set[int] | None = None) -> Any:
     """Buttons '✓ 12': a click marks task 12 done. custom_id carries the task id, so the buttons keep working
     after DONNA restarts (on_interaction handles them, no in-memory state)."""
@@ -518,6 +557,15 @@ def main() -> None:
     @client.event
     async def on_interaction(interaction: "discord.Interaction") -> None:
         cid = str((interaction.data or {}).get("custom_id", ""))
+        if cid.startswith((APPROVE_PREFIX, REJECT_PREFIX)):
+            if not allowed(interaction.user.id, getattr(interaction.channel, "name", "")):
+                await interaction.response.send_message("Only the owner can approve.", ephemeral=True)
+                return
+            ok = cid.startswith(APPROVE_PREFIX)
+            msg = await asyncio.to_thread(decide, cid.split(":")[-1], ok)
+            await interaction.response.edit_message(view=None)
+            await interaction.followup.send(msg)
+            return
         if not cid.startswith(TICK_PREFIX):
             return
         if not allowed(interaction.user.id, getattr(interaction.channel, "name", "")):
@@ -636,6 +684,8 @@ def main() -> None:
                 await message.channel.send(part, view=tick_view(ids))   # ✓ buttons under the task list
             else:
                 await message.channel.send(part)
+        for aid in approval_ids(reply):      # Approve / Reject buttons under an invitation waiting for your OK
+            await message.channel.send(f"Invitation {aid[:6]}:", view=approval_view(aid))
 
     client.run(token, log_handler=None)
 

@@ -77,10 +77,15 @@ def analyse(days: int = 7, today: date | None = None) -> dict[str, Any]:
     today = today or datetime.now(LOCAL_TZ).date()
     since = datetime.combine(today - timedelta(days=days), datetime.min.time(), LOCAL_TZ).astimezone(timezone.utc)
     since_s = since.isoformat()
+    until_s = datetime.combine(today + timedelta(days=1), datetime.min.time(), LOCAL_TZ).astimezone(
+        timezone.utc).isoformat()           # the window ends with 'today', so an earlier window can be compared
     with assistant._db() as c:
-        mails = [dict(r) for r in c.execute("SELECT * FROM email_seen WHERE processed_at >= ?", (since_s,))]
-        created = [dict(r) for r in c.execute("SELECT * FROM tasks WHERE created >= ?", (since_s,))]
-        closed = [dict(r) for r in c.execute("SELECT * FROM tasks WHERE status = 'done' AND done_at >= ?", (since_s,))]
+        mails = [dict(r) for r in c.execute("SELECT * FROM email_seen WHERE processed_at >= ? AND processed_at < ?",
+                                            (since_s, until_s))]
+        created = [dict(r) for r in c.execute("SELECT * FROM tasks WHERE created >= ? AND created < ?",
+                                              (since_s, until_s))]
+        closed = [dict(r) for r in c.execute("SELECT * FROM tasks WHERE status = 'done' AND done_at >= ? "
+                                             "AND done_at < ?", (since_s, until_s))]
         open_ = [dict(r) for r in c.execute("SELECT * FROM tasks WHERE status = 'open'")]
     cats = Counter(m["category"] for m in mails)
     senders = Counter(m["sender_domain"] for m in mails if m["category"] not in BULK)
@@ -97,7 +102,7 @@ def analyse(days: int = 7, today: date | None = None) -> dict[str, Any]:
     # tasks that keep coming back with the same opening words are a process, not a one-off
     stems = Counter(" ".join(re.findall(r"[a-z]+", t["title"].lower())[:3]) for t in created + closed)
     repeats = [(s, n) for s, n in stems.most_common(5) if n >= 3 and s]
-    cal = assistant.calendar_events(day=today - timedelta(days=days), days=days)
+    cal = assistant.calendar_events(day=today - timedelta(days=days - 1), days=days)
     meetings = None
     if "error" not in cal:
         spans = [p for p in (_parse(e) for e in cal["events"]) if p]
@@ -236,7 +241,7 @@ def add_event(title: str, start: datetime, minutes: int = 30, note: str = "") ->
     if "error" in r:
         return r
     audit.log("workflow", "diary_add", {"title": title[:80], "start": start.isoformat(), "minutes": minutes})
-    return {"ok": True, "start": start, "minutes": minutes}
+    return {"ok": True, "start": start, "minutes": minutes, "id": r.get("id", "")}
 
 
 def _minutes(s: str, default: int) -> int:

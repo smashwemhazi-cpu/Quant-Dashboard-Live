@@ -169,6 +169,8 @@ def handle_update(u: dict[str, Any]) -> None:
         log.exception("command failed")
         reply = f"Sorry - that failed ({type(e).__name__})."
     send(chat, reply, keyboard(text))
+    for aid in re.findall(r"!approve ([0-9a-f]{32})", reply)[:4]:     # a meeting invitation waiting for your OK
+        call("sendMessage", chat_id=chat, text=f"Invitation {aid[:6]}: send it?", reply_markup=approval_keyboard(aid))
 
 
 def run() -> None:

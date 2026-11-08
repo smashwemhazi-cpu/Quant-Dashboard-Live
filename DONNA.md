@@ -12,7 +12,7 @@ She has seven duties. Each one is carried out by agents she coordinates, and eac
 
 | Duty | What she does | Commands | How you can tell |
 |---|---|---|---|
-| **Run your day** | Sorts your inbox, keeps your task list and diary, reminds you before meetings, and opens and closes each day with one message. | !today !tasks !add !done !draft !waiting !diary !workflow !morning !evening | Morning message by 08:00 your time; urgent unread email reaches you within 15 minutes. |
+| **Be your PA** | Knows where everything is and coordinates it: sorts every email (read or not), keeps your task list true and your diary, books meetings for your Approve, reminds you before meetings, opens and closes each day with one message, and analyses your week every Friday. | !desk !today !tasks !task !add !done !draft !waiting !diary !meet !workflow !analysis !weekly !alerts !policy !feeds | !desk: the eight PA outcomes are green (every email sorted within 30 minutes, no reply owed over 2 working days, overdue tasks 3 or fewer, focus time booked, nothing waiting for your OK over a day). |
 | **Keep the firm compliant** | Runs the AML/KYC and execution rules on every back-office report, keeps the case and complaints registers, screens names against sanctions and PEP lists, tracks regulatory deadlines and builds the weekly pack and STR evidence packs. | !compliance !cases !kri !oblig !complaints !screen !str !ib !pack | No regulatory deadline reaches its due date without a reminder 2 days before; the Monday pack arrives on its own. |
 | **Watch the desk and the markets** | Watches execution quality and LP slippage, writes the desk report, the morning dispatch and the daily wrap. | !mi  (and the automatic dispatch and wrap) | Daily wrap at 21:00 your time; an LP slippage episode is flagged within the hour. |
 | **Protect your own trading** | Reads your cTrader account (read-only), watches open risk, stops and the daily-loss limit, keeps your trading journal and watches your cBots, and checks your own trades against the PAD policy with a monthly self-review record. | !risk !journal !pad | A position without a stop or a hit daily-loss limit is flagged within 15 minutes. |
@@ -24,7 +24,7 @@ She has seven duties. Each one is carried out by agents she coordinates, and eac
 - Never places, changes or closes a trade, and never moves money.
 - Never messages a client. Leads only get a first message after you type !leads confirm.
 - Never sends email for you: replies go to your Gmail Drafts for you to check and send.
-- Never invites anyone to a meeting, and never changes or deletes an existing calendar event.
+- Never sends a meeting invitation until you tap Approve on that exact invitation; never changes or deletes your calendar events (only her own [HOLD] placeholders).
 - Passwords and keys only go into vertex1-connect on the server, never into chat.
 - Anything that costs money waits for your yes.
 
@@ -196,6 +196,74 @@ Schedule the cTrader and Syntellicore reports to be emailed to simba@vertex1brok
 - To accept reports only from certain senders, run `vertex1-connect email` and answer the "report senders" question (for example `ctrader.com,syntellicore.com`).
 - `!feeds` (or ask the console "how fresh is my data?") lists every report and connection with a green, red or white dot. It says how old each one is, what goes stale without it, and the three steps to put it on autopilot. The weekly page shows the same in one line.
 
+## Your PA: what "done" means
+
+The goal, in your words: **DONNA knows where everything is, is your PA and coordinates everything.** Done means these eight outcomes hold. Each is measured over the **last 7 days, today included**, and compared with the 7 days before. Type `!desk` to see them green, amber or red.
+
+| # | Outcome | Measured as | Done (green) | Slipping (amber) |
+|---|---|---|---|---|
+| 1 | Every email has a home | emails sorted within 30 min of arriving | 95% or more | 80% or more |
+| 2 | Nothing owed is forgotten | replies owed for over 2 working days | 0 | up to 2 |
+| 3 | Replies go out in time | median hours from email to your reply | 24h or less | 48h or less |
+| 4 | The task list is true | overdue tasks | 3 or fewer | up to 6 |
+| 5 | Work gets finished | tasks closed for every 100 added | 100 or more | 80 or more |
+| 6 | The diary protects your time | focus hours booked ("Focus:" events, `!diary block`) | 5h or more | 2h or more |
+| 7 | Meetings don't eat the week | share of work hours in meetings | 40% or less | 60% or less |
+| 8 | Coordination doesn't stall | things waiting for your OK for over 24h | 0 | 1 |
+
+A red line comes with the first thing to do about it. Promotions and newsletters are left out of the email numbers.
+
+**Your workflow, defined.** `!workflow` and `!analysis` use the same 7-day window and the same numbers:
+- **Email:** emails in (by type and sender), urgent ones, and how many asked you something.
+- **Tasks:** tasks in and tasks done, each compared with last week; overdue tasks, tasks open for over a week, and how long a task takes to close.
+- **Diary:** meetings and hours, focus hours, back-to-back meetings.
+- **Suggestions:** streamlining ideas, each tied to one of those numbers.
+
+**Weekly analysis, every Friday** (`!analysis`, also page 2 of the Friday PDF):
+- **Your trades:** count, net, win rate, profit factor, worst run, best and worst symbol, oversized losses and overtrading days.
+- **Your work flow:** the numbers above.
+- **Your agents:** how many of DONNA's jobs ran fine, which are failing or waiting on you, the most frequent failures, each duty's state, and the alerts raised.
+- **Your KPIs:** green, amber and red counts, which slipped or recovered since last week, and which are red now.
+- **The PA standard:** the eight outcomes.
+
+Each Friday's numbers are saved, so the next week can say what changed.
+
+## Alerts: what deserves a ping
+
+One alert policy decides for every part of DONNA. Type `!alerts policy` to see it in full.
+
+| Level | What happens | Covers |
+|---|---|---|
+| 🔴 Critical | Pings Discord and your phone now, at any hour. Repeats every 30 min (twice at most) until you type `!ack`. | Trading risk (daily-loss limit, no stop, near stop-out), an email from a regulator, DONNA down for over 6 hours |
+| 🟠 Important | Pings now during your alert hours (07:00 to 21:00 your time, `JARVIS_ALERT_HOURS`), at most 4 an hour. Outside those hours it waits for the morning message. | Urgent emails you haven't opened, meetings starting soon, deadlines within 2 days, things waiting for your OK, desk slippage, a stopped cBot |
+| 🔵 Notice | No ping. Listed once under "SINCE LAST TIME" in your next morning or evening message. | A DONNA job failing for over an hour, a connection to redo, new leads, big market moves, reports loaded |
+| ⚪ Log | No ping. Shown only in `!alerts` and the audit trail. | Everything else |
+
+The same alert goes out once per 24 hours at most. An email you already opened never pings you. `!quiet 2h` lets only critical alerts through for 2 hours, and `!quiet off` ends it early. `!alerts` shows what pinged you and what was held back.
+
+## Meetings: DONNA books, you approve
+
+`!meet jo@ib-partner.com | tomorrow | Intro call | 45m | About the IB plan`
+- **Who:** an email address, or `E14` for the sender of email 14 (from triage).
+- **When:** `YYYY-MM-DD HH:MM` in your time, or `today`, `tomorrow`, a weekday or `next`, which mean the first free slot in your work hours.
+
+DONNA puts a "[HOLD - awaiting your OK]" placeholder in your calendar so nothing else takes the slot. She then shows you the invitation with **Approve** and **Reject** buttons, in Discord and on your phone.
+- **Approve:** Google Calendar sends the invitation and the hold becomes the real meeting.
+- **Reject:** nothing is sent and the hold is removed.
+
+`!meet` on its own lists the invitations waiting for you. Nothing goes to anyone without your Approve on that exact invitation. This needs Google bridge version 7.
+
+## Mail you opened or archived on your phone
+
+DONNA reads every email from the last 3 days (`JARVIS_MAIL_LOOKBACK_DAYS`), read or unread, in the inbox or archived. Archived mail needs bridge version 7.
+- An email you opened on your phone still gets its tasks and stays on `!waiting` until you answer it.
+- Opening an email only stops the ping, because you've seen it.
+- When you answer, DONNA records the time. That is what the "replies go out in time" number uses.
+
+## Wake word
+
+In the console, click **👂 Wake word** (Edge or Chrome) and allow the microphone. Then just say **"Donna, what's on today?"** If you say only "Donna", she answers "Yes?" and listens until you pause. She ignores her own voice. The browser listens only for her name and sends nothing until it hears it. Click the button again to switch it off. The choice is remembered on that PC.
+
 ## DONNA on your phone (Telegram)
 
 The same DONNA in your pocket: commands, ✓ buttons, Approve/Reject buttons, the morning brief, urgent alerts and the Friday page as a PDF. It needs no public web address.
@@ -208,7 +276,7 @@ Then type the same commands with `/` or `!`: `/tasks` (with ✓ buttons), `/toda
 
 ## cTrader's daily EOD report by email
 
-cTrader already emails you the "Accounts EOD report" every evening, from trade@alerts.ctrader.com, with `EOD_Report_USD.html.zip` attached. DONNA reads it by herself: balance, equity, margin and floating P&L per account (account numbers only, no names). It feeds the client-risk and margin KRIs, the KPIs and `!feeds`. It needs the Google bridge version 6. Paste the new `deploy/google-bridge.gs` at script.google.com, save, then Deploy > Manage deployments > pencil > Version: New version > Deploy. The link and key stay the same. cTrader's sender is always accepted, even when you have set your own report senders. You can also drop the zip into Discord as an upload.
+cTrader already emails you the "Accounts EOD report" every evening, from trade@alerts.ctrader.com, with `EOD_Report_USD.html.zip` attached. DONNA reads it by herself: balance, equity, margin and floating P&L per account (account numbers only, no names). It feeds the client-risk and margin KRIs, the KPIs and `!feeds`. It needs the Google bridge version 6 or newer. Paste the new `deploy/google-bridge.gs` at script.google.com, save, then Deploy > Manage deployments > pencil > Version: New version > Deploy. The link and key stay the same. cTrader's sender is always accepted, even when you have set your own report senders. You can also drop the zip into Discord as an upload.
 
 ## Ask your policies
 

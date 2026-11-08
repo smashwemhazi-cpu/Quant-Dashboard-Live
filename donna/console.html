@@ -143,6 +143,7 @@
   <input id="text" placeholder="Type to DONNA, or a command like !tasks, !done 12, !kri …" autocomplete="off">
   <button id="send" type="button">Send</button>
   <button id="mute" type="button" title="Voice on/off">🔊</button>
+  <button id="wake" type="button" title="Wake word: say &quot;Donna&quot; and then your question, hands-free">👂 Wake word off</button>
   <select id="voice" title="DONNA's voice" hidden></select>
   <select id="lang" title="The English DONNA listens for">
     <option value="en-GB">English (UK)</option><option value="en-ZA">English (South Africa)</option>
@@ -362,9 +363,9 @@
     const v = voices().find((x) => x.name === $("voice").value);
     if (v) { u.voice = v; u.lang = v.lang; }
     u.rate = 1.02;
-    u.onstart = () => setMode("speaking");
+    u.onstart = () => { stopWake(); setMode("speaking"); };   // she mustn't wake herself up
     u.onboundary = () => { orb.kick = 1; };
-    u.onend = u.onerror = () => setMode("idle");
+    u.onend = u.onerror = () => { setMode("idle"); resumeWake(); };
     speechSynthesis.speak(u);
   }
 
@@ -388,15 +389,16 @@
     if (analyser) analyser.ctx.close();
     micStream = null; analyser = null;
   }
-  function startListening() {
+  function startListening(afterWake) {
     if (!Rec) { add("her", "This browser can't hear you - open the console in Microsoft Edge or Google Chrome, or type instead."); return; }
     if (rec) return;
+    stopWake();
     if (window.speechSynthesis) speechSynthesis.cancel();
     heard = ""; sure = 1;
     rec = new Rec();
     rec.lang = $("lang").value;
     rec.interimResults = true;
-    rec.continuous = true;
+    rec.continuous = !afterWake;    // after the wake word she stops listening when you pause
     rec.onresult = (ev) => {
       heard = Array.from(ev.results).map((r) => r[0].transcript).join(" ");
       Array.from(ev.results).forEach((r) => { if (r.isFinal && r[0].confidence) sure = Math.min(sure, r[0].confidence); });
@@ -405,6 +407,7 @@
     rec.onerror = (ev) => { if (ev.error === "not-allowed") add("her", "I need the microphone - click the lock icon by the address and allow it."); };
     rec.onend = () => {
       rec = null; stopLevel(); $("mic").classList.remove("live");
+      resumeWake();
       const t = heard.trim();
       if (!t) { setMode("idle"); return; }
       if (sure < 0.6) {   // she isn't sure she heard right: let SH check it before it goes
@@ -420,6 +423,51 @@
     setMode("listening");
   }
   function stopListening() { if (rec) rec.stop(); }
+
+  // ------------------------------------------------------------ wake word: "Donna, what's on today?"
+  // Off until you switch it on (remembered on this PC). While on, the browser listens for her name only;
+  // nothing is sent anywhere until it hears "Donna". Edge or Chrome; the tab must stay open.
+  const WAKE = /\b(?:hey |hi |ok |okay )?(donna|dona|donner|donah|tonna)\b[\s,.!?]*/i;
+  let wakeOn = store.get("donna.wake", "0") === "1", wakeRec = null, wakeHeld = false;
+  const paintWake = () => { $("wake").textContent = wakeOn ? "👂 Listening for “Donna”" : "👂 Wake word off";
+                            $("wake").classList.toggle("live", wakeOn); };
+  function startWake() {
+    if (!Rec || !wakeOn || wakeHeld || wakeRec || rec) return;
+    const w = new Rec();
+    w.lang = $("lang").value; w.continuous = true; w.interimResults = true;
+    w.onresult = (ev) => {
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const r = ev.results[i], t = r[0].transcript, m = t.match(WAKE);
+        if (!m) continue;
+        setMode("listening");
+        if (!r.isFinal) return;                          // wait for the end of the sentence
+        const after = t.slice(m.index + m[0].length).trim();
+        wakeRec = null; w.onend = null; w.abort();
+        if (after.split(/\s+/).length >= 2) { say(after); resumeWake(); }   // "Donna, what's on today?"
+        else { speak("Yes?"); setTimeout(() => startListening(true), 900); }   // just "Donna": she asks
+        return;
+      }
+    };
+    w.onerror = (ev) => {
+      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+        wakeOn = false; store.set("donna.wake", "0"); paintWake();
+        add("her", "I need the microphone for the wake word - click the lock icon by the address and allow it.");
+      }
+    };
+    w.onend = () => { if (wakeRec === w) { wakeRec = null; setTimeout(startWake, 300); } };   // the browser stops it every minute or so
+    wakeRec = w;
+    try { w.start(); } catch (e) { wakeRec = null; }
+  }
+  function stopWake() { wakeHeld = true; if (wakeRec) { const w = wakeRec; wakeRec = null; w.onend = null; try { w.abort(); } catch (e) {} } }
+  function resumeWake() { wakeHeld = false; setTimeout(startWake, 600); }
+  if (!Rec) $("wake").hidden = true;
+  $("wake").onclick = () => {
+    wakeOn = !wakeOn; store.set("donna.wake", wakeOn ? "1" : "0"); paintWake();
+    if (wakeOn) { add("her", "Say “Donna” and then your question, for example: Donna, what's on today?"); resumeWake(); }
+    else stopWake();
+  };
+  paintWake();
+  if (wakeOn) resumeWake();
 
   const mic = $("mic");
   mic.addEventListener("pointerdown", (e) => { e.preventDefault(); startListening(); });

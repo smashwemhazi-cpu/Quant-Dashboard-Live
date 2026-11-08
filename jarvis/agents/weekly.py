@@ -248,7 +248,51 @@ def build_pdf(today: date | None = None) -> bytes:
     pdf.set_font("Helvetica", "", 7.5)
     pdf.set_text_color(*GREY)
     pdf.cell(0, 4, _latin1("Internal and confidential. Built from DONNA's own records; client details are left out."))
+    _analysis_page(pdf, today)
     return bytes(pdf.output())
+
+
+def _analysis_page(pdf: Any, today: date | None) -> None:
+    """Page 2: the weekly analysis - trades, work flow, agents and jobs, KPIs, the PA standard (jarvis/agents/desk)."""
+    from jarvis.agents import desk
+
+    x = _safe(lambda: desk.analysis(today), None)
+    if not x:
+        return
+    pdf.add_page()
+    pdf.set_fill_color(*NAVY)
+    pdf.rect(0, 0, 210, 20, "F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_xy(10, 6)
+    pdf.set_font("Helvetica", "B", 15)
+    pdf.cell(0, 8, _latin1("Weekly analysis: trades, work flow, agents, KPIs"))
+    y = 26
+    colours = {"YOUR TRADES": GREEN, "YOUR WORK FLOW": TEAL, "YOUR AGENTS": AMBER, "YOUR KPIs": NAVY,
+               "YOUR PA STANDARD": RED}
+    for line in desk.analysis_lines(x):
+        if y > 280:
+            break
+        if not line.strip():
+            y += 2
+            continue
+        head = next((c for k, c in colours.items() if line.startswith(k)), None)
+        pdf.set_xy(10, y)
+        if head:
+            pdf.set_fill_color(*head)
+            pdf.rect(10, y, 190, 0.8, "F")
+            pdf.set_xy(10, y + 1.5)
+            pdf.set_text_color(*NAVY)
+            pdf.set_font("Helvetica", "B", 10.5)
+            pdf.cell(190, 6, _latin1(line))
+            y += 8.5
+            continue
+        pdf.set_text_color(40, 40, 40)
+        pdf.set_font("Helvetica", "", 9)
+        text = line.strip()
+        for a, b in {"🟢": "[G]", "🟠": "[A]", "🔴": "[R]", "⚪": "[-]"}.items():
+            text = text.replace(a, b)
+        pdf.multi_cell(190, 4.6, _latin1(text), align="L")
+        y = pdf.get_y() + 1
 
 
 def filename(today: date | None = None) -> str:
@@ -258,7 +302,8 @@ def filename(today: date | None = None) -> str:
 def command(cmd: str, rest: str) -> str | None:
     if cmd != "!weekly":
         return None
-    return text() + "\nIn the console the PDF opens here: http://localhost:8765/console/weekly.pdf"
+    return text() + "\nThe analysis of trades, work flow, agents and KPIs: !analysis (page 2 of the PDF)" + \
+        "\nIn the console the PDF opens here: http://localhost:8765/console/weekly.pdf"
 
 
 @register
@@ -275,6 +320,12 @@ class WeeklyAgent(Agent):
             return {"skipped": "not the weekly day"}
         pdf = build_pdf(today)
         res: dict[str, Any] = {"bytes": len(pdf)}
+        try:   # this week's numbers, so next week can say what changed
+            from jarvis.agents import desk
+
+            desk.save_week(desk.analysis(today))
+        except Exception as e:  # noqa: BLE001
+            res["snapshot_error"] = f"{type(e).__name__}: {e}"
         if send:
             from donna.channels import send_discord_file, send_telegram_file
             from jarvis.agents.personal import PERSONAL_TARGETS

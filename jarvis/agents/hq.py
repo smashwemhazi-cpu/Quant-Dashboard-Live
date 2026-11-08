@@ -31,13 +31,17 @@ PURPOSE = ("Give SH back time and certainty. Nothing important slips, every day 
 # Each duty: what DONNA promises, the agents she directs for it, the scheduled jobs that deliver it,
 # the commands SH uses, and how SH can tell it is being done.
 DUTIES: list[dict[str, Any]] = [
-    {"key": "day", "name": "Run your day",
-     "promise": "Sorts your inbox, keeps your task list and diary, reminds you before meetings, and opens "
-                "and closes each day with one message.",
-     "agents": ["assistant", "workflow", "rhythm", "mind", "weekly"],
-     "jobs": ["inbox_triage", "morning", "evening", "my_day", "shutdown", "nudges", "midday", "weekly_picture"],
-     "commands": "!today !tasks !task !add !done !draft !waiting !diary !workflow !morning !evening !weekly !policy !feeds",
-     "proof": "Morning message by 08:00 your time; urgent unread email reaches you within 15 minutes."},
+    {"key": "day", "name": "Be your PA",
+     "promise": "Knows where everything is and coordinates it: sorts every email (read or not), keeps your task "
+                "list true and your diary, books meetings for your Approve, reminds you before meetings, opens and "
+                "closes each day with one message, and analyses your week every Friday.",
+     "agents": ["assistant", "workflow", "rhythm", "mind", "weekly", "desk", "meetings", "alerts"],
+     "jobs": ["inbox_triage", "morning", "evening", "my_day", "shutdown", "nudges", "midday", "weekly_picture",
+              "alert_repeat"],
+     "commands": "!desk !today !tasks !task !add !done !draft !waiting !diary !meet !workflow !analysis !weekly "
+                 "!alerts !policy !feeds",
+     "proof": "!desk: the eight PA outcomes are green (every email sorted within 30 minutes, no reply owed over 2 "
+              "working days, overdue tasks 3 or fewer, focus time booked, nothing waiting for your OK over a day)."},
     {"key": "compliance", "name": "Keep the firm compliant",
      "promise": "Runs the AML/KYC and execution rules on every back-office report, keeps the case and "
                 "complaints registers, screens names against sanctions and PEP lists, tracks regulatory "
@@ -91,7 +95,8 @@ BOUNDARIES = [
     "Never places, changes or closes a trade, and never moves money.",
     "Never messages a client. Leads only get a first message after you type !leads confirm.",
     "Never sends email for you: replies go to your Gmail Drafts for you to check and send.",
-    "Never invites anyone to a meeting, and never changes or deletes an existing calendar event.",
+    "Never sends a meeting invitation until you tap Approve on that exact invitation; never changes or deletes "
+    "your calendar events (only her own [HOLD] placeholders).",
     "Passwords and keys only go into vertex1-connect on the server, never into chat.",
     "Anything that costs money waits for your yes.",
 ]

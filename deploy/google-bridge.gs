@@ -1,14 +1,16 @@
 // D.O.N.N.A Google bridge - runs inside your own Google account, so no password is ever given to DONNA.
-// It READS new inbox emails (read or unread), your calendar (with guest addresses), which of your sent emails
+// It READS new emails, read or unread, in the inbox or archived (v7), your calendar (with guest addresses), which of your sent emails
 // are still unanswered (subjects only), and report attachments (.csv / .xlsx / .xls, and from v6 cTrader's zipped .html EOD report).
 // It WRITES only: a draft reply when you ask for one (!draft 12), an event in your own calendar when you ask for one
-// (!diary add / !diary block - no guests, so no invitations), DONNA's encrypted nightly backup to the
+// (!diary add / !diary block - no guests, so no invitations), a meeting WITH guests only after you tap Approve on
+// that exact invitation (!meet, v7), and removing DONNA's own "[HOLD]" placeholder events, DONNA's encrypted nightly backup to the
 // "DONNA backups" folder in your Drive, and an email TO YOU if DONNA's server stops checking in (uptime alert).
-// It never sends email to anyone else, and never deletes, labels or marks anything read.
+// It never emails anyone else (the only exception: Google Calendar sends a meeting invitation you approved), and
+// never deletes, labels or marks mail read.
 // Set-up (5 minutes, once) is in DONNA.md under "Email and calendar without a password".
 // After pasting a newer copy: Deploy > Manage deployments > pencil > Version: New version > Deploy (the link stays the same).
 
-var VERSION = 6;
+var VERSION = 7;
 var WATCH_MINUTES = 30;      // email me if DONNA hasn't checked in for this long
 var BACKUPS_KEPT = 14;
 var REPORT_FILE = /\.(csv|xlsx|xls|zip|html|htm)$/i;   // v6: cTrader's zipped HTML EOD report
@@ -60,7 +62,8 @@ function doGet(e) {
 function mail_(days, max) {
   var msgs = [];
   var me = Session.getEffectiveUser().getEmail().toLowerCase();
-  GmailApp.search('in:inbox newer_than:' + days + 'd', 0, max).forEach(function (t) {
+  // v7: read or unread, inbox or archived - mail you opened or archived on your phone is still seen
+  GmailApp.search('newer_than:' + days + 'd -in:sent -in:drafts -in:spam -in:trash -in:chats', 0, max).forEach(function (t) {
     var all = t.getMessages();
     all.forEach(function (m, i) {
       if (m.isDraft() || m.getFrom().toLowerCase().indexOf(me) >= 0) return;   // your own messages and drafts
@@ -147,6 +150,10 @@ function doPost(e) {
     out = backup_(body.name, body.data);
   } else if (q.action === 'event') {
     out = event_(body.title, body.start, Number(body.minutes || 30), body.note);
+  } else if (q.action === 'invite') {
+    out = invite_(body.title, body.start, Number(body.minutes || 30), body.guests, body.note, body.hold);
+  } else if (q.action === 'unhold') {
+    out = unhold_(body.hold);
   } else {
     out = {error: 'unknown action'};
   }
@@ -184,6 +191,30 @@ function event_(title, start, minutes, note) {
   var ev = CalendarApp.getDefaultCalendar().createEvent(String(title).slice(0, 200), s,
     new Date(s.getTime() + minutes * 60000), {description: 'Added by DONNA. ' + String(note || '').slice(0, 500)});
   return {ok: true, id: ev.getId()};
+}
+
+// v7: a meeting with guests. DONNA's server only calls this after you tapped Approve on this exact invitation.
+function invite_(title, start, minutes, guests, note, hold) {
+  var s = new Date(start);
+  var list = (guests || []).map(String).filter(function (g) { return /^[^@\s,]+@[^@\s,]+\.[^@\s,]+$/.test(g); });
+  if (!title || isNaN(s.getTime()) || !list.length || list.length > 10) return {error: 'bad invitation'};
+  minutes = Math.max(5, Math.min(minutes || 30, 480));
+  var ev = CalendarApp.getDefaultCalendar().createEvent(String(title).slice(0, 200), s,
+    new Date(s.getTime() + minutes * 60000),
+    {guests: list.join(','), sendInvites: true, description: String(note || '').slice(0, 1500)});
+  if (hold) unhold_(hold);
+  return {ok: true, id: ev.getId(), guests: list.length};
+}
+
+// removes only DONNA's own placeholder: title starts with [HOLD and it was added by DONNA
+function unhold_(id) {
+  var ev = id ? CalendarApp.getDefaultCalendar().getEventById(String(id)) : null;
+  if (!ev) return {ok: true, gone: true};
+  if (String(ev.getTitle()).indexOf('[HOLD') !== 0 || String(ev.getDescription()).indexOf('Added by DONNA') < 0) {
+    return {error: 'not a DONNA hold'};
+  }
+  ev.deleteEvent();
+  return {ok: true};
 }
 
 // ------------------------------------------------------------------ uptime

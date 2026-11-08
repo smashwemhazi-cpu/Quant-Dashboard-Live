@@ -331,7 +331,15 @@ def morning_text() -> str:
     L = [f"D.O.N.N.A | GOOD MORNING | {now:%a %d %b %Y}", LINE]
     L += _sections(((needs_you, "NEEDS YOU"), (mind.focus_lines, "FOCUS"), (calendar_lines, "CALENDAR"),
                     (risk_lines, "POSITION RISK"), (market_lines, "MARKETS"), (health_lines, "SYSTEM")))
-    return "\n".join(L + [FOOTER])
+    return "\n".join(L + _held() + [FOOTER])
+
+
+def _held() -> list[str]:
+    """Alerts the alert policy held back (notices, or important ones outside your alert hours)."""
+    from jarvis.agents import alerts
+
+    lines = _safe(alerts.held_lines, "SINCE LAST TIME")
+    return lines + [""] if lines else []
 
 
 def evening_text() -> str:
@@ -340,7 +348,7 @@ def evening_text() -> str:
     L = _safe(lambda: mind.shutdown_text().splitlines(), "SHUTDOWN") + [""]
     L += _sections(((compliance_lines, "COMPLIANCE"), (trading_day_lines, "TRADING"), (risk_lines, "POSITION RISK"),
                     (market_lines, "MARKETS")))
-    return "\n".join(L + [FOOTER])
+    return "\n".join(L + _held() + [FOOTER])
 
 
 @register
