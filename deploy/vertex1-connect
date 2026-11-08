@@ -9,8 +9,8 @@ PY=/opt/vertex1/venv/bin/python
 [ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
 SECTION=${1:-all}
 case "$SECTION" in
-  all|discord|email|calendar|ctrader|radar|leads|telegram|backup) ;;
-  *) echo "Usage: vertex1-connect [ctrader|email|calendar|discord|radar|leads|telegram|backup]   (nothing = all questions)"; exit 1 ;;
+  all|discord|email|calendar|ctrader|radar|leads|telegram|phone|backup) ;;
+  *) echo "Usage: vertex1-connect [ctrader|email|calendar|discord|radar|leads|telegram|phone|backup]   (nothing = all questions)"; exit 1 ;;
 esac
 if [ "$SECTION" = backup ]; then
   # the off-site backup key: made here, on the server, and shown once so the owner can keep it safe
@@ -49,6 +49,7 @@ ask email JARVIS_IMAP_PASSWORD "6/12 Google app password - 16 letters (hidden)" 
 case "$SECTION" in all|email) echo "No-password route if Google keeps refusing: the Google bridge (DONNA.md). Enter skips 6a and 6b." ;; esac
 ask email JARVIS_GOOGLE_BRIDGE_URL "6a/12 Google bridge link - the Web app URL ending in /exec (hidden)" 1
 ask email JARVIS_GOOGLE_BRIDGE_KEY "6b/12 Google bridge key from setup() (hidden)" 1
+ask email JARVIS_REPORT_SENDERS "6c/12 Report senders: the address(es) the back office / CRM emails reports from, comma-separated (Enter = skip)" 0
 ask calendar JARVIS_GCAL_ICS_URL "7/12 Google Calendar secret address in iCal format (hidden)" 1
 ask ctrader JARVIS_PERSONAL_ACCOUNT "8/12 Your personal cTrader account number (hidden)" 1
 [ "$SECTION" = all ] && echo "Questions 9-12 connect your live account READ-ONLY (see DONNA.md). Skip them if you haven't made the cTrader app yet."
@@ -57,6 +58,8 @@ ask ctrader DONNA_CTRADER_CLIENT_SECRET "10/12 cTrader Open API app Secret (hidd
 ask ctrader DONNA_CTRADER_ACCESS_TOKEN "11/12 Access token issued with the ACCOUNT INFO scope - not trading (hidden)" 1
 ask ctrader DONNA_CTRADER_REFRESH_TOKEN "12/12 Refresh token from the same screen (hidden)" 1
 ask radar JARVIS_YOUTUBE_API_KEY "Partner Radar: YouTube Data API key, starts AIza (hidden; Enter = skip)" 1
+case "$SECTION" in phone) echo "In Telegram, open @BotFather, send /newbot, pick a name (e.g. DONNA) and a username ending in bot. It gives you a token." ;; esac
+ask phone DONNA_TELEGRAM_BOT_TOKEN "DONNA on your phone: Telegram bot token from @BotFather (hidden; Enter = skip)" 1
 ask leads JARVIS_BRAVE_API_KEY "Lead Finder web search: Brave Search API key from api-dashboard.search.brave.com (hidden; Enter = skip)" 1
 case "$SECTION" in telegram) echo "From my.telegram.org > API development tools (log in with YOUR phone number):" ;; esac
 ask telegram TG_API_ID "Lead Finder Telegram: api_id (digits)" 0
@@ -133,6 +136,9 @@ CHECKS = {
     "JARVIS_GOOGLE_BRIDGE_KEY": (r"[a-f0-9]{64}", "not the bridge key (64 letters and digits from setup())"),
     "JARVIS_YOUTUBE_API_KEY": (r"AIza[0-9A-Za-z_-]{35}", "not a Google API key (it starts AIza and is 39 characters)"),
     "JARVIS_BRAVE_API_KEY": (r"[A-Za-z0-9_-]{20,80}", "not a Brave Search API key"),
+    "DONNA_TELEGRAM_BOT_TOKEN": (r"\d{6,12}:[A-Za-z0-9_-]{30,60}", "not a Telegram bot token (digits, a colon, then letters - from @BotFather)"),
+    "JARVIS_REPORT_SENDERS": (r"[^@\s,]*@?[A-Za-z0-9.-]+\.[A-Za-z]{2,}(,\s*[^@\s,]*@?[A-Za-z0-9.-]+\.[A-Za-z]{2,})*",
+                              "not an email address or domain (several: a@x.com,b@y.com)"),
     "TG_API_ID": (r"\d{4,12}", "not an api_id (digits only, from my.telegram.org)"),
     "TG_API_HASH": (r"[a-f0-9]{32}", "not an api_hash (32 letters a-f and digits, from my.telegram.org)"),
     "JARVIS_GCAL_ICS_URL": (r"https://calendar\.google\.com/calendar/ical/\S+\.ics", "not the 'Secret address in iCal format' link"),
@@ -194,6 +200,14 @@ if [ "$SECTION" = telegram ] && grep -q '^TG_API_HASH=.\+' "$ENV"; then
   sudo -u vertex1 bash -c 'set -a; . /etc/vertex1/vertex1.env; cd /opt/vertex1/app; /opt/vertex1/venv/bin/python -m donna.lead_monitor login' \
     && { systemctl enable -q vertex1-leads 2>/dev/null; systemctl restart vertex1-leads; sleep 3
          echo "TELEGRAM  $(systemctl is-active vertex1-leads) - searches public Telegram once a day; see !leads"; }
+fi
+if [ "$SECTION" = phone ] && grep -q '^DONNA_TELEGRAM_BOT_TOKEN=.\+' "$ENV"; then
+  echo
+  (set -a; . "$ENV"; cd /opt/vertex1/app; VERTEX1_ENV_FILE="$ENV" "$PY" -m donna.phone pair)
+  if grep -q '^DONNA_TELEGRAM_APPROVER_IDS=.\+' "$ENV"; then
+    systemctl enable -q vertex1-phone 2>/dev/null; systemctl restart vertex1-phone vertex1-scheduler; sleep 3
+    echo "PHONE     $(systemctl is-active vertex1-phone) - send /tasks to your bot"
+  fi
 fi
 if grep -q '^DONNA_DISCORD_BOT_TOKEN=.\+' "$ENV"; then
   systemctl enable -q vertex1-discord 2>/dev/null; systemctl restart vertex1-discord; sleep 4

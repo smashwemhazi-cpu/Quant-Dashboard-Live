@@ -310,7 +310,7 @@
     const d = document.createElement("div");
     d.className = "msg " + cls;
     // plain text, with web links made clickable (opened in the normal browser)
-    String(text).split(/(https:\/\/[^\s]+)/).forEach((part, i) => {
+    String(text).split(/(https?:\/\/[^\s]+)/).forEach((part, i) => {
       if (i % 2) { const a = document.createElement("a"); a.href = part; a.target = "_blank"; a.rel = "noopener"; a.textContent = part.startsWith("https://mail.google.com/") ? "Open in Gmail ↗" : part; d.appendChild(a); }
       else d.appendChild(document.createTextNode(part));
     });
@@ -326,7 +326,7 @@
     try {
       const r = await api("/api/console/say", { text });
       add("her", r.reply);
-      speak(r.reply.replace(/https:\/\/\S+/g, ""));   // links are for clicking, not reading out
+      speak(r.reply.replace(/https?:\/\/\S+/g, ""));   // links are for clicking, not reading out
       if (/^[!#](done|add|tasks|undo|edit)/i.test(text)) refresh();
     } catch (e) {
       add("her", "I couldn't reach the server: " + e.message);

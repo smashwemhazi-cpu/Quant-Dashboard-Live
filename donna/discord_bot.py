@@ -52,6 +52,9 @@ HELP = ("D.O.N.N.A commands:\n"
         "!done 12 13                mark tasks done (or click the ✓ buttons under !tasks)\n"
         "!undo 12                   put task 12 back if you ticked it by mistake\n"
         "!task 12   !email 14       what a task or email is about, the email itself, and the next step\n"
+        "!policy <question>         the passage in your own policies that answers it (document + page); !policy add with files\n"
+        "!feeds                     how fresh every report and connection is, and how to put reports on autopilot\n"
+        "!weekly                    your week on one page (PDF with charts): tasks, emails, risk, KPIs, data\n"
         "!edit 12 due friday        change a task: due <date|tomorrow|none>, urgent, normal, title <new words>\n"
         "!add <title> | YYYY-MM-DD | high/medium/low\n"
         "!draft 12 <note>           reply to task 12's email, saved in Gmail Drafts (never sent)\n"
@@ -332,12 +335,14 @@ def handle(text: str, channel: str = "") -> str | None:
         return mind.chat(rest, channel=f"discord:{channel.lower()}", allow_writes=False)
     from jarvis.agents import complaints, ib, str_pack
 
-    from jarvis.agents import attribution, campaigns, followup, hq, kpi, leadfinder, pad, radar, screening, workflow
+    from jarvis.agents import (attribution, campaigns, feeds, followup, hq, kpi, leadfinder, pad, policies, radar,
+                               screening, weekly, workflow)
 
     reply = (complaints.command(cmd, rest) or str_pack.command(cmd, rest) or ib.command(cmd, rest)
              or leadfinder.command(cmd, rest) or radar.command(cmd, rest) or campaigns.command(cmd, rest) or attribution.command(cmd, rest)
              or screening.command(cmd, rest) or workflow.command(cmd, rest) or followup.command(cmd, rest)
-             or hq.command(cmd, rest) or pad.command(cmd, rest) or kpi.command(cmd, rest))
+             or hq.command(cmd, rest) or pad.command(cmd, rest) or kpi.command(cmd, rest)
+             or feeds.command(cmd, rest) or policies.command(cmd, rest) or weekly.command(cmd, rest))
     if reply is not None:
         return reply
     reply = compliance_commands(cmd, rest)
@@ -536,6 +541,16 @@ def main() -> None:
         if message.author.bot or message.webhook_id or not (message.content.strip() or message.attachments):
             return
         channel = getattr(message.channel, "name", "")
+        if message.attachments and message.content.strip().lower().startswith("!policy add"):
+            if not allowed(message.author.id, channel):
+                return
+            from jarvis.agents import policies
+
+            async with message.channel.typing():
+                got = [await asyncio.to_thread(policies.add, a.filename, await a.read()) for a in message.attachments]
+            for part in chunks("\n".join(got)):
+                await message.channel.send(part)
+            return
         if message.attachments:  # files for DONNA to read: statements, exports, cBot logs
             if not allowed(message.author.id, channel):
                 return
@@ -581,6 +596,18 @@ def main() -> None:
             except Exception as e:
                 log.exception("pad pack failed")
                 await message.channel.send(f"Sorry - the PAD pack failed ({type(e).__name__}).")
+            return
+        if message.content.strip().lower() == "!weekly":
+            try:
+                from jarvis.agents import weekly
+
+                async with message.channel.typing():
+                    pdf = await asyncio.to_thread(weekly.build_pdf)
+                    summary = await asyncio.to_thread(weekly.text)
+                await message.channel.send(summary[:1900], file=discord.File(io.BytesIO(pdf), weekly.filename()))
+            except Exception as e:
+                log.exception("weekly page failed")
+                await message.channel.send(f"Sorry - the weekly page failed ({type(e).__name__}).")
             return
         pack = re.fullmatch(r"!pack(?:\s+(\d{1,3}))?", message.content.strip().lower())
         if pack:

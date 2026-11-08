@@ -81,6 +81,17 @@ def send_telegram(chat_id: str, text: str) -> str:
     return f"telegram {chat_id} msg {','.join(ids)}"
 
 
+def send_telegram_file(chat_id: str, data: bytes, filename: str, caption: str = "") -> str:
+    """Send one file (e.g. the weekly PDF) to a Telegram chat."""
+    url = f"https://api.telegram.org/bot{_env('DONNA_TELEGRAM_BOT_TOKEN')}/sendDocument"
+    r = _check(requests.post(url, data={"chat_id": chat_id, "caption": caption[:1000]},
+                             files={"document": (filename, data)}, timeout=TIMEOUT * 2), "telegram")
+    body = r.json()
+    if not body.get("ok"):
+        raise ChannelError(f"telegram: {body.get('description')}")
+    return f"telegram {chat_id} file {body['result']['message_id']}"
+
+
 def send_slack(channel: str, text: str, thread_ts: Optional[str] = None) -> str:
     payload = {"channel": channel, "text": text, "unfurl_links": False}
     if thread_ts:
