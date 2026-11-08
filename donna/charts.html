@@ -100,10 +100,11 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
 
 <section id="tab-edge" hidden>
   <p class="note">Where your own trades make and lose money. A group needs enough trades before DONNA calls it an edge or a leak; below that it says "too few to tell". Same report in Discord: <b>!edge</b>.</p>
+  <div id="ed-bottom"></div>
   <div class="tiles" id="ed-tiles"></div>
   <div class="grid2">
     <div class="panel"><h2>Behaviour after a loss</h2><div id="ed-beh"></div></div>
-    <div class="panel"><h2>Rule replay: same trades, rule followed</h2><p class="sub">Best case: it cannot know what you would have done instead of a skipped trade. "Both halves" = it helped in the first and the second half of the period.</p><div id="ed-replay"></div></div>
+    <div class="panel"><h2>Rule replay: same trades, rule followed</h2><p class="sub">Skip rules assume you just don't take those trades. For the hard stop, "at best" assumes perfect fills and no winner ever touched the stop; "careful" also assumes one typical winner is stopped out for every big loss cut. "Both halves" = it helped in the first and the second half of the period.</p><div id="ed-replay"></div></div>
   </div>
   <div class="grid2" id="ed-groups"></div>
 </section>
@@ -284,8 +285,13 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
   }
 
   function renderEdge(x) {
-    if (!x || x.error) { $("ed-tiles").innerHTML = ""; $("ed-beh").innerHTML = empty((x && x.error) || "No data"); $("ed-replay").innerHTML = ""; $("ed-groups").innerHTML = ""; return; }
-    const s = x.overall, b = x.behaviour, t = x.tail, gap = x.gap_to_breakeven;
+    if (!x || x.error) { $("ed-bottom").innerHTML = ""; $("ed-tiles").innerHTML = ""; $("ed-beh").innerHTML = empty((x && x.error) || "No data"); $("ed-replay").innerHTML = ""; $("ed-groups").innerHTML = ""; return; }
+    const s = x.overall, b = x.behaviour, t = x.tail, gap = x.gap_to_breakeven, bl = x.bottom_line || {};
+    $("ed-bottom").innerHTML = `<div class="panel" style="margin-bottom:14px"><h2>Bottom line</h2>`
+      + `<p style="margin:4px 0"><b class="down">Biggest leak:</b> ${esc(bl.leak)}.</p>`
+      + `<p style="margin:4px 0"><b class="up">Do this first:</b> ${esc(bl.first)}.</p>`
+      + `<p style="margin:4px 0"><b class="warn">Still unproven:</b> ${esc(bl.unproven)}.</p>`
+      + (x.main_share >= 80 ? `<p class="sub" style="margin-top:6px">${num(x.main_share, 0)}% of these trades are ${esc(x.main_symbol)}, so this is really a report on your ${esc(x.main_symbol)} trading.</p>` : "") + `</div>`;
     $("ed-tiles").innerHTML = [
       tile("Win rate", pct(s.win_rate, 0, false), `you need ${fin(s.breakeven_win_rate) ? pct(s.breakeven_win_rate, 0, false) : "–"} to break even`, fin(gap) ? (gap >= 0 ? "up" : "down") : ""),
       tile("Win size vs loss size", fin(s.payoff) ? s.payoff.toFixed(2) + "x" : "–", `avg win ${money(s.avg_win)} · avg loss ${money(s.avg_loss)}`, fin(s.payoff) ? (s.payoff >= 1 ? "up" : "warn") : ""),
@@ -297,16 +303,16 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
     $("ed-beh").innerHTML = `<table><tr><th></th><th class="n">Trades</th><th class="n">Won</th><th class="n">Per trade</th><th class="n">Net</th></tr>`
       + brow("Within 5 min of a loss", b.after_loss_fast) + brow("All other trades", b.others) + brow("After 2+ losses in a row", b.after_2_losses)
       + brow("After a win", b.after_a_win) + brow("Bigger size right after a loss", b.size_up_after_loss) + "</table>"
-      + (t.over_cap ? `<p class="sub" style="margin-top:8px">${t.over_cap} losses were bigger than 1% of the balance. Largest ${money(t.largest)}${fin(t.largest_pct_balance) ? ` (${num(t.largest_pct_balance, 1)}% of the balance)` : ""}.</p>` : "");
-    $("ed-replay").innerHTML = `<table><tr><th>Rule</th><th class="n">Change</th><th class="n">Skipped</th><th class="n">Worst run</th><th>Both halves</th></tr>`
-      + x.replay.map((r) => `<tr><td>${esc(r.label)}</td><td class="n ${cls(r.change)}">${money(r.change)}</td><td class="n">${r.skipped}</td><td class="n">${money(r.max_drawdown)}</td><td><span class="pill ${r.both_halves ? "up" : ""}">${r.both_halves ? "yes" : "no"}</span></td></tr>`).join("") + "</table>";
+      + (t.over_cap ? `<p class="sub" style="margin-top:8px">${t.over_cap} losses were bigger than 1% of the balance. Largest ${money(t.largest)} on ${esc(t.largest_symbol)}, ${esc(t.largest_when)}${fin(t.largest_pct_balance) ? `: ${num(t.largest_pct_balance, 1)}% of the ${money(t.largest_balance_before)} balance at that moment` : ""} (whole period; the PAD &amp; KPIs tab counts the last 30 days only).</p>` : "");
+    $("ed-replay").innerHTML = `<table><tr><th>Rule</th><th class="n">Careful</th><th class="n">At best</th><th class="n">Skipped</th><th>Both halves</th></tr>`
+      + x.replay.map((r) => `<tr><td>${esc(r.label)}</td><td class="n ${cls(r.conservative)}">${money(r.conservative)}</td><td class="n ${cls(r.change)}">${r.best_case_only ? money(r.change) : "same"}</td><td class="n">${r.skipped}</td><td><span class="pill ${r.both_halves ? "up" : ""}">${r.both_halves ? "yes" : "no"}</span></td></tr>`).join("") + "</table>";
     const vc = (v) => /edge/.test(v) ? (v.startsWith("clear") ? "up" : "") : /leak/.test(v) ? (v.startsWith("clear") ? "down" : "warn") : "";
     const grp = (title, rows, note = "") => `<div class="panel"><h2>${esc(title)}</h2>${note ? `<p class="sub">${esc(note)}</p>` : ""}` + (!rows.length ? empty("Not known yet.")
       : `<table><tr><th></th><th class="n">Trades</th><th class="n">Won</th><th class="n">Per trade</th><th class="n">Net</th><th>Verdict</th></tr>` + rows.map((r) =>
         `<tr><td>${esc(r.group)}</td><td class="n">${r.trades}</td><td class="n">${pct(r.win_rate, 0, false)}</td><td class="n ${cls(r.expectancy)}">${money(r.expectancy)}</td><td class="n ${cls(r.net)}">${money(r.net)}</td><td><span class="pill ${vc(r.verdict)}">${esc(r.verdict)}</span></td></tr>`).join("") + "</table>") + "</div>";
     $("ed-groups").innerHTML = grp("Symbols", [...x.symbol].reverse()) + grp("Sessions (UTC)", x.session) + grp("Direction", x.direction)
       + grp("Trade size vs your usual", x.size) + grp("Trade number in the day", x.nth) + grp("Weekday", x.weekday)
-      + grp("Hold time", x.hold, x.hold_known ? `${x.hold_known} trades with a known open time` : "Only trades seen live by the cTrader feed carry an open time.");
+      + grp("Hold time", x.hold, x.hold_known ? `${x.hold_known} trades with a known open time` : "Not known yet: DONNA now records the open time of every new trade the cTrader feed sees.");
   }
 
   function renderCompliance(c) {
