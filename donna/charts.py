@@ -7,6 +7,8 @@ Shows, from DONNA's own records (no Claude credit needed, nothing is sent anywhe
   - my edge: win rate vs break-even, behaviour after losses, results by symbol / session / size, rule replay
   - markets: daily closes of the report watchlist with 20/50-day averages, moves, volatility and trend,
     with the entry and stop of any open position drawn on its chart
+  - market vs me: what the market did each day next to what SH did, the divergence and what it cost, and
+    one day in detail with the trading rules checked trade by trade
   - compliance: PAD flags and the trading KPIs
 
 Read-only by design: every function here only reads. It never places, changes or closes a trade.
@@ -107,15 +109,9 @@ def open_levels() -> dict[str, list[dict[str, Any]]]:
 
 def _watch_key(symbol: str) -> str | None:
     """cTrader symbol -> watchlist key (XAUUSD, US30, NAS100 ...); None when it isn't on the watchlist."""
-    from jarvis.adapters.market import WATCHLIST
+    from jarvis.adapters.market import watch_key
 
-    s = "".join(ch for ch in symbol.upper() if ch.isalnum())
-    aliases = {"USTEC": "NAS100", "NAS100": "NAS100", "US100": "NAS100", "NDX": "NAS100", "DJ30": "US30",
-               "US30": "US30", "WS30": "US30", "DE40": "GER40", "GER40": "GER40", "DAX40": "GER40",
-               "USOIL": "WTI", "XTIUSD": "WTI", "WTI": "WTI", "BTCUSD": "BTCUSD", "XBTUSD": "BTCUSD"}
-    if s in aliases:
-        return aliases[s]
-    return next((i.key for i in WATCHLIST if s.startswith(i.key)), None)
+    return watch_key(symbol)
 
 
 def risk() -> dict[str, Any]:
@@ -270,3 +266,10 @@ def markets(force: bool = False) -> dict[str, Any]:
 @router.get("/api/charts/markets", dependencies=[Depends(console_api)])
 def charts_markets(refresh: bool = False) -> dict[str, Any]:
     return markets(force=refresh)
+
+
+@router.get("/api/charts/vsmarket", dependencies=[Depends(console_api)])
+def charts_vsmarket(days: int = TRADE_DAYS) -> dict[str, Any]:
+    from jarvis.agents import vsmarket
+
+    return _section(lambda: vsmarket.charts_payload(max(7, min(365, days))))
