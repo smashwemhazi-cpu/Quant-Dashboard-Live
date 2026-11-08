@@ -62,9 +62,9 @@ DUTIES: list[dict[str, Any]] = [
      "promise": "Reads your cTrader account (read-only), watches open risk, stops and the daily-loss limit, "
                 "keeps your trading journal and watches your cBots, and checks your own trades against the PAD "
                 "policy with a monthly self-review record.",
-     "agents": ["personal", "rhythm", "botlab", "trading", "pad"],
+     "agents": ["personal", "rhythm", "botlab", "trading", "pad", "edge", "review"],
      "jobs": ["ctrader_positions", "pad_pack"],
-     "commands": "!risk !journal !pad",
+     "commands": "!risk !journal !pad !edge !discipline",
      "proof": "A position without a stop or a hit daily-loss limit is flagged within 15 minutes."},
     {"key": "growth", "name": "Grow the business",
      "promise": "Finds possible IBs and traders, drafts first messages for your OK, builds country campaigns "
@@ -183,6 +183,8 @@ def duty_state(d: dict[str, Any], states: dict[str, dict[str, Any]]) -> str:
         return "needs a fix"
     if "waiting" in sts:
         return "partly waiting on setup"
+    if all(s == "not_run" for s in sts):
+        return "not started yet"
     return "running"
 
 
@@ -334,6 +336,39 @@ def board() -> list[dict[str, Any]]:
         out.append({"key": d["key"], "name": d["name"], "state": duty_state(d, states), "promise": d["promise"],
                     "agents": d["agents"], "commands": d["commands"], "proof": d["proof"], "jobs": jobs})
     return out
+
+
+# events that are bookkeeping, not work SH would recognise as "done"
+QUIET_EVENTS = {"section_error", "measure_error", "snapshot_error", "job_ok", "alert_delivery"}
+
+
+def recent(days: int = 7, per_duty: int = 6) -> dict[str, dict[str, Any]]:
+    """What each duty's agents actually did lately, from the audit log: how many things, the latest few."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = audit.since(since, limit=50_000)
+    owner = {a: d["key"] for d in DUTIES for a in d["agents"]}
+    owner.update({"scheduler": "", "officer": "", "kpi": "self", "hq": "self"})
+    out: dict[str, dict[str, Any]] = {d["key"]: {"count": 0, "latest": []} for d in DUTIES}
+    for r in reversed(rows):   # newest first
+        duty = owner.get(r["actor"])
+        if not duty or r["event"] in QUIET_EVENTS:
+            continue
+        o = out[duty]
+        o["count"] += 1
+        if len(o["latest"]) < per_duty:
+            o["latest"].append({"when": r["ts"][:16].replace("T", " "), "agent": r["actor"],
+                                "what": r["event"].replace("_", " ")})
+    return out
+
+
+def agents_view() -> dict[str, Any]:
+    """The Agents tab: purpose, limits, and for each duty what it should do, how to tell, its jobs and what it did."""
+    done = recent()
+    duties = board()
+    for d in duties:
+        d["done_7d"] = done.get(d["key"], {}).get("count", 0)
+        d["latest"] = done.get(d["key"], {}).get("latest", [])
+    return {"purpose": PURPOSE, "boundaries": BOUNDARIES, "duties": duties}
 
 
 def run_job(name: str) -> str:

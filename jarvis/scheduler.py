@@ -226,6 +226,12 @@ def job_heartbeat() -> None:
 
     from jarvis.adapters import google_bridge
 
+    try:   # once a day, keep the KPI scores so the dashboard can show streaks and trends
+        from jarvis.agents import kpi
+
+        kpi.daily_snapshot()
+    except Exception as e:  # noqa: BLE001 - the heartbeat itself must never fail because of this
+        audit.log("kpi", "snapshot_error", {"error": str(e)[:200]})
     if not google_bridge.configured():
         return
     rel = Path(__file__).resolve().parents[1] / "RELEASE"

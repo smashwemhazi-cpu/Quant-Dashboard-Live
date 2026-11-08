@@ -9,7 +9,9 @@ Shows, from DONNA's own records (no Claude credit needed, nothing is sent anywhe
     with the entry and stop of any open position drawn on its chart
   - market vs me: what the market did each day next to what SH did, the divergence and what it cost, and
     one day in detail with the trading rules checked trade by trade
-  - compliance: PAD flags and the trading KPIs
+  - PAD & KPIs: every PAD rule and KPI stated plainly with its target, where you are, achieved or not, why it
+    matters and what to do next, ordered by priority, with the trend and streaks and your daily discipline record
+  - agents: what each of DONNA's duties is supposed to do, how you can tell, its jobs and what it did lately
 
 Read-only by design: every function here only reads. It never places, changes or closes a trade.
 Same protection as the console (donna/console.py): pages answer only through the tunnel, the API also needs
@@ -158,9 +160,11 @@ def edge(days: int = TRADE_DAYS) -> dict[str, Any]:
     return e.report(days)
 
 
-# ------------------------------------------------------------------ compliance
+# ------------------------------------------------------------------ PAD & KPIs
 def compliance() -> dict[str, Any]:
-    from jarvis.agents import kpi, pad
+    """Every KPI and PAD rule as a plain statement (target, now, achieved or not, why, next step, trend,
+    streak), ordered by priority, plus the daily discipline record."""
+    from jarvis.agents import kpi, pad, review
 
     def pad_part() -> dict[str, Any]:
         f = pad.flags(30)
@@ -169,17 +173,35 @@ def compliance() -> dict[str, Any]:
             by[x["check_name"]] = by.get(x["check_name"], 0) + 1
         return {"flags_30d": len(f), "by_check": by,
                 "latest": [{"when": x["first_seen_utc"][:16], "symbol": x["symbol"], "check": x["check_name"],
-                            "detail": (x["detail"] or "")[:160]} for x in f[:8]]}
+                            "detail": (x["detail"] or "")[:160]} for x in f[:8]]} | pad.rule_status()
 
     def kpi_part() -> dict[str, Any]:
-        rows = kpi.scorecard()
-        mine = [r for r in rows if r["dept"] == "trading"]
-        return {"counts": kpi.counts(rows),
-                "trading": [{"name": r["name"], "status": r["status"], "value": r["value"], "unit": r["unit"],
-                             "target": r["target"], "note": r["note"]}
-                            for r in sorted(mine, key=lambda r: kpi.ORDER[r["status"]])]}
+        rows = kpi.explained()
+        return {"counts": {s: sum(r["status"] == s for r in rows) for s in kpi.ORDER}, "rows": rows,
+                "depts": [{"key": k, "name": n} for k, n in kpi.DEPTS],
+                "trading": [r for r in rows if r["dept"] == "trading"]}
 
-    return {"pad": _section(pad_part), "kpi": _section(kpi_part)}
+    return {"pad": _section(pad_part), "kpi": _section(kpi_part), "discipline": _section(review.discipline)}
+
+
+# ------------------------------------------------------------------ agents
+@router.get("/api/charts/agents", dependencies=[Depends(console_api)])
+def charts_agents() -> dict[str, Any]:
+    """Each duty: what it is supposed to do, how you can tell, its jobs and their state, what it did in 7 days,
+    and its KPIs in the same Achieved / Not yet / No data words as the PAD & KPIs tab."""
+    from jarvis.agents import hq, kpi
+
+    def build() -> dict[str, Any]:
+        v = hq.agents_view()
+        rows = kpi.explained(keep=False)
+        for d in v["duties"]:
+            mine = [r for r in rows if r["duty"] == d["key"]]
+            d["kpis"] = [{k: r[k] for k in ("name", "status", "word", "value_text", "target_text", "note", "needs")}
+                         for r in mine]
+            d["kpi_counts"] = {s: sum(r["status"] == s for r in mine) for s in kpi.ORDER}
+        return v
+
+    return _section(build)
 
 
 @router.get("/api/charts/data", dependencies=[Depends(console_api)])

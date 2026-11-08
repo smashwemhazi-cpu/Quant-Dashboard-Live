@@ -159,10 +159,10 @@ STARTER: dict[str, tuple[str, str, str, str, float, float, str]] = {
                      settings.max_open_risk_pct, settings.max_open_risk_pct, "%"),
     "tr_loss_days": ("trading", f"Days the {settings.max_daily_loss_pct:g}% daily-loss limit was hit (14 days)",
                      "protect", "max", 0, 0, ""),
-    "tr_drawdown": ("trading", "Worst drawdown as % of starting balance (30 days)", "protect", "max", 10, 15, "%"),
+    "tr_drawdown": ("trading", "Worst fall from the account's best point (30 days)", "protect", "max", 10, 15, "%"),
     "tr_profit_factor": ("trading", "Profit factor, money won / money lost (30 days)", "grow", "min", 1.3, 1.0, ""),
     "tr_revenge": ("trading", "Re-entries within 5 min of a loss (30 days)", "protect", "max", 0, 2, ""),
-    "tr_overtrading": ("trading", "Days with too many trades (30 days)", "protect", "max", 0, 1, ""),
+    "tr_overtrading": ("trading", f"Days with more than {os.getenv('DONNA_PAD_MAX_TRADES_DAY', '10')} trades (30 days)", "protect", "max", 0, 1, ""),
     "book_lots": ("book", "Client lots traded, latest activity export", "grow", "min", 100, 50, "lots"),
     "book_active": ("book", "Client accounts that traded", "grow", "min", 20, 10, ""),
     "book_stopout": ("book", "Accounts near stop-out", "protect", "max", 1, 2, ""),
@@ -369,6 +369,8 @@ def _m_campaigns(now: datetime) -> Any:
     from jarvis.agents import campaigns
 
     with campaigns._db() as c:
+        if not c.execute("SELECT 1 FROM campaigns LIMIT 1").fetchone():
+            return None   # never used yet: that's "not started", not a failure
         return c.execute("SELECT COUNT(*) FROM campaigns WHERE created >= ?",
                          (_iso(now - timedelta(days=30)),)).fetchone()[0]
 
@@ -568,8 +570,9 @@ def _trades(days: int, now: datetime) -> list[dict[str, Any]] | None:
         if not account:
             return None
         since = (now - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        until = now.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")   # so a past window can be measured too
         return [dict(r) for r in c.execute("SELECT * FROM pt_trades WHERE account = ? AND closed_utc >= ? "
-                                           "ORDER BY closed_utc", (account, since))]
+                                           "AND closed_utc < ? ORDER BY closed_utc", (account, since, until))]
 
 
 def _lots_week(now: datetime) -> Any:
@@ -624,8 +627,8 @@ def _m_loss_days(now: datetime) -> Any:
     from jarvis.agents.mind import LOCAL_TZ
 
     with rhythm._db() as c:
-        rows = c.execute("SELECT ts, equity, start_of_day_equity FROM position_snapshots WHERE ts >= ?",
-                         (_iso(now - timedelta(days=14)),)).fetchall()
+        rows = c.execute("SELECT ts, equity, start_of_day_equity FROM position_snapshots WHERE ts >= ? AND ts < ?",
+                         (_iso(now - timedelta(days=14)), _iso(now))).fetchall()
     if not rows:
         return None
     hit = {(_parse(ts) or now).astimezone(LOCAL_TZ).date() for ts, eq, sod in rows
@@ -635,16 +638,24 @@ def _m_loss_days(now: datetime) -> Any:
 
 @measure("tr_drawdown")
 def _m_drawdown(now: datetime) -> Any:
+    """Worst fall from the best point, on your returns: each trade's result as % of the balance it was taken
+    with, chained. Deposits and withdrawals change the balance but not the returns, so they can't fake a
+    drawdown (measuring against the starting balance did: a small start plus a later deposit looked like -83%)."""
     t = _trades(30, now)
     if not t:
         return None if t is None else (0.0, "no trades in 30 days")
-    start = (t[0]["balance"] or 0) - (t[0]["net"] or 0)
-    peak = curve = worst = 0.0
+    index = peak = 1.0
+    worst = 0.0
+    used = 0
     for x in t:
-        curve += x["net"] or 0
-        peak = max(peak, curve)
-        worst = min(worst, curve - peak)
-    return (-worst / start * 100) if start > 0 else None
+        before = (x["balance"] or 0) - (x["net"] or 0)
+        if before <= 0:
+            continue
+        used += 1
+        index *= 1 + (x["net"] or 0) / before
+        peak = max(peak, index)
+        worst = max(worst, (1 - index / peak) * 100)
+    return (worst, "on returns, deposits excluded") if used else None
 
 
 @measure("tr_profit_factor")
@@ -676,7 +687,7 @@ def _m_revenge(now: datetime) -> Any:
 
 @measure("tr_overtrading")
 def _m_overtrading(now: datetime) -> Any:
-    from jarvis.agents import personal
+    from jarvis.agents import pad
 
     t = _trades(30, now)
     if t is None:
@@ -684,7 +695,8 @@ def _m_overtrading(now: datetime) -> Any:
     per: dict[str, int] = {}
     for x in t:
         per[x["closed_utc"][:10]] = per.get(x["closed_utc"][:10], 0) + 1
-    return sum(1 for v in per.values() if v > personal.MAX_TRADES_DAY), f"limit {personal.MAX_TRADES_DAY} a day"
+    # the same limit as PAD policy s.6.2, so the KPI and the policy can't disagree
+    return sum(1 for v in per.values() if v > pad.MAX_TRADES_DAY), f"limit {pad.MAX_TRADES_DAY} a day (PAD s.6.2)"
 
 
 # --- the client book (read-only, from back-office exports)
@@ -731,6 +743,126 @@ def _m_in_out(now: datetime) -> Any:
     return None if a is None else len(a["in_out_no_trading"])
 
 
+# ------------------------------------------------------------------ plain words for every KPI
+# key: (why it matters, what to do when it isn't met, what DONNA needs before she can measure it)
+GUIDE: dict[str, tuple[str, str, str]] = {
+    "leads_qualified_week": ("The pipeline only grows if fresh, usable leads come in every week.",
+                             "Run !leads and review the shortlist; web search widens the sources once its key is in.",
+                             "Lead Finder results (!leads)"),
+    "leads_qualified_rate": ("Shows whether the lead finder looks in the right places, not just how much it finds.",
+                             "Check !leads stats for the source that qualifies worst and tune or drop it.",
+                             "leads found in the last 30 days (!leads)"),
+    "leads_approval_rate": ("If you reject most leads, DONNA is wasting your review time.",
+                            "Reject with a reason so the shortlist gets sharper, or raise the bar with !kpi set.",
+                            "leads you approve or reject (!leads)"),
+    "leads_contact_speed": ("Leads go cold fast; a first message within 3 days gets far more replies.",
+                            "Clear approved leads each day with !leads send and confirm.", "approved leads"),
+    "leads_reply_rate": ("Tells you whether the first message works.",
+                         "Try a different opener for a week (!exp) and compare.", "leads you have contacted"),
+    "leads_wins_month": ("The lead KPI that is money: an IB signed or a trader funded.",
+                         "Follow up every lead that replied within a day; mark wins in !leads.", "Lead Finder results"),
+    "leads_flagged_contacted": ("Contacting a red-flag lead puts the licence at risk.",
+                                "Never confirm a flagged lead; check it first with !kpi lead <n>.", "Lead Finder results"),
+    "mkt_drafts_week": ("Regular, compliant posts keep the brand visible.",
+                        "DONNA drafts posts every weekday morning once Claude has credit (!status shows it).",
+                        "the marketing drafts job, which uses Claude credit"),
+    "mkt_drafts_clean": ("Drafts that fail the compliance review waste time and carry risk.",
+                         "Read the issues on rejected drafts and adjust the brief.", "post drafts"),
+    "mkt_campaigns_month": ("Country campaigns are how new markets get opened.",
+                            "Build one with !campaign <country>.", "your first campaign (!campaign)"),
+    "crm_conversion": ("The share of CRM leads who fund is the clearest growth number.",
+                       "Look in !crm for leads stuck before the first deposit and chase them.", "the CRM export"),
+    "crm_stale_leads": ("Untouched leads are money left on the table.", "Work through the stale list in !crm.",
+                        "the CRM export"),
+    "crm_net_deposits": ("More money coming in than going out means the business is growing.",
+                         "Check !growth for who withdrew and why.", "the back-office activity export"),
+    "co_overdue_cases": ("Overdue cases are the first thing a regulator looks for.",
+                         "Close or re-date them in !cases.", "the case register"),
+    "co_complaints_late": ("A late acknowledgement or answer breaches the complaints rules.",
+                           "Acknowledge or answer them today (!complaints).", "the complaints register"),
+    "co_obligations_overdue": ("A missed regulatory deadline is a reportable failure.",
+                               "Open !oblig and file or re-plan it.", "the obligations calendar"),
+    "co_kyc_pending": ("Clients trading without complete KYC is an AML risk.",
+                       "Chase the documents (!compliance).", "the back-office documents export"),
+    "co_case_hours": ("Slow case handling lets risks build up.", "Work the oldest cases first.",
+                      "cases closed in the last 30 days"),
+    "co_sanctions_open": ("An open sanctions or PEP match must be resolved before business continues.",
+                          "Clear or escalate each match today (!screen).", "the screening register"),
+    "co_data_age": ("Every compliance check is only as fresh as the newest back-office export.",
+                    "Ask back office to email the daily reports; DONNA reads them by herself.",
+                    "any back-office export"),
+    "day_overdue_tasks": ("Overdue tasks are where things slip.", "Do, re-date or drop them in !tasks.",
+                          "your task list"),
+    "day_on_time": ("Shows whether your due dates are realistic.", "Set fewer, real deadlines.",
+                    "tasks with a due date finished in the last 30 days"),
+    "day_messages": ("The morning and evening messages start each day with a plan and close it.",
+                     "If one is missing, !agents shows whether the morning or evening job failed.",
+                     "the morning and evening jobs"),
+    "day_inbox_ok": ("If triage runs every 15 minutes, nothing in the inbox slips.",
+                     "!status shows the email connection.", "the email connection"),
+    "desk_wraps": ("The wrap is the desk's daily record.", "If missing, !agents shows why daily_wrap didn't run.",
+                   "the daily_wrap job"),
+    "desk_rejected_pct": ("Rejected deals mean clients could not trade: a service and best-execution risk.",
+                          "Check !mi for which symbols or LPs reject.", "the back-office activity export"),
+    "self_jobs_ok": ("If DONNA's own jobs fail, every other number goes stale.",
+                     "!agents names the failing job and why.", "scheduled jobs that have run"),
+    "self_audit_ok": ("The tamper-evident log is your evidence of what DONNA did.",
+                      "If it ever breaks, run !audit and tell Claude.", "the audit log"),
+    "self_heartbeat": ("Shows DONNA is alive; if she stops checking in you get an email.",
+                       "Restart the server if this is above an hour.", "the heartbeat (email bridge)"),
+    "self_unconfirmed_sends": ("Proves nothing goes to a lead without your confirm.",
+                               "Must always be 0; if not, tell Claude straight away.", "the lead outbox"),
+    "tr_lots_min": ("Shows you traded enough for the other numbers to mean something.",
+                    "Nothing to do if you are resting on purpose.", "your closed trades (cTrader feed)"),
+    "tr_lots_max": ("Too much volume usually means trading out of boredom or tilt.",
+                    "Keep to the 10-trades-a-day limit.", "your closed trades (cTrader feed)"),
+    "tr_max_loss": ("One big loss wipes out many small wins.",
+                    "Put a hard stop on every trade, sized so it can lose at most 1% of the balance.",
+                    "your closed trades (cTrader feed)"),
+    "tr_stops": ("A position without a stop has no limit on what it can lose.",
+                 "Set the stop when you open the trade, not after.", "live positions (cTrader feed)"),
+    "tr_open_risk": ("Caps what you lose if every open trade hits its stop at once.",
+                     "Close or reduce a position before adding a new one.", "live positions (cTrader feed)"),
+    "tr_loss_days": ("The daily-loss limit stops a bad day turning into a bad month.",
+                     "When the limit is hit, stop trading for the day.", "live equity (cTrader feed)"),
+    "tr_drawdown": ("How far the account fell from its best point; deep falls take much longer to win back.",
+                    "Halve your size until the fall is back under 10%.", "your closed trades (cTrader feed)"),
+    "tr_profit_factor": ("Above 1 you make money; 1.3 leaves room for costs and bad luck.",
+                         "Fix the size of your losses first; this number follows.", "your closed trades (cTrader feed)"),
+    "tr_revenge": ("Your trades opened within 5 minutes of a loss lose money; your other trades make money (My edge).",
+                   "Wait 15 minutes after every losing trade.", "your closed trades (cTrader feed)"),
+    "tr_overtrading": ("Days with too many trades are where most of the damage happens.",
+                       "Stop at 10 trades a day (PAD policy s.6.2).", "your closed trades (cTrader feed)"),
+    "book_lots": ("Client volume drives the firm's revenue.", "Compare with last month in !growth.",
+                  "the back-office activity export"),
+    "book_active": ("Active accounts are the base the business grows from.",
+                    "Reach out to accounts that stopped trading (!growth).", "the back-office activity export"),
+    "book_stopout": ("Accounts near stop-out may need a margin call and careful close-out.",
+                     "Check the margin alerts in !mi.", "the back-office EOD export"),
+    "book_concentration": ("If one client holds most of the equity, the firm depends on them.",
+                           "Watch their exposure and spread growth wider.", "the back-office EOD export"),
+    "book_turnover": ("Very high turnover can mean churning or abuse.", "Review the account (!compliance).",
+                      "the back-office activity export"),
+    "book_in_out": ("Money in and out with no trading is a classic money-laundering red flag.",
+                    "Open a case and review the source of funds.", "the back-office activity export"),
+}
+
+# KPIs measured from a scheduled job's output: while that job waits for its connection, or has never run,
+# the number is a setup gap, not your result, so it shows as NO DATA with the reason instead of a fake red.
+SOURCES: dict[str, tuple[str, ...]] = {
+    "mkt_drafts_week": ("marketing_drafts",), "mkt_drafts_clean": ("marketing_drafts",),
+    "desk_wraps": ("daily_wrap",), "day_messages": ("morning", "evening"), "self_heartbeat": ("heartbeat",),
+    "tr_stops": ("ctrader_positions",), "tr_open_risk": ("ctrader_positions",), "tr_loss_days": ("ctrader_positions",),
+}
+
+# KPIs with a fixed look-back window (days) can be measured for the window before too: "last month vs now"
+WINDOWS = {"tr_lots_min": 7, "tr_lots_max": 7, "tr_max_loss": 30, "tr_drawdown": 30, "tr_profit_factor": 30,
+           "tr_revenge": 30, "tr_overtrading": 30, "tr_loss_days": 14}
+DUTY_OF_DEPT = {"leads": "growth", "marketing": "growth", "growth": "growth", "compliance": "compliance",
+                "admin": "day", "desk": "desk", "book": "desk", "self": "self", "trading": "trading"}
+WORDS = {"GREEN": "Achieved", "AMBER": "Not yet (close)", "RED": "Not yet", "NO DATA": "No data yet"}
+
+
 # ------------------------------------------------------------------ scoring
 def rag(t: dict[str, Any], value: float | None) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
@@ -761,7 +893,30 @@ def _target_text(t: dict[str, Any]) -> str:
     return base + ("" if t["amber"] == t["target"] else f", amber at {_num(t['amber'], t['unit'])}")
 
 
-def score_one(key: str, now: datetime | None = None, tg: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+def _setup_gap(key: str, states: dict[str, dict[str, Any]] | None) -> str | None:
+    """Why a KPI can't be measured yet because the job that feeds it is waiting for setup or has never run."""
+    if key not in SOURCES or states is None:
+        return None
+    for job in SOURCES[key]:
+        st = states.get(job)
+        if st and st["state"] == "waiting":
+            return f"{job} is waiting for setup: {st.get('why') or 'see !status'}"
+        if st and st["state"] == "not_run":
+            return f"{job} has not run yet"
+    return None
+
+
+def _states() -> dict[str, dict[str, Any]] | None:
+    from jarvis.agents import hq
+
+    try:
+        return hq.job_states()
+    except Exception:  # noqa: BLE001 - no scheduler state: score from the records alone
+        return None
+
+
+def score_one(key: str, now: datetime | None = None, tg: dict[str, dict[str, Any]] | None = None,
+              states: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     t = dict((tg or targets())[key])
     note = ""
@@ -773,13 +928,18 @@ def score_one(key: str, now: datetime | None = None, tg: dict[str, dict[str, Any
     if isinstance(v, tuple):
         v, note = v
     t.update(value=v, note=note, status=rag(t, v))
+    gap = _setup_gap(key, states)
+    if gap:   # a setup gap is not a result: never show it as red (or as a fake green)
+        t.update(status="NO DATA", note=gap)
     return t
 
 
 def scorecard(dept: str | None = None, now: datetime | None = None) -> list[dict[str, Any]]:
     now = now or datetime.now(timezone.utc)
     tg = targets()
-    return [score_one(k, now, tg) for k, t in tg.items() if dept is None or t["dept"] == dept]
+    keys = [k for k, t in tg.items() if dept is None or t["dept"] == dept]
+    states = _states() if any(k in SOURCES for k in keys) else None
+    return [score_one(k, now, tg, states) for k in keys]
 
 
 ORDER = {"RED": 0, "AMBER": 1, "NO DATA": 2, "GREEN": 3}
@@ -867,6 +1027,111 @@ def pack_lines(now: datetime | None = None) -> list[str]:
     if missing:
         L.append("No data yet for: " + ", ".join(missing))
     return L
+
+
+# ------------------------------------------------------------------ history, trend and the plain-words view
+def _hdb() -> sqlite3.Connection:
+    c = _db()
+    c.execute("CREATE TABLE IF NOT EXISTS kpi_history (day TEXT, key TEXT, value REAL, status TEXT, "
+              "PRIMARY KEY (day, key))")
+    return c
+
+
+def snapshot(rows: list[dict[str, Any]], now: datetime | None = None) -> None:
+    """Keep today's score of every KPI (the last look of the day wins), so streaks and trends can be shown."""
+    day = _today(now or datetime.now(timezone.utc))
+    with _hdb() as c:
+        c.executemany("INSERT OR REPLACE INTO kpi_history VALUES (?,?,?,?)",
+                      [(day, r["key"], r["value"] if isinstance(r["value"], (int, float)) else None, r["status"])
+                       for r in rows])
+
+
+def daily_snapshot(now: datetime | None = None) -> bool:
+    """Called by the heartbeat: score everything once a day even when nobody looks. True when it ran."""
+    now = now or datetime.now(timezone.utc)
+    with _hdb() as c:
+        if c.execute("SELECT 1 FROM kpi_history WHERE day = ? LIMIT 1", (_today(now),)).fetchone():
+            return False
+    snapshot(scorecard(None, now), now)
+    return True
+
+
+def history(days: int = 60) -> dict[str, list[tuple[str, float | None, str]]]:
+    with _hdb() as c:
+        rows = c.execute("SELECT day, key, value, status FROM kpi_history WHERE day >= ? ORDER BY day",
+                         ((datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat(),)).fetchall()
+    out: dict[str, list[tuple[str, float | None, str]]] = {}
+    for day, key, value, status in rows:
+        out.setdefault(key, []).append((day, value, status))
+    return out
+
+
+def streak(hist: list[tuple[str, float | None, str]]) -> dict[str, Any] | None:
+    """How many days in a row the KPI has had its latest status (gaps of a missing day end the run)."""
+    if not hist:
+        return None
+    last_day, _, status = hist[-1]
+    n, prev = 0, None
+    for day, _, st in reversed(hist):
+        d = datetime.fromisoformat(day).date()
+        if st != status or (prev is not None and (prev - d).days > 1):
+            break
+        n, prev = n + 1, d
+    return {"status": status, "days": n, "since": prev.isoformat() if prev else last_day}
+
+
+def previous(key: str, now: datetime | None = None) -> float | None:
+    """The same KPI for the window just before this one (last month for a 30-day KPI), when it can be measured."""
+    if key not in WINDOWS:
+        return None
+    now = now or datetime.now(timezone.utc)
+    try:
+        v = MEASURES[key](now - timedelta(days=WINDOWS[key]))
+    except Exception:  # noqa: BLE001 - a trend is a nice-to-have
+        return None
+    v = v[0] if isinstance(v, tuple) else v
+    return v if isinstance(v, (int, float)) else None
+
+
+def _gap(r: dict[str, Any]) -> float:
+    """How far from target, relative to the target's size: used to put the worst misses first."""
+    v, t = r["value"], r["target"]
+    if not isinstance(v, (int, float)):
+        return 0.0
+    miss = (v - t) if r["dir"] == "max" else (t - v)
+    return max(0.0, miss) / max(abs(t), abs(r["amber"] - t), 1.0)
+
+
+def explained(now: datetime | None = None, keep: bool = True) -> list[dict[str, Any]]:
+    """Every KPI as a plain statement: target, now, achieved or not, why it matters, what to do next, the trend
+    against the window before and the streak. Ordered by priority: protect before grow, worst miss first."""
+    now = now or datetime.now(timezone.utc)
+    rows = scorecard(None, now)
+    if keep:
+        snapshot(rows, now)
+    hist = history()
+    names = dict(DEPTS)
+    out = []
+    for r in rows:
+        why, todo, needs = GUIDE.get(r["key"], ("", "", ""))
+        prev = previous(r["key"], now)
+        trend = None
+        if isinstance(r["value"], (int, float)) and prev is not None and prev != r["value"]:
+            better = (r["value"] > prev) == (r["dir"] == "min")
+            trend = {"before": prev, "days": WINDOWS[r["key"]], "better": better}
+        h = hist.get(r["key"], [])
+        week = next((v for d, v, _ in h if d >= (now - timedelta(days=7)).date().isoformat()), None) if h else None
+        out.append({"key": r["key"], "dept": r["dept"], "dept_name": names[r["dept"]], "duty": DUTY_OF_DEPT[r["dept"]],
+                    "name": r["name"], "goal": r["goal"], "status": r["status"], "word": WORDS[r["status"]],
+                    "value": r["value"], "value_text": "-" if r["value"] is None else _num(r["value"], r["unit"]),
+                    "target_text": _target_text(r), "unit": r["unit"], "note": r["note"],
+                    "why": why, "next": todo if r["status"] != "GREEN" else "Keep doing what you're doing.",
+                    "needs": needs if r["status"] == "NO DATA" else "", "trend": trend,
+                    "week_ago": week if isinstance(week, (int, float)) and len(h) > 1 else None,
+                    "streak": streak(h), "gap": round(_gap(r), 3)})
+    goal_rank = {"protect": 0, "grow": 1}
+    out.sort(key=lambda r: (ORDER[r["status"]], goal_rank[r["goal"]], -r["gap"]))
+    return out
 
 
 def command(cmd: str, rest: str) -> str | None:

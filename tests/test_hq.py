@@ -85,7 +85,7 @@ def test_desktop_console_shows_the_agents_and_answers_the_mandate(tmp_path, monk
     monkeypatch.setenv("JARVIS_STATE_DB", str(tmp_path / "s.db"))
     s = console.state()
     assert [a["name"] for a in s["agents"]] == [d["name"] for d in hq.DUTIES]
-    assert {a["state"] for a in s["agents"]} <= {"running", "partly waiting on setup", "needs a fix", "on demand"}
+    assert {a["state"] for a in s["agents"]} <= {"running", "partly waiting on setup", "needs a fix", "on demand", "not started yet"}
     assert console.intent("what can you do?") == "!mandate" and console.intent("how are the agents") == "!hq"
     assert console.reply("what can you do for me") == hq.mandate_text()
     page = console.PAGE.read_text()
