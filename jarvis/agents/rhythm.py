@@ -262,6 +262,12 @@ def trading_day_lines() -> list[str]:
         L.append(f" !! {len(j['big_losses'])} oversized loss(es) this week - stop discipline first")
     if j["overtrading_days"]:
         L.append(f" !! Overtrading on {', '.join(x['day'] for x in j['overtrading_days'])}")
+    try:   # market prices can be slow or missing: never let them hold up the evening message
+        from jarvis.agents import vsmarket
+
+        L += vsmarket.evening_lines()
+    except Exception as e:  # noqa: BLE001
+        audit.log("rhythm", "vsmarket_error", {"error": str(e)[:200]})
     return L
 
 

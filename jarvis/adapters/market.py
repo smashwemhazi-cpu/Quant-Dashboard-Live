@@ -45,6 +45,33 @@ WATCHLIST: list[Instrument] = [
 ]
 
 
+_ALIASES = {"USTEC": "NAS100", "NAS100": "NAS100", "US100": "NAS100", "NDX": "NAS100", "DJ30": "US30",
+            "US30": "US30", "WS30": "US30", "DE40": "GER40", "GER40": "GER40", "DAX40": "GER40",
+            "USOIL": "WTI", "XTIUSD": "WTI", "WTI": "WTI", "BTCUSD": "BTCUSD", "XBTUSD": "BTCUSD"}
+
+
+def watch_key(symbol: str) -> str | None:
+    """cTrader symbol (XAUUSD.mp, USTEC, DE40 ...) -> watchlist key; None when it isn't on the watchlist."""
+    s = "".join(ch for ch in symbol.upper().split(".")[0] if ch.isalnum())
+    if s in _ALIASES:
+        return _ALIASES[s]
+    return next((i.key for i in WATCHLIST if s.startswith(i.key)), None)
+
+
+def instrument_for(symbol: str) -> Instrument | None:
+    """The instrument to price a traded symbol with: the watchlist one, else any 6-letter FX pair via Yahoo."""
+    key = watch_key(symbol)
+    if key:
+        return next(i for i in WATCHLIST if i.key == key)
+    s = "".join(ch for ch in symbol.upper().split(".")[0] if ch.isalpha())
+    if len(s) == 6 and s[:3] in _FX and s[3:] in _FX:
+        return Instrument(s, f"{s[:3]}/{s[3:]}", f"OANDA:{s}", f"{s}=X", "fx", "", 3 if "JPY" in s else 5)
+    return None
+
+
+_FX = {"EUR", "USD", "GBP", "JPY", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK", "ZAR", "MXN", "SGD", "HKD", "PLN", "TRY"}
+
+
 def _from_export(inst: Instrument) -> pd.DataFrame:
     p = TV_EXPORT_DIR / f"{inst.key}.csv"
     if not p.exists():

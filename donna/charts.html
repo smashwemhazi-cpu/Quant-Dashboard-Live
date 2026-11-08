@@ -60,6 +60,11 @@
   .banner { background: rgba(255, 107, 125, .1); border: 1px solid rgba(255, 107, 125, .45); border-radius: 10px; padding: 8px 12px;
     margin-bottom: 12px; font-size: 13.5px; }
   .banner.amber { background: rgba(245, 185, 66, .1); border-color: rgba(245, 185, 66, .45); }
+  #vs-table, #vs-weeks, #vs-detail, #vs-groups .panel { overflow-x: auto; }
+  select { background: #0b1426; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 13px; }
+  .al-with { color: var(--ok); } .al-against { color: var(--bad); } .al-two-way { color: var(--s3); } .al-flat { color: var(--muted); }
+  td.why { min-width: 320px; font-size: 12.5px; color: var(--muted); }
+  .bl p { margin: 4px 0; }
   @media (max-width: 520px) { .grid2, .markets { grid-template-columns: 1fr; } body { padding: 12px; } }
 </style>
 </head>
@@ -75,6 +80,7 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
   <button role="tab" data-tab="account" aria-selected="true">My account</button>
   <button role="tab" data-tab="trades" aria-selected="false">Closed trades</button>
   <button role="tab" data-tab="edge" aria-selected="false">My edge</button>
+  <button role="tab" data-tab="vs" aria-selected="false">Market vs me</button>
   <button role="tab" data-tab="markets" aria-selected="false">Markets</button>
   <button role="tab" data-tab="compliance" aria-selected="false">PAD &amp; KPIs</button>
 </nav>
@@ -107,6 +113,24 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
     <div class="panel"><h2>Rule replay: same trades, rule followed</h2><p class="sub">Skip rules assume you just don't take those trades. For the hard stop, "at best" assumes perfect fills and no winner ever touched the stop; "careful" also assumes one typical winner is stopped out for every big loss cut. "Both halves" = it helped in the first and the second half of the period.</p><div id="ed-replay"></div></div>
   </div>
   <div class="grid2" id="ed-groups"></div>
+</section>
+
+<section id="tab-vs" hidden>
+  <p class="note">What the market did each day next to what you did: were you buying or selling, was that with the market or against it, and what the gap cost. Same in Discord: <b>!vsmarket</b> for the period, <b>!day</b> for one day.</p>
+  <div id="vs-bottom"><div class="empty">Loading prices and trades…</div></div>
+  <div class="tiles" id="vs-tiles"></div>
+  <div class="panel" style="margin-bottom:14px"><h2 id="vs-price-h">Price and your side each day</h2>
+    <p class="sub">The line is the market's daily close. Each mark is a day you traded it: ▲ you were mostly buying, ▼ mostly selling, ● both ways. Green = that day made money, red = it lost. A ▲ on a falling stretch is buying against the market.</p>
+    <div class="chart" id="vs-price"></div></div>
+  <div class="grid2">
+    <div class="panel"><h2>Your net each day</h2><p class="sub">Bar colour says how you traded against what the market did that day.</p><div class="chart" id="vs-days"></div>
+      <div class="legend"><span><i style="background:var(--ok)"></i>With the market</span><span><i style="background:var(--bad)"></i>Against the market</span><span><i style="background:var(--s3)"></i>Two-way, no clear side</span><span><i style="background:var(--muted)"></i>Flat day</span></div></div>
+    <div class="panel"><h2>Day in detail</h2><p class="sub"><label>Day <select id="vs-pick"></select></label> · what happened and your rules checked trade by trade</p><div id="vs-detail"></div></div>
+  </div>
+  <div class="grid2" id="vs-groups"></div>
+  <div class="panel" style="margin-bottom:14px"><h2>Day by day</h2><p class="sub">Latest first. "Lean" is your size-weighted side: +1 all buys, -1 all sells.</p><div id="vs-table"></div></div>
+  <div class="panel"><h2>Week by week</h2><div id="vs-weeks"></div></div>
+  <p class="note" id="vs-caveat" style="margin-top:12px"></p>
 </section>
 
 <section id="tab-markets" hidden>
@@ -155,7 +179,7 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
   const width = (el) => Math.max(300, Math.round(el.clientWidth || 640));
 
   // A line chart in plain SVG: series [{values, color, width, dash}], hlines [{y, color, label}], hover tooltip.
-  function lineChart(el, { x, series, hlines = [], fmt = short, h = 230, area = false, tip }) {
+  function lineChart(el, { x, series, hlines = [], fmt = short, h = 230, area = false, tip, marks = [] }) {
     const W = width(el), H = h, L = 52, R = 12, T = 10, B = 24;
     const vals = series.flatMap((s) => s.values).concat(hlines.map((l) => l.y)).filter(fin);
     if (!x.length || !vals.length) { el.innerHTML = empty("No data yet"); return; }
@@ -178,6 +202,11 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
       }
       g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2}" ${s.dash ? `stroke-dasharray="${s.dash}"` : ""} stroke-linejoin="round"/>`;
     });
+    for (const m of marks) { const v = series[0].values[m.i]; if (!fin(v)) continue;   // ▲ / ▼ / ● on the first series
+      const cx = X(m.i), r = m.r || 5, cy = Y(v) + (m.shape === "up" ? r + 5 : m.shape === "down" ? -(r + 5) : 0);
+      g += m.shape === "up" ? `<path d="M${cx} ${cy - r} L${cx + r} ${cy + r * .8} L${cx - r} ${cy + r * .8} Z" fill="${m.color}" stroke="${css("--bg")}" stroke-width=".8"/>`
+        : m.shape === "down" ? `<path d="M${cx} ${cy + r} L${cx + r} ${cy - r * .8} L${cx - r} ${cy - r * .8} Z" fill="${m.color}" stroke="${css("--bg")}" stroke-width=".8"/>`
+        : `<circle cx="${cx}" cy="${cy}" r="${r * .75}" fill="${m.color}" stroke="${css("--bg")}" stroke-width=".8"/>`; }
     g += `<line class="cross" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="${css("--muted")}" stroke-width="1" visibility="hidden"/>`;
     el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img">${g}</svg><div class="tip"></div>`;
     const svg = el.querySelector("svg"), tipEl = el.querySelector(".tip"), cross = el.querySelector(".cross");
@@ -192,7 +221,7 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
   }
 
   // Vertical bars around zero (green up, red down).
-  function barChart(el, { labels, values, fmt = short, h = 230, tip }) {
+  function barChart(el, { labels, values, fmt = short, h = 230, tip, colors }) {
     const W = width(el), H = h, L = 52, R = 12, T = 10, B = 24;
     if (!values.length) { el.innerHTML = empty("No data yet"); return; }
     let lo = Math.min(0, ...values), hi = Math.max(0, ...values); if (lo === hi) hi = 1;
@@ -201,7 +230,7 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
     let g = "";
     for (const v of ticks(lo, hi)) g += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="${css("--grid")}"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${esc(fmt(v))}</text>`;
     values.forEach((v, i) => { const y0 = Y(Math.max(0, v)), y1 = Y(Math.min(0, v));
-      g += `<rect data-i="${i}" x="${L + i * bw + bw * 0.15}" y="${y0}" width="${Math.max(1, bw * 0.7)}" height="${Math.max(1, y1 - y0)}" rx="2" fill="${v >= 0 ? css("--ok") : css("--bad")}"/>`; });
+      g += `<rect data-i="${i}" x="${L + i * bw + bw * 0.15}" y="${y0}" width="${Math.max(1, bw * 0.7)}" height="${Math.max(1, y1 - y0)}" rx="2" fill="${colors ? colors[i] : v >= 0 ? css("--ok") : css("--bad")}"/>`; });
     const xi = n < 3 ? [0, n - 1] : [0, Math.floor((n - 1) / 2), n - 1];
     xi.forEach((i, k) => { g += `<text x="${L + i * bw + bw / 2}" y="${H - 6}" text-anchor="${k === 0 ? "start" : k === xi.length - 1 ? "end" : "middle"}">${esc(day(labels[i]))}</text>`; });
     el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img">${g}</svg><div class="tip"></div>`;
@@ -315,6 +344,63 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
       + grp("Hold time", x.hold, x.hold_known ? `${x.hold_known} trades with a known open time` : "Not known yet: DONNA now records the open time of every new trade the cTrader feed sees.");
   }
 
+  function renderVs(x) {
+    const ids = ["vs-bottom", "vs-tiles", "vs-price", "vs-days", "vs-detail", "vs-groups", "vs-table", "vs-weeks", "vs-caveat"];
+    if (!x || x.error) { ids.forEach((id) => { $(id).innerHTML = ""; }); $("vs-bottom").innerHTML = empty((x && x.error) || "No data"); $("vs-pick").innerHTML = ""; return; }
+    const bl = x.bottom_line, m = x.main, al = Object.fromEntries(x.by_alignment.map((a) => [a.key, a]));
+    const alc = { with: css("--ok"), against: css("--bad"), "two-way": css("--s3"), flat: css("--muted") };
+    $("vs-bottom").innerHTML = `<div class="panel bl" style="margin-bottom:14px"><h2>Bottom line</h2>`
+      + `<p><b>The market:</b> ${esc(bl.market)}.</p><p><b>You:</b> ${esc(bl.me)}.</p>`
+      + `<p><b class="down">How it hit you:</b> ${esc(bl.effect)}.</p><p><b class="up">Try this:</b> ${esc(bl.todo)}.</p></div>`;
+    const tr = Object.fromEntries(x.trend.map((g) => [g.group, g]));
+    const ad = (a) => a ? `${a.days} day${a.days === 1 ? "" : "s"} · ${money(a.per_day)} a day` : "none";
+    $("vs-tiles").innerHTML = [
+      tile(`${m.name}, the period`, pct(m.chg_pct, 1), `${m.up_days} up · ${m.down_days} down · trend now ${esc(m.trend_now)}`, cls(m.chg_pct)),
+      tile("Your buys", pct(m.buy_share, 0, false), `of ${m.trades} ${esc(m.symbol)} trades`, fin(m.chg_pct) && ((m.chg_pct < 0 && m.buy_share > 55) || (m.chg_pct > 0 && m.buy_share < 45)) ? "warn" : ""),
+      tile("Days with the market", al.with ? money(al.with.net) : "–", ad(al.with), al.with ? cls(al.with.net) : ""),
+      tile("Days against the market", al.against ? money(al.against.net) : "–", ad(al.against), al.against ? cls(al.against.net) : ""),
+      tile("Against the trend going in", tr["against the trend"] ? money(tr["against the trend"].net) : "–",
+        tr["against the trend"] ? `${tr["against the trend"].trades} trades · ${money(tr["against the trend"].expectancy)} each` : "", tr["against the trend"] ? cls(tr["against the trend"].net) : ""),
+    ].join("");
+    // price line with a mark per traded day of the main symbol
+    $("vs-price-h").textContent = `${m.name}: price and your side each day`;
+    const at = Object.fromEntries(m.t.map((d, i) => [d, i])), mine = x.rows.filter((r) => r.symbol === m.symbol), byDay = Object.fromEntries(mine.map((r) => [r.date, r]));
+    const rmax = Math.max(1, ...mine.map((r) => r.trades));
+    lineChart($("vs-price"), { x: m.t, h: 260, series: [{ values: m.close, color: css("--s1"), width: 1.6 }], fmt: (v) => short(v),
+      marks: mine.filter((r) => r.date in at).map((r) => ({ i: at[r.date], shape: r.stance === "buyer" ? "up" : r.stance === "seller" ? "down" : "dot",
+        color: r.net >= 0 ? css("--ok") : css("--bad"), r: 3.5 + 4 * Math.sqrt(r.trades / rmax) })),
+      tip: (i) => { const r = byDay[m.t[i]]; return `${esc(day(m.t[i]))}: <b>${num(m.close[i], 2)}</b>` + (r ? `<br>${pct(r.chg_pct, 1)} · you ${r.buy_share}% buys, ${r.trades} trades<br><b class="${cls(r.net)}">${esc(money(r.net))}</b> · <span class="al-${r.alignment}">${esc(r.alignment_text)}</span>` : ""); } });
+    barChart($("vs-days"), { labels: x.rows.map((r) => r.date), values: x.rows.map((r) => r.net), fmt: usd, colors: x.rows.map((r) => alc[r.alignment]),
+      tip: (i) => { const r = x.rows[i]; return `${esc(day(r.date))} ${esc(r.symbol)}: <b>${esc(money(r.net))}</b><br>market ${pct(r.chg_pct, 1)} · you ${r.buy_share}% buys<br><span class="al-${r.alignment}">${esc(r.alignment_text)}</span>`; } });
+    // day picker
+    const days = Object.keys(x.detail || {}).sort().reverse(), pick = $("vs-pick"), keep = pick.value;
+    pick.innerHTML = days.map((d) => `<option value="${esc(d)}">${esc(day(d))} (${x.detail[d].trades} trades, ${esc(money(x.detail[d].net))})</option>`).join("");
+    if (days.includes(keep)) pick.value = keep;
+    const showDay = () => { const d = x.detail[pick.value]; if (!d) { $("vs-detail").innerHTML = empty("No day picked"); return; }
+      $("vs-detail").innerHTML = `<p style="margin:2px 0 8px"><b>${d.trades} trades</b>, net <b class="${cls(d.net)}">${esc(money(d.net))}</b>, won ${pct(d.win_rate, 0, false)}, largest loss ${esc(money(d.largest_loss))}</p>`
+        + d.symbols.map((r) => `<p style="margin:4px 0"><b>${esc(r.symbol)}</b> <span class="pill al-${r.alignment}">${esc(r.alignment_text)}</span><br><span style="font-size:13.5px">${esc(r.explanation)}</span></p>`).join("")
+        + `<table style="margin-top:8px"><tr><th>Your rule</th><th>Kept?</th><th>What happened</th></tr>` + d.rules.map((r) =>
+          `<tr><td>${esc(r.rule)}</td><td><span class="pill ${r.kept ? "up" : "down"}">${r.kept ? "kept" : "broken"}</span></td><td>${esc(r.text)}</td></tr>`).join("") + `</table>`
+        + `<p class="sub" style="margin-top:6px">${d.rules_kept} of ${d.rules_total} rules kept. Same in Discord: !day ${esc(d.date)}</p>`; };
+    pick.onchange = showDay; showDay();
+    const vc = (v) => /edge/.test(v) ? (v.startsWith("clear") ? "up" : "") : /leak/.test(v) ? (v.startsWith("clear") ? "down" : "warn") : "";
+    const grp = (title, note, rows) => `<div class="panel"><h2>${esc(title)}</h2><p class="sub">${esc(note)}</p>` + (!rows.length ? empty("Not enough data yet.")
+      : `<table><tr><th></th><th class="n">Trades</th><th class="n">Won</th><th class="n">Per trade</th><th class="n">Net</th><th>Verdict</th></tr>` + rows.map((r) =>
+        `<tr><td>${esc(r.group)}</td><td class="n">${r.trades}</td><td class="n">${pct(r.win_rate, 0, false)}</td><td class="n ${cls(r.expectancy)}">${money(r.expectancy)}</td><td class="n ${cls(r.net)}">${money(r.net)}</td><td><span class="pill ${vc(r.verdict)}">${esc(r.verdict)}</span></td></tr>`).join("") + "</table>") + "</div>";
+    $("vs-groups").innerHTML = grp("Your side vs the trend going in", `Known before you trade (yesterday's close vs its 20/50-day averages). Needs ${x.min_group}+ trades to call it.`, x.trend_side)
+      + grp("With or against the day's move", "Hindsight: tells you whether you read the day, not a signal.", x.day_move)
+      + grp("Calm, normal and wild days", "The day's range against its usual range (under 0.7x calm, over 1.5x wild).", x.mood);
+    const rows = [...x.rows].reverse();
+    $("vs-table").innerHTML = `<table><tr><th>Day</th><th>Symbol</th><th class="n">Market</th><th>Range</th><th>Trend in</th><th class="n">Trades</th><th class="n">Buys</th><th class="n">Lean</th><th class="n">Net</th><th></th><th>What happened</th></tr>`
+      + rows.map((r) => `<tr><td>${esc(day(r.date))}</td><td>${esc(r.symbol)}</td><td class="n ${cls(r.chg_pct)}">${pct(r.chg_pct, 1)}</td><td>${esc(r.mood)}</td><td>${esc(r.trend_in)}</td>`
+        + `<td class="n">${r.trades}</td><td class="n">${r.buy_share}%</td><td class="n">${r.lean > 0 ? "+" : ""}${num(r.lean, 2)}</td><td class="n ${cls(r.net)}">${money(r.net)}</td>`
+        + `<td><span class="pill al-${r.alignment}">${esc(r.alignment_text)}</span></td><td class="why">${esc(r.explanation)}</td></tr>`).join("") + "</table>";
+    $("vs-weeks").innerHTML = !x.weekly.length ? empty("Not enough weeks yet.") : `<table><tr><th>Week of</th><th class="n">${esc(m.name)}</th><th class="n">Trades</th><th class="n">Your buys</th><th class="n">Net</th><th></th></tr>`
+      + [...x.weekly].reverse().map((w) => `<tr><td>${esc(day(w.week))}</td><td class="n ${cls(w.chg_pct)}">${pct(w.chg_pct, 1)}</td><td class="n">${w.trades}</td><td class="n">${w.buy_share}%</td><td class="n ${cls(w.net)}">${money(w.net)}</td><td><span class="pill al-${w.alignment}">${esc(w.alignment_text)}</span></td></tr>`).join("") + "</table>";
+    const miss = Object.entries(x.missing || {});
+    $("vs-caveat").textContent = bl.caveat + "." + (miss.length ? " Not compared (no market prices): " + miss.map(([k, v]) => `${k} (${v} trades)`).join(", ") + "." : "");
+  }
+
   function renderCompliance(c) {
     const pad = c.pad || {}, kpi = c.kpi || {}, k = kpi.counts || {};
     $("co-tiles").innerHTML = [
@@ -369,11 +455,11 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
   }
 
   // ------------------------------------------------------------ loading
-  let marketsLoaded = false, lastData = null, lastMarkets = null;
+  let marketsLoaded = false, lastData = null, lastMarkets = null, vsLoaded = false, lastVs = null;
   function renderData() { const d = lastData; if (!d) return;
     renderBanners(d.risk || {}); renderAccount(d.account || {}, d.risk || {}); renderTrades(d.trades || {}); renderEdge(d.edge); renderCompliance(d.compliance || {}); }
   let resizeTimer = 0;   // charts are drawn at their real width: redraw when the window or the tab changes
-  const redraw = () => { renderData(); if (lastMarkets) renderMarkets(lastMarkets); };
+  const redraw = () => { renderData(); if (lastMarkets) renderMarkets(lastMarkets); if (lastVs) renderVs(lastVs); };
   window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(redraw, 200); });
   async function load() {
     try {
@@ -385,13 +471,17 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
     try { lastMarkets = await api("/api/charts/markets" + (refresh ? "?refresh=true" : "")); renderMarkets(lastMarkets); marketsLoaded = true; }
     catch (e) { $("mk-cards").innerHTML = empty("Could not load market data (" + e.message + ")"); }
   }
+  async function loadVs() {
+    try { lastVs = await api("/api/charts/vsmarket"); vsLoaded = true; renderVs(lastVs); }
+    catch (e) { $("vs-bottom").innerHTML = empty("Could not load market vs me (" + e.message + ")"); }
+  }
   document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll("nav button").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
     document.querySelectorAll("section").forEach((s) => { s.hidden = s.id !== "tab-" + b.dataset.tab; });
-    if (b.dataset.tab === "markets" && !marketsLoaded) loadMarkets(); else redraw();
+    if (b.dataset.tab === "markets" && !marketsLoaded) loadMarkets(); else if (b.dataset.tab === "vs" && !vsLoaded) loadVs(); else redraw();
     try { localStorage.setItem("donna-charts-tab", b.dataset.tab); } catch (e) { /* private window */ }
   }));
-  $("reload").addEventListener("click", () => { load(); if (marketsLoaded) loadMarkets(true); });
+  $("reload").addEventListener("click", () => { load(); if (marketsLoaded) loadMarkets(true); if (vsLoaded) loadVs(); });
   let saved = null; try { saved = localStorage.getItem("donna-charts-tab"); } catch (e) { /* private window */ }
   const start = saved && document.querySelector(`nav button[data-tab="${saved}"]`); if (start) start.click();
   load(); setInterval(load, 5 * 60 * 1000);
