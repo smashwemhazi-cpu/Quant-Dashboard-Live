@@ -51,7 +51,7 @@
   .stats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 2px 0 4px; }
   .up { color: var(--ok); } .down { color: var(--bad); } .warn { color: var(--warn); }
   .pill { display: inline-block; white-space: nowrap; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
-  #pos-table, #kpi-table, #pad-table, #ed-beh, #ed-replay, #ed-groups .panel { overflow-x: auto; }   /* a wide table scrolls inside its panel on a phone */
+  #pos-table, #kpi-all, #pad-table, #ed-beh, #ed-replay, #ed-groups .panel, .duty .jobs { overflow-x: auto; }   /* a wide table scrolls inside its panel on a phone */
   table { width: 100%; border-collapse: collapse; font-size: 13.5px; font-variant-numeric: tabular-nums; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
@@ -65,6 +65,37 @@
   .al-with { color: var(--ok); } .al-against { color: var(--bad); } .al-two-way { color: var(--s3); } .al-flat { color: var(--muted); }
   td.why { min-width: 320px; font-size: 12.5px; color: var(--muted); }
   .bl p { margin: 4px 0; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(330px, 100%), 1fr)); gap: 12px; }
+  .kcard { border: 1px solid var(--line); border-left: 4px solid var(--muted); border-radius: 12px; padding: 10px 14px; background: rgba(6, 11, 22, .35); }
+  .kcard.RED { border-left-color: var(--bad); } .kcard.AMBER { border-left-color: var(--warn); } .kcard.GREEN { border-left-color: var(--ok); }
+  .kcard h3 { margin: 0 0 4px; font-size: 14.5px; font-weight: 600; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .kcard .nums { font-variant-numeric: tabular-nums; font-size: 13.5px; margin: 2px 0 6px; }
+  .kcard p { margin: 3px 0; font-size: 13px; }
+  .kcard .lbl { color: var(--muted); }
+  .st-GREEN { color: var(--ok); } .st-AMBER { color: var(--warn); } .st-RED { color: var(--bad); } .st-NODATA { color: var(--muted); }
+  .rule { display: grid; grid-template-columns: 112px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+  .rule:last-child { border-bottom: 0; }
+  .rule .why { color: var(--muted); font-size: 12.5px; }
+  .callout { border: 1px solid rgba(245, 185, 66, .45); background: rgba(245, 185, 66, .08); border-radius: 10px; padding: 8px 12px; font-size: 13px; margin-top: 10px; }
+  .callout.info { border-color: var(--line); background: rgba(120, 170, 255, .06); }
+  .cal { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+  .cal span { width: 22px; height: 22px; border-radius: 5px; background: rgba(255, 107, 125, .75); position: relative; cursor: default; }
+  .cal span.ok { background: rgba(56, 217, 150, .85); }
+  .cal span:hover::after { content: attr(data-tip); position: absolute; left: 50%; bottom: 120%; transform: translateX(-50%); white-space: pre;
+    background: #0b1426; border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font-size: 12px; z-index: 3; color: var(--text); }
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
+  .filters button[aria-pressed="true"] { background: rgba(45, 226, 196, .28); color: var(--text); }
+  details.dept { border-top: 1px solid var(--line); padding: 6px 0; }
+  details.dept summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 4px 0; }
+  details.dept summary .s { font-weight: 400; color: var(--muted); font-size: 12.5px; margin-left: 8px; }
+  td .small { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .duties { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); gap: 14px; }
+  .duty h3 { margin: 0; font-size: 16px; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .duty .lbl { color: var(--muted); font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase; margin: 10px 0 2px; }
+  .duty p { margin: 2px 0; font-size: 13.5px; }
+  .duty ul { margin: 2px 0; padding-left: 18px; font-size: 13px; }
+  .daylist .row { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+  .daylist .row b { font-variant-numeric: tabular-nums; }
   @media (max-width: 520px) { .grid2, .markets { grid-template-columns: 1fr; } body { padding: 12px; } }
 </style>
 </head>
@@ -83,6 +114,7 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
   <button role="tab" data-tab="vs" aria-selected="false">Market vs me</button>
   <button role="tab" data-tab="markets" aria-selected="false">Markets</button>
   <button role="tab" data-tab="compliance" aria-selected="false">PAD &amp; KPIs</button>
+  <button role="tab" data-tab="agents" aria-selected="false">Agents</button>
 </nav>
 
 <section id="tab-account">
@@ -139,11 +171,24 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
 </section>
 
 <section id="tab-compliance" hidden>
+  <p class="note">Every PAD rule and KPI says what it is, the target, where you are now, and <b class="up">Achieved</b>, <b class="warn">Not yet (close)</b>, <b class="down">Not yet</b> or
+  <b>No data yet</b> (DONNA can't measure it yet: it says what she needs). Worst first: rules that protect you and the firm come before growth targets.
+  Change a target in Discord: <b>!kpi set &lt;name&gt; &lt;target&gt;</b>.</p>
+  <div class="panel" style="margin-bottom:14px"><h2>Where you stand</h2><div id="co-summary"></div></div>
   <div class="tiles" id="co-tiles"></div>
+  <div class="panel" style="margin-bottom:14px"><h2>Fix these first</h2><p class="sub">The KPIs furthest from target, protect before grow. Each says why it matters and the one next step.</p><div class="cards" id="co-fix"></div></div>
   <div class="grid2">
-    <div class="panel"><h2>Your trading KPIs</h2><div id="kpi-table"></div></div>
-    <div class="panel"><h2>PAD flags, last 30 days</h2><div class="chart" id="pad-chart"></div><div id="pad-table"></div></div>
+    <div class="panel"><h2>PAD rules: your own trades (Policy v0.2)</h2><p class="sub" id="pad-sub"></p><div id="pad-rules"></div><div id="pad-practice"></div><div id="pad-table"></div></div>
+    <div class="panel"><h2>Your daily discipline</h2><p class="sub" id="dis-sub"></p><div id="dis-body"></div></div>
   </div>
+  <div class="panel"><h2>Every KPI, by department</h2>
+    <div class="filters" id="kpi-filter"><button data-f="all" aria-pressed="true">All</button><button data-f="not" aria-pressed="false">Not yet</button><button data-f="nodata" aria-pressed="false">No data yet</button><button data-f="ok" aria-pressed="false">Achieved</button></div>
+    <div id="kpi-all"></div></div>
+</section>
+
+<section id="tab-agents" hidden>
+  <div class="panel" style="margin-bottom:14px"><h2>What DONNA is for</h2><div id="ag-purpose"><div class="empty">Loading…</div></div></div>
+  <div class="duties" id="ag-duties"></div>
 </section>
 
 <script>
@@ -401,26 +446,127 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
     $("vs-caveat").textContent = bl.caveat + "." + (miss.length ? " Not compared (no market prices): " + miss.map(([k, v]) => `${k} (${v} trades)`).join(", ") + "." : "");
   }
 
+  // ------------------------------------------------------------ PAD & KPIs
+  const ST = { GREEN: "GREEN", AMBER: "AMBER", RED: "RED", "NO DATA": "NODATA" };
+  const stPill = (r) => `<span class="pill st-${ST[r.status]}">${esc(r.word)}</span>`;
+  const ago = (n) => n === 1 ? "today" : `${n} days running`;
+  function trendText(r) {
+    const t = r.trend; if (!t) return "";
+    const b = r.unit === "%" ? num(t.before, 1) + "%" : r.unit === "lots" ? num(t.before, 2) + " lots" : num(t.before, Number.isInteger(t.before) ? 0 : 2);
+    return `<span class="${t.better ? "up" : "down"}">${t.better ? "better" : "worse"}</span> than the ${t.days} days before (${esc(b)})`;
+  }
+  function streakText(r) {
+    const s = r.streak; if (!s || s.days < 2) return "";
+    return s.status === "GREEN" ? `<span class="up">achieved ${ago(s.days)}</span>` : s.status === "NO DATA" ? "" : `<span class="down">not met ${ago(s.days)}</span>`;
+  }
+  function kcard(r) {
+    const extra = [trendText(r), streakText(r)].filter(Boolean).join(" · ");
+    return `<div class="kcard ${esc(r.status.replace(" ", ""))}"><h3><span>${esc(r.name)}</span>${stPill(r)}</h3>`
+      + `<div class="nums"><span class="lbl">Target</span> ${esc(r.target_text)} · <span class="lbl">Now</span> <b>${esc(r.value_text)}</b>${r.note ? ` <span class="lbl">(${esc(r.note)})</span>` : ""}</div>`
+      + (extra ? `<p>${extra}</p>` : "")
+      + `<p><span class="lbl">Why it matters:</span> ${esc(r.why)}</p>`
+      + (r.status === "NO DATA" ? `<p><span class="lbl">Needs:</span> ${esc(r.needs)}</p>` : `<p><span class="lbl">Next step:</span> ${esc(r.next)}</p>`) + `</div>`;
+  }
+  let kpiFilter = "all";
+  function renderKpiAll(kpi) {
+    const keep = (r) => kpiFilter === "all" || (kpiFilter === "not" && (r.status === "RED" || r.status === "AMBER"))
+      || (kpiFilter === "nodata" && r.status === "NO DATA") || (kpiFilter === "ok" && r.status === "GREEN");
+    const html = kpi.depts.map((d) => {
+      const all = kpi.rows.filter((r) => r.dept === d.key), rows = all.filter(keep);
+      if (!rows.length) return "";
+      const c = (s) => all.filter((r) => r.status === s).length;
+      return `<details class="dept" ${kpiFilter !== "all" || d.key === "trading" ? "open" : ""}><summary>${esc(d.name)}<span class="s">${c("GREEN")} achieved · ${c("RED") + c("AMBER")} not yet · ${c("NO DATA")} no data</span></summary>`
+        + `<table><tr><th>KPI, and why it matters</th><th class="n">Now</th><th class="n">Target</th><th>Status</th><th>Next step</th></tr>`
+        + rows.map((r) => `<tr><td>${esc(r.name)}<div class="small">${esc(r.why)}</div></td><td class="n">${esc(r.value_text)}${r.note ? `<div class="small">${esc(r.note)}</div>` : ""}</td>`
+          + `<td class="n">${esc(r.target_text)}</td><td>${stPill(r)}${r.trend || (r.streak && r.streak.days > 1) ? `<div class="small">${[trendText(r), streakText(r)].filter(Boolean).join("<br>")}</div>` : ""}</td>`
+          + `<td class="small" style="font-size:12.5px">${esc(r.status === "NO DATA" ? "Needs " + r.needs : r.next)}</td></tr>`).join("") + `</table></details>`;
+    }).join("");
+    $("kpi-all").innerHTML = html || empty("Nothing in this filter.");
+  }
+  const PAD_WORD = { kept: ["Kept", "up"], broken: ["Broken", "down"], "no trades": ["No trades yet", ""] };
+  function renderPad(p) {
+    if (p.error) { $("pad-sub").textContent = ""; $("pad-rules").innerHTML = empty(p.error); $("pad-practice").innerHTML = ""; $("pad-table").innerHTML = ""; return; }
+    $("pad-sub").textContent = `Checked on every trade opened since ${day(p.effective)} (the policy start): ${p.trades_checked} trade${p.trades_checked === 1 ? "" : "s"} checked, `
+      + `${p.flags} flag${p.flags === 1 ? "" : "s"}. ${p.trades_checked ? `${p.kept} of ${p.rules.length} rules kept, ${p.broken} broken.` : "No trades yet since the start, so no rule can be called kept or broken yet."}`;
+    $("pad-rules").innerHTML = p.rules.map((r) => { const [w, c] = PAD_WORD[r.status];
+      return `<div class="rule"><div><span class="pill ${c}">${esc(w)}${r.breaches > 1 ? " ×" + r.breaches : ""}</span><div class="why" style="margin-top:4px">${esc(r.clause)}</div></div>`
+        + `<div>${esc(r.rule)}<div class="why">${esc(r.why)}</div>${r.last ? `<div class="why down">Last: ${esc(r.last_when)} UTC, ${esc(r.last)}</div>` : ""}</div></div>`; }).join("");
+    const x = p.practice || {};
+    if (!x.trades) { $("pad-practice").innerHTML = ""; }
+    else {
+      const items = [];
+      items.push(`On <b>${x.busy_days} of ${x.days}</b> trading days you opened more than 10 trades (most in one day: ${x.max_trades_day}).`);
+      items.push(`<b>${x.big_losses}</b> losing trade${x.big_losses === 1 ? "" : "s"} lost more than 2% of the balance (the risk limit).`);
+      if (x.wins_hold_known) items.push(`<b>${x.wins_before_hold} of ${x.wins_hold_known}</b> winning trades with a known open time were closed in profit within 48 hours.`);
+      else items.push("Hold times are only known for trades from now on, so the 48-hour rule can't be replayed yet.");
+      const clash = x.wins_hold_known >= 10 && x.wins_before_hold / x.wins_hold_known > 0.5;
+      $("pad-practice").innerHTML = `<div class="callout info"><b>Practice look-back</b>, your trades ${esc(day(x.from))} to ${esc(day(x.to))}. Most are from before the policy started, so these are not breaches, `
+        + `just how your usual trading measures up:<ul style="margin:4px 0;padding-left:18px">${items.map((i) => `<li>${i}</li>`).join("")}</ul></div>`
+        + (clash || x.busy_days > x.days / 2 ? `<div class="callout"><b>Heads-up:</b> your usual style (many short trades a day) and the policy's ${clash ? "48-hour minimum hold and " : ""}10-trades-a-day limit can't both stand. `
+          + `From your next trade DONNA will flag ${clash ? "most winning trades and " : ""}most busy days. Either trade to the policy, or, as the policy owner, amend s.6.1/s.6.2 and record why.</div>` : "");
+    }
+    $("pad-table").innerHTML = !p.latest.length ? "" : `<p class="sub" style="margin-top:10px">Latest flags</p><table><tr><th>When (UTC)</th><th>Symbol</th><th>Detail</th></tr>` + p.latest.map((f) =>
+      `<tr><td>${esc(f.when)}</td><td>${esc(f.symbol)}</td><td>${esc(f.detail)}</td></tr>`).join("") + "</table>";
+  }
+  function renderDiscipline(x) {
+    if (!x || x.error) { $("dis-sub").textContent = ""; $("dis-body").innerHTML = empty((x && x.error) || "No data"); return; }
+    const s = x.summary, w = x.rules, b = x.before;
+    $("dis-sub").textContent = "A clean day keeps all four of your rules: " + Object.values(w).join("; ") + ".";
+    const tipOf = (r) => `${day(r.day)}: ${r.trades} trades, ${money(r.net)}\n` + (r.clean ? "clean day" : "broke: " + Object.entries(r.kept).filter(([, v]) => !v).map(([k]) => w[k]).join(", "));
+    const most = Object.entries(s.broken).filter(([, n]) => n).sort((a, c) => c[1] - a[1]);
+    $("dis-body").innerHTML = `<div class="tiles" style="margin:6px 0 4px">`
+      + tile("Clean days", `${s.clean} of ${s.days}`, `${s.clean_pct ?? 0}% of your trading days` + (b ? ` · before: ${b.clean_pct ?? 0}%` : ""), s.clean_pct >= 50 ? "up" : "down")
+      + tile("Streak now", String(s.streak), `best ${s.best} in a row`, s.streak ? "up" : "")
+      + tile("Clean vs other days", fin(s.clean_avg) ? money(s.clean_avg) : "–", `average a day · other days ${fin(s.other_avg) ? money(s.other_avg) : "–"}`, cls(s.clean_avg)) + `</div>`
+      + `<div class="cal">${x.days.map((r) => `<span class="${r.clean ? "ok" : ""}" data-tip="${esc(tipOf(r))}"></span>`).join("")}</div>`
+      + `<p class="sub">Each square is a trading day, oldest first: green kept all four rules. Hover a square for the day.</p>`
+      + (most.length ? `<p style="font-size:13.5px;margin:6px 0"><span class="lbl" style="color:var(--muted)">Broken most:</span> ${most.map(([k, n]) => `${esc(w[k])} (${n} day${n === 1 ? "" : "s"})`).join("; ")}.</p>` : "")
+      + (fin(s.clean_avg) && fin(s.other_avg) ? `<p style="font-size:13.5px;margin:6px 0">${s.clean_avg > s.other_avg ? "Your clean days make more money than the others: the rules pay." : "So far your clean days have not made more than the others; keep going, the sample is small."}</p>` : "");
+  }
   function renderCompliance(c) {
     const pad = c.pad || {}, kpi = c.kpi || {}, k = kpi.counts || {};
+    renderPad(pad); renderDiscipline(c.discipline);
+    if (kpi.error) { $("co-tiles").innerHTML = ""; $("co-summary").innerHTML = empty(kpi.error); $("co-fix").innerHTML = ""; $("kpi-all").innerHTML = ""; return; }
+    const tr = kpi.trading, trOk = tr.filter((r) => r.status === "GREEN").length, trData = tr.filter((r) => r.status !== "NO DATA").length;
+    const agents = kpi.rows.filter((r) => r.dept !== "trading"), agOk = agents.filter((r) => r.status === "GREEN").length, agData = agents.filter((r) => r.status !== "NO DATA").length;
+    const notYet = kpi.rows.filter((r) => r.status === "RED" || r.status === "AMBER");
+    const dis = c.discipline && !c.discipline.error ? c.discipline.summary : null;
+    $("co-summary").innerHTML = `<ul style="margin:0;padding-left:18px;font-size:14px">`
+      + `<li><b>Your trading:</b> ${trOk} of ${trData} measurable KPIs achieved${tr.length > trData ? ` (${tr.length - trData} wait for live positions)` : ""}.${dis ? ` ${dis.clean} of your last ${dis.days} trading days were clean.` : ""}</li>`
+      + `<li><b>PAD:</b> ${pad.error ? esc(pad.error) : pad.trades_checked ? `${pad.kept} of ${pad.rules.length} rules kept on ${pad.trades_checked} trades since ${esc(day(pad.effective))}.` : `no trades since the policy started on ${esc(day(pad.effective))}, so nothing to judge yet. The practice look-back below shows how your usual trading would score.`}</li>`
+      + `<li><b>DONNA's agents:</b> ${agOk} of ${agData} measurable KPIs achieved; ${agents.length - agData} can't be measured yet (each says what it needs).</li>`
+      + (notYet.length ? `<li><b>Fix first:</b> ${esc(notYet[0].name)}, now ${esc(notYet[0].value_text)} against ${esc(notYet[0].target_text)}. ${esc(notYet[0].next)}</li>` : "<li><b>Nothing is off target.</b></li>") + `</ul>`;
     $("co-tiles").innerHTML = [
-      tile("PAD flags (30 days)", pad.error ? "–" : String(pad.flags_30d), pad.error ? esc(pad.error) : pad.flags_30d ? "see the list" : "clean", pad.flags_30d ? "warn" : "up"),
-      tile("KPIs red", kpi.error ? "–" : String(k.RED ?? 0), "all departments", k.RED ? "down" : ""),
-      tile("KPIs amber", kpi.error ? "–" : String(k.AMBER ?? 0), "", k.AMBER ? "warn" : ""),
-      tile("KPIs green", kpi.error ? "–" : String(k.GREEN ?? 0), `${k["NO DATA"] ?? 0} with no data yet`, "up"),
+      tile("Achieved", String(k.GREEN ?? 0), `of ${kpi.rows.length} KPIs`, "up"),
+      tile("Not yet", String((k.RED ?? 0) + (k.AMBER ?? 0)), `${k.AMBER ?? 0} of them close`, (k.RED ?? 0) ? "down" : ""),
+      tile("No data yet", String(k["NO DATA"] ?? 0), "a source isn't connected or used yet"),
+      tile("PAD rules", pad.error ? "–" : pad.trades_checked ? `${pad.kept}/${pad.rules.length} kept` : "no trades", pad.error ? "" : `${pad.flags} flag${pad.flags === 1 ? "" : "s"} since ${day(pad.effective)}`, pad.broken ? "down" : pad.trades_checked ? "up" : ""),
     ].join("");
-    if (kpi.error) $("kpi-table").innerHTML = empty(kpi.error);
-    else $("kpi-table").innerHTML = !kpi.trading.length ? empty("No trading KPIs") : `<table><tr><th>KPI</th><th class="n">Now</th><th class="n">Target</th><th>Status</th></tr>`
-      + kpi.trading.map((r) => { const c2 = { RED: "down", AMBER: "warn", GREEN: "up" }[r.status] || "";
-        const u = (v) => !fin(v) ? "–" : r.unit === "$" ? money(v, 0) : r.unit === "%" ? num(v, 1) + "%" : r.unit === "yes" ? (v >= 1 ? "yes" : "no") : num(v, Number.isInteger(v) ? 0 : 2) + (r.unit && r.unit !== "n" ? " " + r.unit : "");
-        return `<tr><td>${esc(r.name)}${r.note ? `<div class="s" style="color:var(--muted);font-size:12px">${esc(r.note)}</div>` : ""}</td><td class="n">${esc(u(r.value))}</td><td class="n">${esc(u(r.target))}</td><td><span class="pill ${c2}">${esc(r.status)}</span></td></tr>`; }).join("") + "</table>";
-    if (pad.error) { $("pad-chart").innerHTML = ""; $("pad-table").innerHTML = empty(pad.error); return; }
-    const by = Object.entries(pad.by_check || {}).sort((a, b) => b[1] - a[1]);
-    if (by.length) hBars($("pad-chart"), { labels: by.map((x) => x[0]), values: by.map((x) => x[1]), fmt: (v) => String(v) });
-    else $("pad-chart").innerHTML = "";
-    $("pad-table").innerHTML = !pad.latest.length ? empty("No PAD flags in the last 30 days.")
-      : `<table><tr><th>When (UTC)</th><th>Symbol</th><th>Check</th><th>Detail</th></tr>` + pad.latest.map((f) =>
-        `<tr><td>${esc(f.when)}</td><td>${esc(f.symbol)}</td><td>${esc(f.check)}</td><td>${esc(f.detail)}</td></tr>`).join("") + "</table>";
+    $("co-fix").innerHTML = notYet.length ? notYet.slice(0, 6).map(kcard).join("") : empty("Every measurable KPI is on target.");
+    renderKpiAll(kpi);
+  }
+  document.querySelectorAll("#kpi-filter button").forEach((b) => b.addEventListener("click", () => {
+    kpiFilter = b.dataset.f; document.querySelectorAll("#kpi-filter button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    const k = lastData && lastData.compliance && lastData.compliance.kpi; if (k && !k.error) renderKpiAll(k);
+  }));
+
+  // ------------------------------------------------------------ agents
+  const DUTY = { running: "up", "partly waiting on setup": "warn", "needs a fix": "down", "on demand": "", "not started yet": "warn" };
+  const JOB = { ok: ["OK", "up"], waiting: ["waiting for setup", "warn"], failing: ["failing", "down"], not_run: ["not run yet", ""] };
+  function renderAgents(a) {
+    if (!a || a.error) { $("ag-purpose").innerHTML = empty((a && a.error) || "No data"); $("ag-duties").innerHTML = ""; return; }
+    $("ag-purpose").innerHTML = `<p style="margin:2px 0 8px;font-size:14.5px">${esc(a.purpose)}</p><p class="sub">What DONNA never does:</p><ul style="margin:0;padding-left:18px;font-size:13px">${a.boundaries.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>`;
+    $("ag-duties").innerHTML = a.duties.map((d) => { const k = d.kpi_counts || {};
+      return `<div class="panel duty"><h3><span>${esc(d.name)}</span><span class="pill ${DUTY[d.state] ?? ""}">${esc(d.state)}</span></h3>`
+        + `<div class="lbl">Supposed to do</div><p>${esc(d.promise)}</p>`
+        + `<div class="lbl">How you can tell</div><p>${esc(d.proof)}</p>`
+        + `<div class="lbl">Agents</div><p>${esc(d.agents.join(", "))} · <span style="color:var(--muted)">commands: ${esc(d.commands)}</span></p>`
+        + `<div class="lbl">KPIs</div><p>${(d.kpis || []).length ? `<span class="up">${k.GREEN || 0} achieved</span> · <span class="down">${(k.RED || 0) + (k.AMBER || 0)} not yet</span> · ${k["NO DATA"] || 0} no data yet` : "No KPIs for this duty yet."}</p>`
+        + ((d.kpis || []).filter((r) => r.status !== "GREEN").length ? `<ul>${d.kpis.filter((r) => r.status !== "GREEN").slice(0, 5).map((r) => `<li><span class="st-${ST[r.status]}">${esc(r.word)}</span>: ${esc(r.name)}${r.status === "NO DATA" ? ` <span style="color:var(--muted)">(needs ${esc(r.needs)})</span>` : ` (now ${esc(r.value_text)}, target ${esc(r.target_text)})`}</li>`).join("")}</ul>` : "")
+        + `<div class="lbl">Done in the last 7 days</div>` + (d.latest.length ? `<p>${d.done_7d} recorded action${d.done_7d === 1 ? "" : "s"}. Latest:</p><ul>${d.latest.map((e) => `<li>${esc(when(e.when))}: ${esc(e.agent)}, ${esc(e.what)}</li>`).join("")}</ul>` : `<p style="color:var(--muted)">Nothing recorded in the last 7 days${d.jobs.length ? "" : " (this duty works when you ask)"}.</p>`)
+        + (d.jobs.length ? `<div class="lbl">Scheduled jobs</div><div class="jobs"><table><tr><th>Job</th><th>State</th><th>Last ran</th></tr>${d.jobs.map((j) => { const [w, c] = JOB[j.state] || [j.state, ""];
+          return `<tr><td>${esc(j.name)}${j.why ? `<div class="small">${esc(j.why)}</div>` : ""}</td><td><span class="pill ${c}">${esc(w)}</span></td><td>${esc(j.last || "–")}</td></tr>`; }).join("")}</table></div>` : "")
+        + `</div>`; }).join("");
   }
 
   function renderBanners(r) {
@@ -455,7 +601,7 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
   }
 
   // ------------------------------------------------------------ loading
-  let marketsLoaded = false, lastData = null, lastMarkets = null, vsLoaded = false, lastVs = null;
+  let marketsLoaded = false, lastData = null, lastMarkets = null, vsLoaded = false, lastVs = null, lastAgents = null;
   function renderData() { const d = lastData; if (!d) return;
     renderBanners(d.risk || {}); renderAccount(d.account || {}, d.risk || {}); renderTrades(d.trades || {}); renderEdge(d.edge); renderCompliance(d.compliance || {}); }
   let resizeTimer = 0;   // charts are drawn at their real width: redraw when the window or the tab changes
@@ -475,13 +621,20 @@ Trade ideas, bias and signals stay in your Market Toolkit on your PC.</p>
     try { lastVs = await api("/api/charts/vsmarket"); vsLoaded = true; renderVs(lastVs); }
     catch (e) { $("vs-bottom").innerHTML = empty("Could not load market vs me (" + e.message + ")"); }
   }
+  async function loadAgents() {
+    try { lastAgents = await api("/api/charts/agents"); renderAgents(lastAgents); }
+    catch (e) { $("ag-purpose").innerHTML = empty("Could not load the agents (" + e.message + ")"); }
+  }
+  const current = () => (document.querySelector('nav button[aria-selected="true"]') || {}).dataset?.tab;
   document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll("nav button").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
     document.querySelectorAll("section").forEach((s) => { s.hidden = s.id !== "tab-" + b.dataset.tab; });
     if (b.dataset.tab === "markets" && !marketsLoaded) loadMarkets(); else if (b.dataset.tab === "vs" && !vsLoaded) loadVs(); else redraw();
+    if (b.dataset.tab === "agents") loadAgents();
     try { localStorage.setItem("donna-charts-tab", b.dataset.tab); } catch (e) { /* private window */ }
   }));
-  $("reload").addEventListener("click", () => { load(); if (marketsLoaded) loadMarkets(true); if (vsLoaded) loadVs(); });
+  $("reload").addEventListener("click", () => { load(); if (marketsLoaded) loadMarkets(true); if (vsLoaded) loadVs();
+    if (current() === "agents") loadAgents(); });
   let saved = null; try { saved = localStorage.getItem("donna-charts-tab"); } catch (e) { /* private window */ }
   const start = saved && document.querySelector(`nav button[data-tab="${saved}"]`); if (start) start.click();
   load(); setInterval(load, 5 * 60 * 1000);

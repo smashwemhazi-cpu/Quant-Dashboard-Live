@@ -413,6 +413,69 @@ def command(cmd: str, rest: str) -> str | None:
             "!pad rules | !pad pack [YYYY-MM]")
 
 
+# ------------------------------------------------------------------ each rule as a plain statement (dashboard)
+RULES: list[tuple[str, str, str, str]] = [   # check, clause, the rule in plain words, why it exists
+    ("activity", "s.6.2", f"Open at most {MAX_TRADES_DAY} trades a day.",
+     "Caps impulse trading; your own results show most damage on busy days."),
+    ("no_stop", "s.6.3", "Put a stop-loss on every trade.", "A trade without a stop has no limit on what it can lose."),
+    ("risk", "s.6.3", f"Risk at most {MAX_RISK_PCT:g}% of equity on any one trade.",
+     "Keeps one bad trade from doing lasting damage."),
+    ("holding", "s.6.1", f"Hold a trade at least {HOLD_HOURS:g} hours before taking a profit "
+                         f"({HOLD_SHARE_WORKDAYS} working days for single shares). Cutting a loss early is allowed.",
+     "Staff dealing must not look like short-term speculation against clients."),
+    ("leverage", "s.6", "Stay within the client leverage cap for the asset class (1:200 FX, metals and indices; "
+                        "1:100 commodities; 1:50 crypto; 1:20 shares).", "Staff get no better terms than clients."),
+    ("clearance", "s.4, s.5.2", "Log a pre-clearance (!pad clear) before every crypto, single-share or Watch List trade.",
+     "Creates the record that you checked for conflicts first."),
+    ("restricted", "s.5.1", "Never trade a symbol on the Restricted List.", "Avoids trading where the firm has a conflict."),
+    ("opposite", "s.6.4", "Never hold a long and a short in the same symbol at once.",
+     "Hedging yourself is a sign of churning, not of a view."),
+]
+
+
+def rule_status(now: datetime | None = None) -> dict[str, Any]:
+    """Each PAD rule with: kept / broken N times / no trades yet, since the policy started (EFFECTIVE).
+    Plus a practice look-back over the last 30 days of the journal, clearly marked as not breaches."""
+    now = now or datetime.now(timezone.utc)
+    with _db() as c:
+        opened = [r["opened_utc"] for r in c.execute("SELECT opened_utc FROM pad_positions WHERE opened_utc IS NOT NULL")
+                  if _local_day(r["opened_utc"]) >= EFFECTIVE]
+        fl = [dict(r) for r in c.execute("SELECT * FROM pad_flags ORDER BY first_seen_utc DESC")]
+    by: dict[str, list[dict[str, Any]]] = {}
+    for f in fl:
+        by.setdefault(f["check_name"], []).append(f)
+    rules = []
+    for check, clause, text, why in RULES:
+        n = len(by.get(check, []))
+        status = "broken" if n else "kept" if opened else "no trades"
+        rules.append({"check": check, "clause": clause, "rule": text, "why": why, "status": status, "breaches": n,
+                      "last": by[check][0]["detail"] if n else "",
+                      "last_when": by[check][0]["first_seen_utc"][:16] if n else ""})
+    order = {"broken": 0, "no trades": 1, "kept": 2}
+    rules.sort(key=lambda r: order[r["status"]])
+    return {"effective": EFFECTIVE, "trades_checked": len(opened), "flags": len(fl), "rules": rules,
+            "kept": sum(r["status"] == "kept" for r in rules), "broken": sum(r["status"] == "broken" for r in rules),
+            "practice": practice(now)}
+
+
+def practice(now: datetime | None = None, days: int = 30) -> dict[str, Any]:
+    """The rules that can be replayed on the trade journal, over the last `days` days of trading. Most of these
+    trades are from before the policy started, so this is a rehearsal, not a breach record."""
+    from jarvis.agents import edge
+
+    d = edge.load(days)
+    if d.empty:
+        return {"trades": 0}
+    per_day = d.groupby("day").size()
+    busy = per_day[per_day > MAX_TRADES_DAY]
+    big = d[(d.net < 0) & d.bal_before.notna() & (-d.net > d.bal_before * MAX_RISK_PCT / 100)]
+    known = d[d.hold_min.notna() & (d.net > 0)]
+    quick = known[known.hold_min < HOLD_HOURS * 60]
+    return {"trades": int(len(d)), "days": int(len(per_day)), "from": str(d.t.min())[:10], "to": str(d.t.max())[:10],
+            "busy_days": int(len(busy)), "max_trades_day": int(per_day.max()),
+            "big_losses": int(len(big)), "wins_hold_known": int(len(known)), "wins_before_hold": int(len(quick))}
+
+
 # ------------------------------------------------------------------ monthly self-review record
 def month_bounds(month: str | None = None, today: date | None = None) -> tuple[str, str, str]:
     """'2026-11' -> (label, first day, first day of next month). Default: last full month."""

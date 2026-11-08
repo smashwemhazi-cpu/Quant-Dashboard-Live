@@ -106,3 +106,85 @@ def test_my_edge_tab(client):
     assert e["overall"]["trades"] == 8 and e["overall"]["breakeven_win_rate"] > 50
     assert {r["rule"] for r in e["replay"]} >= {"cooldown", "cap_losses"} and e["behaviour"]["others"]["trades"]
     assert 'data-tab="edge"' in client.get("/charts", headers=LOCAL).text
+
+
+def _sh_like_trades(n_days=40, per_day=14, deposit_day=20):
+    from datetime import datetime, timedelta, timezone
+
+    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=n_days)
+    out, bal = [], 300.0
+    for d in range(n_days):
+        t = start + timedelta(days=d, hours=8)
+        if d == deposit_day:
+            bal += 500   # a deposit: must not show up as a drawdown or a gain
+        for k in range(per_day):
+            t += timedelta(minutes=3 if k % 3 else 20)
+            net = 3.0 if k % 3 else -4.0
+            bal += net
+            out.append({"closed_utc": t.strftime("%Y-%m-%d %H:%M:%S.000000"), "symbol": "XAUUSD.mp",
+                        "side": "BUY" if d % 2 else "SELL", "entry": 4000 + k, "exit": 4001 + k, "qty": 1, "net": net,
+                        "balance": round(bal, 2), "opened_utc": (t - timedelta(minutes=2)).strftime("%Y-%m-%d %H:%M:%S")})
+    return out
+
+
+def test_pad_and_kpis_are_plain_statements(client):
+    from jarvis.agents import kpi, personal
+
+    personal.store_trades("123", _sh_like_trades())
+    c = client.get("/api/charts/data", headers=API).json()["compliance"]
+    rows = c["kpi"]["rows"]
+    assert len(rows) == len(kpi.STARTER) and all(r["why"] and r["word"] for r in rows)
+    order = [kpi.ORDER[r["status"]] for r in rows]
+    assert order == sorted(order)                                    # worst first
+    over = next(r for r in rows if r["key"] == "tr_overtrading")
+    assert over["status"] == "RED" and over["value"] > 0 and "PAD" in over["note"]   # 14 a day > the PAD limit of 10
+    assert over["trend"] is not None and "days" in over["trend"]
+    nod = [r for r in rows if r["status"] == "NO DATA"]
+    assert nod and all(r["needs"] for r in nod)
+    # PAD: no trades since the policy start -> "no trades", never "kept"; the look-back says how it would score
+    p = c["pad"]
+    assert p["trades_checked"] == 0 and {r["status"] for r in p["rules"]} == {"no trades"}
+    assert p["practice"]["busy_days"] > 0 and p["practice"]["wins_before_hold"] == p["practice"]["wins_hold_known"] > 0
+    d = c["discipline"]
+    assert d["summary"]["days"] and d["summary"]["clean"] == 0 and d["summary"]["broken"]["trades"] == d["summary"]["days"]
+
+
+def test_drawdown_ignores_deposits(client):
+    from datetime import datetime, timezone
+
+    from jarvis.agents import kpi, personal
+
+    personal.store_trades("123", _sh_like_trades())
+    v = kpi.MEASURES["tr_drawdown"](datetime.now(timezone.utc))
+    assert isinstance(v, tuple) and 0 < v[0] < 5          # small, steady losses: not a fake 80% from the deposit
+
+
+def test_setup_gap_is_no_data_not_red(client, monkeypatch):
+    from jarvis.agents import kpi
+
+    states = {"daily_wrap": {"state": "waiting", "why": "JARVIS_REPORT_TARGETS not set"}}
+    r = kpi.score_one("desk_wraps", states=states)
+    assert r["status"] == "NO DATA" and "waiting for setup" in r["note"]
+    assert kpi.score_one("desk_wraps", states={"daily_wrap": {"state": "ok"}})["status"] == "RED"
+
+
+def test_kpi_history_and_streak(client):
+    from jarvis.agents import kpi
+
+    h = [("2026-11-01", 1, "RED"), ("2026-11-03", 1, "GREEN"), ("2026-11-04", 1, "GREEN"), ("2026-11-05", 1, "GREEN")]
+    assert kpi.streak(h) == {"status": "GREEN", "days": 3, "since": "2026-11-03"}
+    assert kpi.daily_snapshot() is True and kpi.daily_snapshot() is False
+    assert kpi.history()
+
+
+def test_agents_tab(client):
+    from jarvis.agents import personal
+
+    personal.store_trades("123", _sh_like_trades())
+    a = client.get("/api/charts/agents", headers=API).json()
+    assert a["purpose"] and a["boundaries"] and len(a["duties"]) == 7
+    trading = next(d for d in a["duties"] if d["key"] == "trading")
+    assert trading["kpis"] and set(trading["kpi_counts"]) == {"RED", "AMBER", "NO DATA", "GREEN"}
+    page = client.get("/charts", headers=LOCAL).text
+    assert 'data-tab="agents"' in page
+
