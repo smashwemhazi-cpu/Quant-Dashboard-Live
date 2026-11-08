@@ -73,11 +73,17 @@ def status(today: date | None = None) -> list[dict[str, Any]]:
              "cTrader Open API, every 5 min"),
             ("Your trade history", _one(c, "SELECT MAX(closed_utc) FROM pt_trades"), "statements you upload"),
         ]
+    feed_age = _days(live[1][1], today)
     for name, last, src in live:
         age = _days(last, today)
+        state = "never" if age is None else "live" if age <= 1 else "old"
+        if name == "Your trade history" and feed_age is not None and feed_age <= 1:
+            # closed trades come from the live cTrader feed: an old date just means no trade closed since
+            # (a weekend, a day off), not a missing upload
+            state, src = "live", ("from your cTrader account by itself; last closed trade" if age is not None
+                                  else "from your cTrader account by itself; no closed trades yet")
         out.append({"kind": "live", "name": name, "source": src, "feeds": "", "last": str(last or "")[:10],
-                    "age_days": age, "state": "never" if age is None else "live" if age <= 1 else "old",
-                    "by_email": False})
+                    "age_days": age, "state": state, "by_email": False})
     return out
 
 
@@ -107,6 +113,9 @@ def feeds_text(today: date | None = None) -> str:
     L += ["", "LIVE CONNECTIONS"]
     for r in rows:
         if r["kind"] == "live":
+            if r["source"].startswith("from your cTrader account"):
+                L.append(f"{icon[r['state']]} {r['name']}: {r['source']}" + (f" {r['last']}" if r["last"] else ""))
+                continue
             when = "nothing yet" if r["state"] == "never" else f"last update {r['last']}"
             L.append(f"{icon[r['state']]} {r['name']}: {when} ({r['source']})")
     L += ["", "PUT REPORTS ON AUTOPILOT (once, then never upload again)",

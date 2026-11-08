@@ -5,6 +5,12 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-09 · !feeds: trade history no longer red over a weekend
+
+**What was done:** "Your trade history" in `!feeds` now follows the live cTrader feed. Closed trades arrive by themselves from your account, so an old date only means no trade closed since (a weekend or a day off), not a missing upload. It shows green with the date of the last closed trade.
+
+**Why:** SH saw it red on Sunday with "last update 2026-11-06 (statements you upload)", which suggested a statement upload was needed. It isn't.
+
 ## 2026-11-09 · Console without a black window, and a live discipline guard on your phone
 
 **What was done:**
