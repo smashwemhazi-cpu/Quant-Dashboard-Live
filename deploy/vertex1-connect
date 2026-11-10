@@ -9,9 +9,26 @@ PY=/opt/vertex1/venv/bin/python
 [ "$(id -u)" = 0 ] || { echo "Run as root."; exit 1; }
 SECTION=${1:-all}
 case "$SECTION" in
-  all|discord|email|calendar|ctrader|radar|leads|telegram|phone|backup) ;;
-  *) echo "Usage: vertex1-connect [ctrader|email|calendar|discord|radar|leads|telegram|phone|backup]   (nothing = all questions)"; exit 1 ;;
+  all|discord|email|calendar|ctrader|radar|leads|telegram|phone|backup|edgescore) ;;
+  *) echo "Usage: vertex1-connect [ctrader|email|calendar|discord|radar|leads|telegram|phone|backup|edgescore]   (nothing = all questions)"; exit 1 ;;
 esac
+if [ "$SECTION" = edgescore ]; then
+  # the Market Toolkit's token: made here, on the server, and shown so SH can copy it into edgescore on their PC
+  if ! grep -qE '^DONNA_EDGESCORE_TOKEN=.+' "$ENV"; then
+    cp -p "$ENV" "$ENV.bak.$(date +%Y%m%d-%H%M%S)"
+    sed -i '/^DONNA_EDGESCORE_TOKEN=/d' "$ENV"
+    echo "DONNA_EDGESCORE_TOKEN=$(openssl rand -hex 24)" >> "$ENV"
+    systemctl restart vertex1-donna 2>/dev/null || true
+    echo "Made the Market Toolkit token."
+  fi
+  echo "Copy this token into edgescore's donna.py on your PC (do not paste it in email or chat):"
+  echo
+  grep -E '^DONNA_EDGESCORE_TOKEN=' "$ENV" | cut -d= -f2-
+  echo
+  echo "Address: http://localhost:8765/api/edgescore  (works while the DONNA Console is open)"
+  echo "Header:  X-Donna-Token: <the token above>"
+  exit 0
+fi
 if [ "$SECTION" = backup ]; then
   # the off-site backup key: made here, on the server, and shown once so the owner can keep it safe
   if grep -qE '^JARVIS_BACKUP_KEY=.+' "$ENV"; then
