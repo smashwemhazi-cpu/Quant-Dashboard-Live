@@ -5,6 +5,18 @@ SH gave Claude autonomy to make and ship changes without asking on 2026-10-23. S
 does not cover: DONNA never trades or moves money, never messages clients, Claude never handles your passwords
 or keys, and nothing paid is signed up for without your OK.
 
+## 2026-11-10 · Inbox for the Market Toolkit (edgescore)
+
+**What was done:** DONNA now has an address that receives messages from your Market Toolkit (`edgescore\donna.py` on your PC): `POST http://localhost:8765/api/edgescore` with the header `X-Donna-Token: <token>` and a JSON object (or a list of objects, up to 256 KB) as the body. DONNA keeps every message (newest 5,000), notes the symbol, score, bias and regime when it finds them, and writes an audit line. `GET /api/edgescore/latest` shows the last ones.
+
+**Why:** SH asked for DONNA's receiving address and whether it needs a password. Before this, DONNA had service endpoints but none for the Toolkit.
+
+**What you'll notice:** nothing until you make the token. On the server run `vertex1-connect edgescore`; it makes the token, shows it once, and prints the address. Copy it into edgescore's `donna.py` on your PC.
+
+**Limits:** it only stores. It never trades, sends or broadcasts anything. It is not on the public internet: like the Console it answers only through your private SSH link, so it works while the DONNA Console is open. Without the token every request is refused.
+
+**Recommendations:** (1) Send Claude the comment at the top of `edgescore\donna.py` (the JSON format, no keys) so the Toolkit's fields can be shown on the Charts page and in the morning report. (2) If the Toolkit has to post while the Console is closed, ask Claude to keep the SSH link running in the background instead of opening DONNA to the internet.
+
 ## 2026-11-09 · Day by day as a picture; startup always hidden
 
 **What was done:** Market vs me › Day by day is now one line a day: the market's move, a buys/sells bar, your net as a bar on one shared scale coloured with/against the market, and a one-line verdict ("Right side, still lost: entries, exits or size"). Tap a day for the full story and a button to its rules check. Filters show only days with / against the market, and "Table" brings back every number. The console file also switches any older "start with Windows" shortcut to the hidden one each time it runs.

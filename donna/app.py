@@ -41,6 +41,7 @@ from pydantic import BaseModel, Field
 from donna import channels
 from donna.charts import router as charts_router
 from donna.console import router as console_router
+from donna.edgescore import router as edgescore_router
 
 log = logging.getLogger("donna")
 
@@ -145,6 +146,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="D.O.N.N.A. Core", version="4.0", lifespan=lifespan)
 app.include_router(console_router)  # the DONNA Console page - answers through the SSH tunnel only
 app.include_router(charts_router)   # the private charts dashboard - same tunnel-only rule
+app.include_router(edgescore_router)  # Market Toolkit inbox - tunnel-only + token, log-only
 
 
 def audit(actor: str, event: str, detail: dict[str, Any]) -> None:
