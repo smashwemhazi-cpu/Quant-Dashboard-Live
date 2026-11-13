@@ -203,7 +203,7 @@ namespace cAlgo.Robots
         [Parameter("ADX Range Level", DefaultValue = 20, MinValue = 5, Group = "Regime")]
         public double AdxRangeLevel { get; set; }
 
-        [Parameter("Use Volatility Gate", DefaultValue = true, Group = "Regime")]
+        [Parameter("Use Volatility Gate", DefaultValue = false, Group = "Regime")]
         public bool UseVolatilityGate { get; set; }
 
         [Parameter("ATR Percentile Lookback Bars", DefaultValue = 100, MinValue = 20, Group = "Regime")]
@@ -319,6 +319,9 @@ namespace cAlgo.Robots
         public string ManualBlackouts { get; set; }
 
         // ---- Journal ----
+        [Parameter("Shadow Audit: log what EVERY setup would have done", DefaultValue = true, Group = "Journal")]
+        public bool EnableShadowAudit { get; set; }
+
         [Parameter("Print Trade Journal (CSV lines in log)", DefaultValue = true, Group = "Journal")]
         public bool EnableJournal { get; set; }
 
@@ -402,7 +405,7 @@ namespace cAlgo.Robots
         [Parameter("Min Displacement Body (x ATR, 0 = off)", DefaultValue = 0.5, MinValue = 0, Step = 0.1, Group = "Strategy: Sweep + MSS")]
         public double AsrMinDisplacementAtr { get; set; }
 
-        [Parameter("Use Volume Surge Filter", DefaultValue = true, Group = "Strategy: Sweep + MSS")]
+        [Parameter("Use Volume Surge Filter", DefaultValue = false, Group = "Strategy: Sweep + MSS")]
         public bool AsrUseVolume { get; set; }
 
         [Parameter("Volume Baseline", DefaultValue = AsrVolumeBaseline.SameTimeOfDay, Group = "Strategy: Sweep + MSS")]
@@ -448,7 +451,7 @@ namespace cAlgo.Robots
         [Parameter("Continuation: Min Close Beyond Level (pips)", DefaultValue = 2.0, MinValue = 0, Step = 0.5, Group = "Strategy: Trend Continuation")]
         public double AsrContMinClosePips { get; set; }
 
-        [Parameter("Continuation: Stop Beyond Level (x ATR)", DefaultValue = 1.0, MinValue = 0.1, Step = 0.1, Group = "Strategy: Trend Continuation")]
+        [Parameter("Continuation: Stop Beyond Level (x ATR)", DefaultValue = 1.5, MinValue = 0.1, Step = 0.1, Group = "Strategy: Trend Continuation")]
         public double AsrContStopAtr { get; set; }
 
         [Parameter("Continuation: Initial Target R", DefaultValue = 2.0, MinValue = 0.5, Step = 0.25, Group = "Strategy: Trend Continuation")]
@@ -479,6 +482,7 @@ namespace cAlgo.Robots
         private RegimeFilter _regime;
         private ExecutionService _exec;
         private TrailingManager _trailing;
+        private ShadowAudit _shadow;
         private TradeJournal _journal;
 
         private bool _disconnected;
@@ -514,6 +518,7 @@ namespace cAlgo.Robots
             _news = new NewsFilter(this);
             _exec = new ExecutionService(this);
             _trailing = new TrailingManager(this, _meta);
+            _shadow = new ShadowAudit(this);
             _journal = new TradeJournal(this, _meta);
 
             if (_ddGuard.IsHalted)
@@ -575,6 +580,7 @@ namespace cAlgo.Robots
 
             foreach (var p in BotPositions().ToList())
                 _trailing.ManageTimeStop(p);
+            _shadow.OnBar();
 
             List<TradeIntent> intents;
             try { intents = _signals.OnBar() ?? new List<TradeIntent>(); }
@@ -597,17 +603,20 @@ namespace cAlgo.Robots
 
             foreach (var intent in intents)
             {
+                string status;
                 if (intent.Kind == EntryKind.Market)
                 {
                     _queuedIntent = intent;
                     _queuedExpiry = intent.ExpiryUtc ?? Server.Time.AddSeconds(SignalValidSeconds);
                     _lastBlockReason = null;
                     TryEnterQueued();
+                    status = _queuedIntent == null ? "TAKEN" : "BLOCKED: " + (_lastBlockReason ?? "waiting");
                 }
                 else
                 {
-                    PlacePendingIntent(intent);
+                    status = PlacePendingIntent(intent);
                 }
+                _shadow.Add(intent, status);
             }
         }
 
@@ -632,6 +641,7 @@ namespace cAlgo.Robots
             Positions.Closed -= OnPositionClosed;
             PendingOrders.Filled -= OnPendingFilled;
             if (_store != null) _store.Flush();
+            if (_shadow != null) _shadow.PrintSummary();
             Log("Stopped.");
         }
 
@@ -727,24 +737,26 @@ namespace cAlgo.Robots
             }
         }
 
-        private void PlacePendingIntent(TradeIntent intent)
+        // Returns "TAKEN" when the order was placed, otherwise "BLOCKED: <reason>" (used by the shadow audit).
+        private string PlacePendingIntent(TradeIntent intent)
         {
             string reason;
-            if (!CanOpenNewTrade(intent.OcoGroup, out reason)) { LogDebug("Pending {0} not placed: {1}", intent.Tag, reason); return; }
+            if (!CanOpenNewTrade(intent.OcoGroup, out reason)) { LogDebug("Pending {0} not placed: {1}", intent.Tag, reason); return "BLOCKED: " + reason; }
 
             double slPips; double? tpPips;
             if (!ResolveStops(intent, intent.EntryPrice, out slPips, out tpPips, out reason))
             {
                 Log("Pending {0} rejected: {1}", intent.Tag, reason);
-                return;
+                return "BLOCKED: " + reason;
             }
 
             double volume = _risk.CalculateVolume(slPips, intent.OcoGroup, out reason);
-            if (volume <= 0) { Log("Pending {0} not placed: {1}", intent.Tag, reason); return; }
+            if (volume <= 0) { Log("Pending {0} not placed: {1}", intent.Tag, reason); return "BLOCKED: " + reason; }
 
             DateTime expiry = intent.ExpiryUtc ?? Server.Time.AddMinutes(PendingExpiryMinutes);
-            _exec.PlacePending(intent, volume, slPips, tpPips, expiry, out reason);
+            var outcome = _exec.PlacePending(intent, volume, slPips, tpPips, expiry, out reason);
             if (reason != null) Log("Pending {0}: {1}", intent.Tag, reason);
+            return outcome == OpenOutcome.Placed ? "TAKEN" : "BLOCKED: " + (reason ?? outcome.ToString());
         }
 
         // Converts an intent's stops to pips relative to the reference entry price.
@@ -2481,6 +2493,167 @@ namespace cAlgo.Robots
             _bot.Log("Could not attach SL ({0}); closing position {1} for safety.", r.Error, p.Id);
             p.Close();
             return null;
+        }
+    }
+
+    // =====================================================================================
+    //  SHADOW AUDIT — follows EVERY setup the strategy produces (taken or blocked) on closed
+    //  bars and records what it would have done with the strategy's own entry, stop and initial
+    //  target. Answers "what did the filters cost or save me?".
+    //  Simplifications (state them when reading results): fills at the exact limit/market price,
+    //  no spread/commission/slippage, if stop and target are touched in the same bar the STOP is
+    //  assumed first, no partials/runner trailing (initial target or time stop only).
+    //  Output: one "SHADOW," CSV line per resolved setup + a summary table when the bot stops.
+    // =====================================================================================
+    public class ShadowAudit
+    {
+        private class Shadow
+        {
+            public string Tag, Status;
+            public bool IsBuy, Filled;
+            public double Entry, Stop, Target;   // Target = 0 -> none
+            public DateTime Created, Expiry;
+            public int FillIndex, MaxBars;
+        }
+
+        private class Stat { public int N, Fills, Wins, Losses, NoFill, Timed; public double SumR; }
+
+        private readonly GbpUsdSessionBot _bot;
+        private readonly List<Shadow> _open = new List<Shadow>();
+        private readonly SortedDictionary<string, Stat> _byGroup = new SortedDictionary<string, Stat>();
+
+        public ShadowAudit(GbpUsdSessionBot bot)
+        {
+            _bot = bot;
+            if (bot.EnableShadowAudit)
+                bot.Print("SHADOW,tag,status,createdUtc,side,entry,stop,target,result,R,barsHeld");
+        }
+
+        public void Add(TradeIntent intent, string status)
+        {
+            if (!_bot.EnableShadowAudit || intent == null) return;
+            var sym = _bot.Symbol;
+            bool isBuy = intent.Direction == TradeType.Buy;
+            double entry = intent.Kind == EntryKind.Market ? (isBuy ? sym.Ask : sym.Bid) : intent.EntryPrice;
+            double stop;
+            if (intent.StopLossPrice.HasValue) stop = intent.StopLossPrice.Value;
+            else
+            {
+                double pips = intent.StopLossPips ?? _bot.DefaultStopPips();
+                stop = isBuy ? entry - pips * sym.PipSize : entry + pips * sym.PipSize;
+            }
+            double risk = isBuy ? entry - stop : stop - entry;
+            if (risk <= 0) return;
+
+            double target = 0;
+            if (intent.TakeProfitPrice.HasValue) target = intent.TakeProfitPrice.Value;
+            else
+            {
+                double r = intent.TakeProfitR ?? _bot.TakeProfitR;
+                if (r > 0) target = isBuy ? entry + r * risk : entry - r * risk;
+            }
+
+            int maxBars = intent.MaxBarsInTrade ?? _bot.TimeStopBars;
+            var sh = new Shadow
+            {
+                Tag = intent.Tag ?? "", Status = status ?? "?", IsBuy = isBuy, Entry = entry, Stop = stop, Target = target,
+                Created = _bot.Server.Time,
+                Expiry = intent.Kind == EntryKind.Market ? _bot.Server.Time : (intent.ExpiryUtc ?? _bot.Server.Time.AddMinutes(_bot.PendingExpiryMinutes)),
+                Filled = intent.Kind == EntryKind.Market,
+                FillIndex = _bot.Bars.Count - 1,
+                MaxBars = maxBars > 0 ? maxBars : 288,
+            };
+            _open.Add(sh);
+        }
+
+        // Called once per bar: evaluates the last CLOSED bar against every open shadow.
+        public void OnBar()
+        {
+            if (!_bot.EnableShadowAudit || _open.Count == 0) return;
+            var b = _bot.Bars;
+            int i = b.Count - 2;
+            if (i < 0) return;
+            double h = b.HighPrices[i], l = b.LowPrices[i], c = b.ClosePrices[i];
+            DateTime barOpen = b.OpenTimes[i];
+
+            for (int k = _open.Count - 1; k >= 0; k--)
+            {
+                var s = _open[k];
+                if (barOpen < s.Created.AddSeconds(-1) && !s.Filled) continue;   // bar formed before the setup
+                double risk = s.IsBuy ? s.Entry - s.Stop : s.Stop - s.Entry;
+
+                if (!s.Filled)
+                {
+                    if (barOpen >= s.Expiry) { Resolve(k, "NOFILL", 0, 0); continue; }
+                    bool touched = s.IsBuy ? l <= s.Entry : h >= s.Entry;
+                    if (!touched) continue;
+                    s.Filled = true;
+                    s.FillIndex = i;
+                }
+
+                bool stopHit = s.IsBuy ? l <= s.Stop : h >= s.Stop;
+                bool tgtHit = s.Target > 0 && (s.IsBuy ? h >= s.Target : l <= s.Target);
+                int held = i - s.FillIndex + 1;
+                if (stopHit) { Resolve(k, "LOSS", -1.0, held); continue; }
+                if (tgtHit)
+                {
+                    double r = (s.IsBuy ? s.Target - s.Entry : s.Entry - s.Target) / risk;
+                    Resolve(k, "WIN", r, held);
+                    continue;
+                }
+                if (held >= s.MaxBars)
+                {
+                    double r = (s.IsBuy ? c - s.Entry : s.Entry - c) / risk;
+                    Resolve(k, "TIME", r, held);
+                }
+            }
+        }
+
+        private void Resolve(int k, string result, double r, int held)
+        {
+            var s = _open[k];
+            _open.RemoveAt(k);
+            _bot.Print(string.Format(CultureInfo.InvariantCulture, "SHADOW,{0},{1},{2:yyyy-MM-dd HH:mm},{3},{4},{5},{6},{7},{8:F2},{9}",
+                s.Tag, s.Status.Replace(',', ';'), s.Created, s.IsBuy ? "Buy" : "Sell", s.Entry, s.Stop, s.Target, result, r, held));
+
+            string session = s.Tag.Split('-')[0];
+            string setup = s.Tag.Contains("-C") ? "Continuation" : s.Tag.Contains("-R") ? "Reversal" : "Other";
+            string gate = s.Status.StartsWith("TAKEN") ? "taken" : "blocked (" + Shorten(s.Status) + ")";
+            foreach (var key in new[] { "ALL", "Session " + session, "Setup " + setup, "Status " + gate })
+            {
+                Stat st;
+                if (!_byGroup.TryGetValue(key, out st)) { st = new Stat(); _byGroup[key] = st; }
+                st.N++;
+                if (result == "NOFILL") { st.NoFill++; continue; }
+                st.Fills++;
+                st.SumR += r;
+                if (result == "TIME") st.Timed++;
+                if (r > 0) st.Wins++; else st.Losses++;
+            }
+        }
+
+        private static string Shorten(string status)
+        {
+            string s = status.StartsWith("BLOCKED: ") ? status.Substring(9) : status;
+            int cut = s.IndexOf('(');
+            if (cut > 0) s = s.Substring(0, cut);
+            return s.Trim();
+        }
+
+        public void PrintSummary()
+        {
+            if (!_bot.EnableShadowAudit) return;
+            _bot.Print("SHADOW SUMMARY (fills at signal price, no costs, stop-first on ambiguous bars, initial target only)");
+            _bot.Print("SHADOWSUM,group,setups,filled,noFill,wins,losses,timeExits,winRate%,totalR,avgR");
+            foreach (var kv in _byGroup)
+            {
+                var st = kv.Value;
+                double wr = st.Fills > 0 ? 100.0 * st.Wins / st.Fills : 0;
+                double avg = st.Fills > 0 ? st.SumR / st.Fills : 0;
+                _bot.Print(string.Format(CultureInfo.InvariantCulture, "SHADOWSUM,{0},{1},{2},{3},{4},{5},{6},{7:F1},{8:F2},{9:F2}",
+                    kv.Key, st.N, st.Fills, st.NoFill, st.Wins, st.Losses, st.Timed, wr, st.SumR, avg));
+            }
+            if (_open.Count > 0) _bot.Print(string.Format(CultureInfo.InvariantCulture, "SHADOW: {0} setup(s) still open at stop (not counted).", _open.Count));
         }
     }
 
