@@ -169,8 +169,10 @@ def test_legacy_apex_does_not_convert_without_authorisation(monkeypatch):
     import asyncio
     import importlib.util
     import pathlib
-    spec = importlib.util.spec_from_file_location("apex_legacy",
-                                                  pathlib.Path(__file__).parents[1] / "bots/kraken/legacy/apex_v30.py")
+    legacy = pathlib.Path(__file__).parents[1] / "bots/kraken/legacy/apex_v30.py"
+    if not legacy.exists():
+        pytest.skip("legacy APEX file not part of this checkout")
+    spec = importlib.util.spec_from_file_location("apex_legacy", legacy)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     calls = []
