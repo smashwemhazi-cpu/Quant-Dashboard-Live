@@ -310,6 +310,9 @@ namespace cAlgo.Robots
         [Parameter("Min Sweep Penetration Pips", DefaultValue = 1.0, MinValue = 0, Group = "Strategy: Asian Sweep")]
         public double AsrMinPenPips { get; set; }
 
+        [Parameter("Max Bars Breach -> Reclaim (0 = same bar)", DefaultValue = 2, MinValue = 0, MaxValue = 6, Group = "Strategy: Asian Sweep")]
+        public int AsrMaxReclaimBars { get; set; }
+
         [Parameter("Max Bars Sweep -> MSS", DefaultValue = 4, MinValue = 1, MaxValue = 20, Group = "Strategy: Asian Sweep")]
         public int AsrMaxBarsToMss { get; set; }
 
@@ -325,7 +328,10 @@ namespace cAlgo.Robots
         [Parameter("Use Volume Surge Filter", DefaultValue = true, Group = "Strategy: Asian Sweep")]
         public bool AsrUseVolume { get; set; }
 
-        [Parameter("Volume MA Period", DefaultValue = 20, MinValue = 2, Group = "Strategy: Asian Sweep")]
+        [Parameter("Volume Baseline", DefaultValue = AsrVolumeBaseline.SameTimeOfDay, Group = "Strategy: Asian Sweep")]
+        public AsrVolumeBaseline AsrVolumeBase { get; set; }
+
+        [Parameter("Volume Lookback (days or bars)", DefaultValue = 20, MinValue = 2, Group = "Strategy: Asian Sweep")]
         public int AsrVolumePeriod { get; set; }
 
         [Parameter("Volume Surge Multiplier", DefaultValue = 1.3, MinValue = 1.0, Step = 0.1, Group = "Strategy: Asian Sweep")]
@@ -840,6 +846,7 @@ namespace cAlgo.Robots
     // <SIGNAL-ENGINE>
     public enum AsrEntryMode { Market, LimitRetrace }
     public enum AsrTargetMode { OppositeRange, FixedR }
+    public enum AsrVolumeBaseline { SameTimeOfDay, RollingBars }
 
     public class SignalEngine
     {
@@ -855,7 +862,10 @@ namespace cAlgo.Robots
         private DateTime _session = DateTime.MinValue;
         private bool _rangeValid;
         private double _asiaHigh, _asiaLow;
-        private bool _highSpent, _lowSpent;     // level already traded through (one attempt per side)
+        private bool _highSpent, _lowSpent;     // side already used today (one attempt per side)
+        private int _lowBreachIdx = -1, _highBreachIdx = -1;   // first bar beyond the level
+        private double _lowBreachExt, _highBreachExt;          // most extreme price since breach
+        private bool _lowBreachVol, _highBreachVol;            // any breach bar had a volume surge
         private Setup _setup = Setup.None;
         private int _sweepIndex;
         private double _sweepExtreme;           // structural stop anchor
@@ -876,7 +886,7 @@ namespace cAlgo.Robots
         {
             var list = new List<TradeIntent>();
             var bars = _bot.Bars;
-            if (bars.Count < Math.Max(_bot.AsrVolumePeriod, _bot.AsrSwingLookback) + 10) return list;
+            if (bars.Count < _bot.AsrSwingLookback + 30) return list;
 
             DateTime now = _bot.Server.Time;
             DateTime start = _ctx.Session.SessionStartUtc(now);
@@ -922,19 +932,51 @@ namespace cAlgo.Robots
             double mid = l + range / 2.0;
             double pen = _bot.AsrMinPenPips * pip;
 
-            // Bullish: sweep Asian low, close back inside the range and in the upper half.
-            if (!_lowSpent && l < _asiaLow)
+            // Bullish: breach of the Asian low, reclaimed (close back above it) within N bars.
+            if (!_lowSpent && (_lowBreachIdx >= 0 || l < _asiaLow))
             {
-                _lowSpent = true;   // whatever happens, the low is no longer fresh liquidity
-                if (l <= _asiaLow - pen && c > _asiaLow && c > mid && VolumeOk(i) && BiasAllows(true))
-                    Arm(Setup.Bull, i, l, MssLevel(true, i, h));
+                if (_lowBreachIdx < 0) { _lowBreachIdx = i; _lowBreachExt = l; _lowBreachVol = false; }
+                _lowBreachExt = Math.Min(_lowBreachExt, l);
+                _lowBreachVol |= VolumeOk(i);
+
+                if (c > _asiaLow)
+                {
+                    _lowSpent = true;
+                    bool deepEnough = _lowBreachExt <= _asiaLow - pen;
+                    if (deepEnough && c > mid && (_lowBreachVol || !_bot.AsrUseVolume) && BiasAllows(true))
+                        Arm(Setup.Bull, i, _lowBreachExt, MssLevel(true, _lowBreachIdx, HighestHigh(_lowBreachIdx, i)));
+                    else
+                        _bot.Log("ASR: low reclaimed but rejected (depth {0}, upper-half close {1}, volume {2}, bias {3}).",
+                            deepEnough, c > mid, _lowBreachVol || !_bot.AsrUseVolume, BiasAllows(true));
+                }
+                else if (i - _lowBreachIdx >= _bot.AsrMaxReclaimBars)
+                {
+                    _lowSpent = true;
+                    _bot.Log("ASR: Asian low accepted (no reclaim in {0} bars) - treated as breakout, side dropped.", _bot.AsrMaxReclaimBars + 1);
+                }
             }
-            // Bearish: sweep Asian high, close back inside the range and in the lower half.
-            if (_setup == Setup.None && !_highSpent && h > _asiaHigh)
+            // Bearish: breach of the Asian high, reclaimed (close back below it) within N bars.
+            if (_setup == Setup.None && !_highSpent && (_highBreachIdx >= 0 || h > _asiaHigh))
             {
-                _highSpent = true;
-                if (h >= _asiaHigh + pen && c < _asiaHigh && c < mid && VolumeOk(i) && BiasAllows(false))
-                    Arm(Setup.Bear, i, h, MssLevel(false, i, l));
+                if (_highBreachIdx < 0) { _highBreachIdx = i; _highBreachExt = h; _highBreachVol = false; }
+                _highBreachExt = Math.Max(_highBreachExt, h);
+                _highBreachVol |= VolumeOk(i);
+
+                if (c < _asiaHigh)
+                {
+                    _highSpent = true;
+                    bool deepEnough = _highBreachExt >= _asiaHigh + pen;
+                    if (deepEnough && c < mid && (_highBreachVol || !_bot.AsrUseVolume) && BiasAllows(false))
+                        Arm(Setup.Bear, i, _highBreachExt, MssLevel(false, _highBreachIdx, LowestLow(_highBreachIdx, i)));
+                    else
+                        _bot.Log("ASR: high reclaimed but rejected (depth {0}, lower-half close {1}, volume {2}, bias {3}).",
+                            deepEnough, c < mid, _highBreachVol || !_bot.AsrUseVolume, BiasAllows(false));
+                }
+                else if (i - _highBreachIdx >= _bot.AsrMaxReclaimBars)
+                {
+                    _highSpent = true;
+                    _bot.Log("ASR: Asian high accepted (no reclaim in {0} bars) - treated as breakout, side dropped.", _bot.AsrMaxReclaimBars + 1);
+                }
             }
             return list;
         }
@@ -944,6 +986,7 @@ namespace cAlgo.Robots
             _session = start;
             _setup = Setup.None;
             _highSpent = _lowSpent = false;
+            _lowBreachIdx = _highBreachIdx = -1;
             _rangeValid = false;
 
             var bars = _bot.Bars;
@@ -1007,15 +1050,15 @@ namespace cAlgo.Robots
             _bot.Log("ASR: {0} sweep at {1:F5}, MSS level {2:F5}.", s == Setup.Bull ? "Bull" : "Bear", extreme, mss);
         }
 
-        // MSS level = last confirmed swing formed before the sweep bar; fallback = sweep bar's
-        // opposite extreme. For a bull setup we take the higher of the two, so a close through it
-        // breaks both the internal structure and the sweep candle.
-        private double MssLevel(bool bull, int sweepIdx, double sweepBarOpposite)
+        // MSS level = last confirmed swing formed before the breach; fallback = the opposite
+        // extreme of the sweep leg (breach..reclaim bars). For a bull setup we take the higher
+        // of the two, so a close through it breaks both the internal structure and the sweep leg.
+        private double MssLevel(bool bull, int breachIdx, double sweepBarOpposite)
         {
             double p; int idx;
             bool found = bull
-                ? _ctx.LastSwingHigh(_bot.AsrSwingStrength, _bot.AsrSwingLookback, out p, out idx, sweepIdx - 1)
-                : _ctx.LastSwingLow(_bot.AsrSwingStrength, _bot.AsrSwingLookback, out p, out idx, sweepIdx - 1);
+                ? _ctx.LastSwingHigh(_bot.AsrSwingStrength, _bot.AsrSwingLookback, out p, out idx, breachIdx - 1)
+                : _ctx.LastSwingLow(_bot.AsrSwingStrength, _bot.AsrSwingLookback, out p, out idx, breachIdx - 1);
             if (!found) return sweepBarOpposite;
             return bull ? Math.Max(p, sweepBarOpposite) : Math.Min(p, sweepBarOpposite);
         }
@@ -1027,18 +1070,48 @@ namespace cAlgo.Robots
             return atr > 0 && Math.Abs(c - o) >= _bot.AsrMinDisplacementAtr * atr;
         }
 
-        // Tick volume of the sweep bar vs the mean of the N bars before it.
-        // NOTE: FX tick volume is a broker-side activity proxy, not exchange volume.
+        // Tick volume of bar i vs a baseline. NOTE: FX tick volume is a broker-side activity
+        // proxy, not exchange volume.
+        //   SameTimeOfDay: mean volume of the bars that opened at the same clock time on the
+        //                  previous N trading days (removes the "London open is always busy" bias).
+        //   RollingBars:   mean of the N bars before bar i (the original behaviour).
         private bool VolumeOk(int i)
         {
             if (!_bot.AsrUseVolume) return true;
             var v = _bot.Bars.TickVolumes;
+            var t = _bot.Bars.OpenTimes;
             int n = _bot.AsrVolumePeriod;
-            if (i - n < 0) return false;
-            double sum = 0;
-            for (int k = i - n; k < i; k++) sum += v[k];
-            double avg = sum / n;
+            double sum = 0; int cnt = 0;
+
+            if (_bot.AsrVolumeBase == AsrVolumeBaseline.RollingBars)
+            {
+                for (int k = i - 1; k >= 0 && cnt < n; k--) { sum += v[k]; cnt++; }
+            }
+            else
+            {
+                TimeSpan tod = t[i].TimeOfDay;
+                DateTime oldest = t[i].AddDays(-(n * 1.5 + 4));   // slack for weekends/holidays
+                for (int k = i - 1; k >= 0 && cnt < n && t[k] >= oldest; k--)
+                    if (t[k].TimeOfDay == tod) { sum += v[k]; cnt++; }
+                if (cnt < Math.Min(5, n)) return true;   // not enough history yet: do not block
+            }
+            if (cnt == 0) return false;
+            double avg = sum / cnt;
             return avg > 0 && v[i] >= avg * _bot.AsrVolumeMult;
+        }
+
+        private double HighestHigh(int from, int to)
+        {
+            double m = double.MinValue;
+            for (int k = from; k <= to; k++) m = Math.Max(m, _bot.Bars.HighPrices[k]);
+            return m;
+        }
+
+        private double LowestLow(int from, int to)
+        {
+            double m = double.MaxValue;
+            for (int k = from; k <= to; k++) m = Math.Min(m, _bot.Bars.LowPrices[k]);
+            return m;
         }
 
         // H4 bias from the last CLOSED H4 bar: only buy when price is above the H4 EMA, sell below.
