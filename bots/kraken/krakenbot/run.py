@@ -84,8 +84,8 @@ def main(argv=None) -> int:
         "krakenbot_paper_state.json" if args.command == "paper" else "krakenbot_state.json")
 
     paper = args.command == "paper"
-    if paper:
-        cfg = dc.replace(cfg, harvest_state_file="krakenbot_paper_harvest_state.json")
+    if paper:  # simulated fills are instant: no need to wait 90 s per post-only order
+        cfg = dc.replace(cfg, harvest_state_file="krakenbot_paper_harvest_state.json", post_only_wait_s=1)
 
     if args.command == "rebuild":
         from .portfolio import execute_rebuild, plan_rebuild
@@ -98,8 +98,9 @@ def main(argv=None) -> int:
         if not execute:
             print("\nPlan only. Add --validate to have Kraken check it, or --i-understand-the-risk to execute.")
             return 0
-        if mode == "live" and os.path.exists(state_file):
-            raise SystemExit(f"{state_file} already exists: the account is already managed. Move it away to rebuild.")
+        for existing in (state_file, cfg.harvest_state_file):
+            if mode == "live" and os.path.exists(existing):
+                raise SystemExit(f"{existing} already exists: the account is already managed. Move it away to rebuild.")
         if not 0 <= args.harvest_share <= 0.9:
             raise SystemExit("--harvest-share must be between 0 and 0.9")
         _print(execute_rebuild(broker, cfg, plan, state_file, args.harvest_share))
@@ -124,22 +125,30 @@ def main(argv=None) -> int:
         print("Refusing to trade live without --i-understand-the-risk. Run `rebuild --validate` first.", file=sys.stderr)
         return 2
     broker = PaperBroker(cfg, KrakenBroker(cfg)) if cfg.mode == "paper" else KrakenBroker(cfg, *_keys())
-    out = {}
+    out, failed = {}, False
     harvest_exists = os.path.exists(cfg.harvest_state_file) or bool(args.harvest_capital)
     hv = HarvestEngine.load(cfg, broker, args.harvest_capital) if harvest_exists else None
+    mom = None
     if os.path.exists(cfg.state_file) or args.capital:
         mom = Engine(cfg, broker, State.load(cfg.state_file, cfg, args.capital), cfg.state_file)
         if hv:
             mom.reserved = {a: h.qty for a, h in hv.st.holdings.items()}
-        out["momentum"] = mom.run_once()
-        if hv:
-            hv.reserved = {a: h.qty for a, h in mom.st.holdings.items()}
-    if hv:
-        out["harvest"] = hv.run_once()
+    # Each engine runs on its own: a crash in one must not stop the other. Stops already on Kraken stay put.
+    for name, eng in (("momentum", mom), ("harvest", hv)):
+        if eng is None:
+            continue
+        if name == "harvest" and mom is not None:
+            eng.reserved = {a: h.qty for a, h in mom.st.holdings.items()}
+        try:
+            out[name] = eng.run_once()
+        except Exception as e:  # noqa: BLE001 - logged loudly, reported via the exit code
+            logging.getLogger("krakenbot").exception("%s engine failed", name)
+            out[name] = {"status": "FAILED", "error": repr(e)}
+            failed = True
     if not out:
         raise SystemExit("Nothing to run: start with `rebuild`, or pass --capital / --harvest-capital.")
     _print(out)
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

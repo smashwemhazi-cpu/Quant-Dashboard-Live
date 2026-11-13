@@ -28,6 +28,7 @@ class Holding:
     high_close: float = 0.0
     stop: float = 0.0
     stop_order_id: str | None = None
+    sidelined: bool = False      # a disaster stop fired: harvest keeps this asset in EUR until its trend turns up
 
     def to_dict(self) -> dict:
         return asdict(self)

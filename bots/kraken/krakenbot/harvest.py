@@ -27,12 +27,21 @@ def harvest_cfg(cfg: Config) -> Config:
     return dc.replace(cfg, stop_sigma=cfg.harvest_stop_sigma, state_file=cfg.harvest_state_file)
 
 
-def targets(cfg: Config) -> dict[str, float]:
-    return dict(zip(cfg.harvest_assets, cfg.harvest_targets))
+def targets(cfg: Config, sidelined: set[str] = frozenset()) -> dict[str, float]:
+    """Target weights; an asset whose disaster stop fired stays in EUR (weight 0) until its trend turns up."""
+    return {a: (0.0 if a in sidelined else w) for a, w in zip(cfg.harvest_assets, cfg.harvest_targets)}
 
 
-def drift(weights: dict[str, float], cfg: Config) -> float:
-    return max(abs(weights.get(a, 0.0) - w) for a, w in targets(cfg).items())
+def update_sidelined(hold: dict, trend: dict[str, float]) -> set[str]:
+    """Clear an asset's sideline once its trend vote is positive again; return the assets still sidelined."""
+    for a, h in hold.items():
+        if h.sidelined and trend.get(a, -1.0) > 0:
+            h.sidelined = False
+    return {a for a, h in hold.items() if h.sidelined}
+
+
+def drift(weights: dict[str, float], cfg: Config, sidelined: set[str] = frozenset()) -> float:
+    return max(abs(weights.get(a, 0.0) - w) for a, w in targets(cfg, sidelined).items())
 
 
 class HarvestEngine(Engine):
@@ -51,9 +60,15 @@ class HarvestEngine(Engine):
         self.run_tag = "harvest:" + bar.date().isoformat()
         self.vol = {a: float(f.loc[bar, "vol"]) for a, f in feats.items() if bar in f.index}
         bal = self.b.balances()
+        self.check_stops()          # first: book stop fills, THEN reconcile
         self.reconcile(bal)
-        self.check_stops()
-        mids = {a: self._mid(self._sym(a))[2] for a in cfg.harvest_assets}
+        try:
+            mids = {a: self._mid(self._sym(a))[2] for a in cfg.harvest_assets}
+        except Exception as e:  # noqa: BLE001 - bad/stale quote: do nothing today, stops stay on Kraken
+            self._commit()
+            return {"status": "skipped", "reason": f"no usable quote: {e}"}
+        trend = {a: float(f.loc[bar, "trend"]) for a, f in feats.items() if bar in f.index}
+        side = update_sidelined(st.holdings, trend)
         equity = st.cash + sum(h.qty * mids[a] for a, h in st.holdings.items())
         weights = {a: st.holdings[a].qty * mids[a] / equity for a in cfg.harvest_assets} if equity > 0 else {}
         if st.guard.update(equity, cfg):
@@ -64,7 +79,7 @@ class HarvestEngine(Engine):
             self._commit()
             return {"status": "already-done", "equity": equity, "weights": weights}
         else:
-            d = drift(weights, cfg)
+            d = drift(weights, cfg, side)
             if not (force_rebalance or not st.last_rebalance or d > cfg.harvest_band):
                 for a in st.holdings:
                     self.protect(a)
@@ -73,7 +88,7 @@ class HarvestEngine(Engine):
                 self._commit()
                 return {"status": "hold", "equity": equity, "weights": weights, "max_drift": d,
                         "rebalances_when_drift_exceeds": cfg.harvest_band}
-            tgt = targets(cfg)
+            tgt = targets(cfg, side)
             reason = "initial" if not st.last_rebalance else ("forced" if force_rebalance else f"drift {d:.1%}")
             for a, h in st.holdings.items():
                 ratchet(h, mids[a], self.vol.get(a, float("nan")), cfg)
@@ -90,7 +105,8 @@ class HarvestEngine(Engine):
         equity = st.cash + sum(h.qty * mids[a] for a, h in st.holdings.items())
         self._log(equity, {a: st.holdings[a].qty * mids[a] / equity for a in cfg.harvest_assets} if equity else {}, tgt)
         self._commit()
-        return {"status": "rebalanced", "reason": reason, "equity": equity, "orders": len(plans), "targets": tgt}
+        return {"status": "rebalanced", "reason": reason, "equity": equity, "orders": len(plans), "targets": tgt,
+                "sidelined_after_stop": sorted(side) if reason != "halt" else []}
 
     def _log(self, equity, weights, tgt) -> None:
         self.st.history.append({"bar": self.st.last_bar, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -144,6 +160,7 @@ def backtest(data: dict[str, pd.DataFrame], cfg: Config, start_equity: float = 1
                                    fee=h.qty * fill * hc.fee_rate, why="stop"))
                 stops += 1
                 on_sell(h, h.qty)
+                h.sidelined = True
         closes = {a: float(px[a]["close"]) for a in assets}
         equity = cash + sum(hold[a].qty * closes[a] for a in assets)
         curve.append((t, equity))
@@ -154,10 +171,11 @@ def backtest(data: dict[str, pd.DataFrame], cfg: Config, start_equity: float = 1
             continue
         if not bool(feat[assets[0]].loc[t, "ready"]) and last_reb is None:
             continue
-        if last_reb is None or drift(w, hc) > hc.harvest_band:
+        side = update_sidelined(hold, {a: float(feat[a].loc[t, "trend"]) for a in assets})
+        if last_reb is None or drift(w, hc, side) > hc.harvest_band:
             for a in assets:
                 ratchet(hold[a], closes[a], float(feat[a].loc[t, "vol"]), hc)
-            pending, last_reb = targets(hc), t
+            pending, last_reb = targets(hc, side), t
     eq = pd.Series(dict(curve)).sort_index()
     tr = pd.DataFrame(trades, columns=["ts", "asset", "side", "qty", "px", "notional", "fee", "why"])
     return Result(eq, tr, fees, stops, pd.DataFrame(wlog, index=eq.index), guard.halted or None)

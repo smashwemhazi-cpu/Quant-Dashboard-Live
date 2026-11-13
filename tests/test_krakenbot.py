@@ -338,9 +338,8 @@ def test_coin_fee_reduces_ledger_and_dust_and_manual_sale(tmp_path):
     eng.run_once()
     held = [k for k, h in eng.st.holdings.items() if h.qty > 0]
     a = held[0]
-    buys = {client_id(eng.run_tag, f"{a}/EUR", "buy", r, str(i)) for r in ("rotate in", "top up")
-            for i in range(cfg.post_only_attempts + 1)}
-    filled = sum(o["filled"] for cid, o in broker.orders.items() if cid in buys)
+    filled = sum(o["filled"] for o in broker.orders.values()
+                 if o.get("symbol") == f"{a}/EUR" and o.get("side") == "buy" and not o.get("stopPrice"))
     assert eng.st.holdings[a].qty == pytest.approx(filled * (1 - 0.0025))
 
     def too_small(*_a, **_k):
@@ -403,7 +402,7 @@ def test_rebuild_execute_sells_junk_adopts_and_rebalances(tmp_path):
            "USDC": {"free": 150.0, "total": 150.0}}
     cfg = dc.replace(CFG, state_file=str(tmp_path / "s.json"), mode="live")
     b = Paper(cfg, FakeMarket(data), balances=bal, slippage=0.0)
-    out = execute_rebuild(b, cfg, plan_rebuild(b, cfg), cfg.state_file)
+    out = execute_rebuild(b, cfg, plan_rebuild(b, cfg), cfg.state_file, sleep=lambda s: None)
     st = json.load(open(cfg.state_file))
     assert ("limit", "JUNK/EUR", "sell") in b.log and "JUNK" not in st["holdings"]
     assert ("limit", "CCC/EUR", "sell") in b.log and st["holdings"]["CCC"]["qty"] == 0   # adopted, then rotated out
@@ -566,7 +565,7 @@ def test_rebuild_splits_capital_between_momentum_and_harvest(tmp_path):
     bal = {"EUR": {"free": 1000.0, "total": 1000.0}}
     cfg = dc.replace(HCFG, state_file=str(tmp_path / "s.json"), harvest_state_file=str(tmp_path / "h.json"), mode="live")
     b = Paper(cfg, FakeMarket(data), balances=bal, slippage=0.0)
-    out = execute_rebuild(b, cfg, plan_rebuild(b, cfg), cfg.state_file, harvest_share=0.5)
+    out = execute_rebuild(b, cfg, plan_rebuild(b, cfg), cfg.state_file, harvest_share=0.5, sleep=lambda s: None)
     assert out["first_rebalance"]["harvest"]["capital"] == pytest.approx(500.0)
     mom, har = json.load(open(cfg.state_file)), json.load(open(cfg.harvest_state_file))
     spent_m = 500.0 - mom["cash"]
@@ -596,3 +595,94 @@ def test_float_tuple_env_override():
     assert c.harvest_targets == (0.25, 0.25)
     with pytest.raises(ValueError):
         load_config(env={"KRAKENBOT_HARVEST_TARGETS": "0.7,0.7"})
+
+
+# =============================================================== regressions for bugs found in review
+class MakerMisses(Paper):
+    """Post-only orders never fill (book keeps moving away); crossing IOC orders fill. Like a fast market."""
+    def place_limit(self, symbol, side, qty, price, post_only, cid):
+        o = super().place_limit(symbol, side, qty, price, post_only, cid)
+        if post_only:
+            self.orders[cid].update(filled=0.0, status="canceled")
+        return o
+
+
+def test_ioc_fill_on_final_attempt_is_booked_and_protected(tmp_path):
+    cfg = dc.replace(CFG, state_file=str(tmp_path / "s.json"))
+    broker = MakerMisses(cfg, FakeMarket(market()), slippage=0.0)
+    eng = Engine(cfg, broker, State.load(cfg.state_file, cfg, 1000.0), cfg.state_file, sleep=lambda s: None)
+    eng.run_once()
+    held = {a: h for a, h in eng.st.holdings.items() if h.qty > 0}
+    assert held, "IOC fills were not booked (Kraken's AddOrder reply has no fill info)"
+    for a, h in held.items():
+        assert h.stop_order_id and broker.orders[h.stop_order_id]["status"] == "open"
+    spent = sum(h.qty * h.entry for h in held.values())
+    assert eng.st.cash == pytest.approx(1000.0 - spent - spent * cfg.fee_rate, rel=1e-6)
+
+
+def test_stop_filled_while_offline_credits_cash_even_though_coins_are_gone(tmp_path):
+    data = market()
+    cfg = dc.replace(CFG, state_file=str(tmp_path / "s.json"))
+    broker = Paper(cfg, FakeMarket(data), slippage=0.0)
+    eng = Engine(cfg, broker, State.load(cfg.state_file, cfg, 1000.0), cfg.state_file, sleep=lambda s: None)
+    eng.run_once()
+    a = next(k for k, h in eng.st.holdings.items() if h.qty > 0)
+    stop, qty, cash = eng.st.holdings[a].stop, eng.st.holdings[a].qty, eng.st.cash
+    next_day(data, lows={a: (stop * 0.95, stop * 0.97)})
+    broker._bal = {k: {"total": (0.0 if k == a else h.qty), "free": 0.0} for k, h in eng.st.holdings.items()}
+    eng2 = Engine(cfg, broker, State.load(cfg.state_file, cfg, None), cfg.state_file, sleep=lambda s: None)
+    eng2.run_once()
+    assert eng2.st.holdings[a].qty == 0
+    assert eng2.st.cash >= cash + qty * stop * 0.9          # the sale proceeds were booked, not lost
+    assert eng2.st.holdings[a].sidelined
+
+
+class StuckOrder(Paper):
+    """Orders rest and cannot be cancelled (exchange hiccup)."""
+    def place_limit(self, symbol, side, qty, price, post_only, cid):
+        o = super().place_limit(symbol, side, qty, price, post_only, cid)
+        self.orders[cid].update(filled=0.0, status="open")
+        return o
+
+    def cancel(self, order_id, symbol):
+        pass
+
+
+def test_order_stuck_open_never_triggers_a_second_order(tmp_path):
+    cfg = dc.replace(CFG, state_file=str(tmp_path / "s.json"))
+    broker = StuckOrder(cfg, FakeMarket(market()), slippage=0.0)
+    eng = Engine(cfg, broker, State.load(cfg.state_file, cfg, 1000.0), cfg.state_file, sleep=lambda s: None)
+    eng.run_once()
+    per_symbol = {}
+    for kind, sym, side in broker.log:
+        if kind == "limit":
+            per_symbol[sym] = per_symbol.get(sym, 0) + 1
+    assert per_symbol and all(n == 1 for n in per_symbol.values()), per_symbol
+
+
+def test_harvest_does_not_rebuy_after_a_stop_until_trend_turns_up(tmp_path):
+    data = market()
+    cfg, broker, eng = _harvest(tmp_path, data)
+    eng.run_once()
+    stop = eng.st.holdings["AAA"].stop
+    for _ in range(3):                                         # crash through the stop, then keep falling
+        c = data["AAA"][-1][4]
+        next_day(data, lows={"AAA": (min(c, stop) * 0.9, min(c, stop) * 0.92)})
+        e = hv.HarvestEngine.load(cfg, broker, None, sleep=lambda s: None)
+        r = e.run_once()
+    assert e.st.holdings["AAA"].qty == 0 and e.st.holdings["AAA"].sidelined
+    assert "AAA" in r.get("sidelined_after_stop", ["AAA"])
+    for _ in range(200):                                       # strong recovery -> trend vote turns positive
+        c = data["AAA"][-1][4]
+        next_day(data, lows={"AAA": (c, c * 1.02)})
+    r = hv.HarvestEngine.load(cfg, broker, None, sleep=lambda s: None).run_once()
+    st = json.load(open(cfg.harvest_state_file))
+    assert not st["holdings"]["AAA"]["sidelined"] and st["holdings"]["AAA"]["qty"] > 0
+
+
+def test_harvest_skips_cleanly_on_a_bad_quote(tmp_path):
+    cfg, broker, eng = _harvest(tmp_path, market())
+    eng.run_once()
+    broker.md.top_of_book = lambda symbol: (100.0, 120.0, time.time() * 1000)   # 18% spread: unusable
+    r = hv.HarvestEngine.load(cfg, broker, None, sleep=lambda s: None).run_once()
+    assert r["status"] == "skipped"

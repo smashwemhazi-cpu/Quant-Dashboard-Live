@@ -115,6 +115,7 @@ class Engine:
                 log.warning("%s DISASTER STOP FILLED: %.8f @ %.4f (stop %.4f)", a, f.qty, f.avg_px, h.stop)
                 h.stop_order_id = None
                 self._book_sell(a, f)
+                h.sidelined = True
             elif status in {"canceled", "expired", "rejected"}:
                 log.error("%s stop %s is %s; it will be re-placed", a, h.stop_order_id, status)
                 h.stop_order_id = None
@@ -146,6 +147,7 @@ class Engine:
         if mid <= h.stop:
             log.warning("%s price %.4f already through stop %.4f: selling now", a, mid, h.stop)
             self.execute(OrderPlan(a, "sell", h.qty, h.qty * mid, "price through stop"))
+            h.sidelined = True
             if h.qty > 0:
                 log.critical("%s: exit through stop incomplete, %.8f UNPROTECTED - check Kraken now", a, h.qty)
             return
@@ -194,7 +196,7 @@ class Engine:
             if plan.side == "buy" and remaining * mid < self.cfg.min_order_quote:
                 break
             price, post_only = limit_price(plan.side, bid, ask, mid, attempt, self.cfg)
-            cid = client_id(self.run_tag, sym, plan.side, plan.reason, str(attempt))
+            cid = client_id(self.run_tag, sym, plan.side, plan.reason, str(attempt), f"{remaining:.8f}")
             try:
                 o = self.b.place_limit(sym, plan.side, remaining, price, post_only, cid)
             except BrokerError as e:
@@ -206,13 +208,23 @@ class Engine:
             if self.cfg.mode == "validate":
                 log.info("VALIDATED (not placed) %s %s %.8f @ %.6f", plan.side, sym, remaining, price)
                 break
-            if o.get("status") != "closed" and post_only:
-                self.sleep(self.cfg.post_only_wait_s)
-                o = self.b.fetch(o["id"], sym)
+            oid = o.get("id")
+            if not oid:
+                log.critical("%s %s: Kraken returned no order id; stopping this order to stay safe", plan.side, sym)
+                break
+            # Kraken's AddOrder reply has NO fill information (status/filled are empty), for IOC orders too.
+            # Always read the order back; post-only orders get time to rest first.
+            if o.get("status") not in {"closed", "canceled", "expired", "rejected"}:
+                self.sleep(self.cfg.post_only_wait_s if post_only else 2)
+                o = self.b.fetch(oid, sym)
                 if o.get("status") == "open":
-                    self.b.cancel(o["id"], sym)
-                    o = self.b.fetch(o["id"], sym)
+                    self.b.cancel(oid, sym)
+                    o = self.b.fetch(oid, sym)
             f = self.b.to_fill(o, sym, cid)
+            if o.get("status") == "open":
+                log.critical("%s %s order %s still open after cancel; not sending another (no double orders)",
+                             plan.side, sym, oid)
+                remaining = 0.0
             if f.qty > 0:
                 if plan.side == "buy":
                     self.st.cash -= f.qty * f.avg_px + f.fee_quote
@@ -239,8 +251,8 @@ class Engine:
         self.vol = {a: float(r["vol"]) for a, r in rows.items()}
 
         bal = self.b.balances()
+        self.check_stops()          # first: book stop fills, THEN reconcile (else the proceeds would be lost)
         self.reconcile(bal)
-        self.check_stops()
 
         mids = {}
         for a in cfg.assets:

@@ -54,7 +54,38 @@ for taking the other side.
 
 ---
 
-## 2. Your account: what happened and how to rebuild it
+## 1b. Code review (Nov 13): bugs found and fixed, each now with a regression test
+
+| # | Bug | What it would have done live | Fix |
+|---|---|---|---|
+| 1 | Kraken's AddOrder reply has **no fill information**; only post-only orders were read back | Coins bought on the final IOC attempt: never recorded and **never given a stop**. Coins sold that way: EUR never credited, so equity shrank on paper and could trip the kill switch | Every order is read back from Kraken before it is booked |
+| 2 | Reconciliation ran **before** booking stops that filled offline | It wiped the stop's order id, so the sale proceeds were **lost from the ledger** | Stop fills are booked first, then reconciliation runs |
+| 3 | An order stuck open after a cancel was followed by a new order | Possible double orders | It stops and logs CRITICAL; never sends a second order |
+| 4 | The harvest engine rebought an asset the day after its disaster stop fired (happened on 5→6 June 2026 in the backtest) | Sold low, bought straight back: the stop was pointless | The asset stays in EUR until its trend turns up. Cost in this sample: +83% instead of +88%, the price of protection in a real collapse |
+| 5 | A bad quote crashed the harvest engine; a crash in one engine stopped the other | A missed day for both engines | Harvest skips cleanly; each engine runs isolated; the exit code is non-zero on failure |
+| 6 | Client order ids did not include the quantity | A re-run after a partial crash could reuse an id for a different order | The quantity is part of the id |
+| 7 | `rebuild` could run over an existing harvest ledger | EUR counted twice | Refuses if either ledger already exists |
+
+The paper broker now behaves like Kraken (no fill info until the order is read back), so these paths are exercised
+by every test.
+
+## 1c. Trading 2026 (to 12 Nov): what worked and what did not
+
+| | 2026 YTD | Max DD |
+|---|---|---|
+| Momentum engine (36% of days fully in EUR, 35% invested on average) | **+2.7%** | −12.6% |
+| Harvest engine | −10.1% | −21.8% |
+| 50/50 blend | −3.7% | −14.5% |
+| Hold BTC / hold gold | −18.5% / −10.4% | −39.6% / −29.8% |
+| Short-BTC "bear sleeve" on perps | +4.6% | −12.0% |
+
+The bear sleeve made money in 2025 and 2026, but lost 20% from 2022 on, and **all 24 neighbouring settings lost
+money**. Adding it because it worked this year would be curve-fitting to 2026, so it is not built. In a year when
+BTC and gold both fell, the momentum engine did its job: it stayed mostly in EUR, made small gains, and fired no
+stops (its 14 exits were weekly rotations). The harvest engine is the part that bleeds in a year like this, by
+design. It is the engine that earns in sideways-to-up years such as 2025 (+20%).
+
+
 
 **October in numbers.**
 - 242 fills: about 9× the account traded in 10 days.

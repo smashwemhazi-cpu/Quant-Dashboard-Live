@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 
 from .broker import BelowMinimum, BrokerError, assert_tradeable
 from .config import FIAT_AND_STABLES, Config
@@ -102,13 +103,14 @@ def plan_rebuild(broker, cfg: Config) -> dict:
             "after_rebuild_bot_manages_eur": total}
 
 
-def execute_rebuild(broker, cfg: Config, plan: dict, state_path: str, harvest_share: float = 0.0) -> dict:
+def execute_rebuild(broker, cfg: Config, plan: dict, state_path: str, harvest_share: float = 0.0,
+                    sleep=time.sleep) -> dict:
     """Sell non-strategy coins, adopt strategy coins, split the EUR between the momentum ledger and the harvest
     ledger (`harvest_share` of the whole investable value, funded from EUR), then rebalance both at once."""
     state = State(cash=plan["eur_cash"])
     for a in cfg.assets:
         state.holdings[a] = Holding()
-    eng = Engine(cfg, broker, state, state_path)
+    eng = Engine(cfg, broker, state, state_path, sleep=sleep)
     eng.run_tag = "rebuild"
     for it in plan["sell_to_eur"]:
         a = it["asset"]
@@ -133,10 +135,10 @@ def execute_rebuild(broker, cfg: Config, plan: dict, state_path: str, harvest_sh
         state.cash -= harvest_eur
     if cfg.mode != "validate":
         state.save(state_path)
-    mom = Engine(cfg, broker, state, state_path)
+    mom = Engine(cfg, broker, state, state_path, sleep=sleep)
     result = {"momentum": mom.run_once(force_rebalance=True)}
     if harvest_eur > 0:
-        hv = HarvestEngine.load(cfg, broker, harvest_eur)
+        hv = HarvestEngine.load(cfg, broker, harvest_eur, sleep=sleep)
         hv.reserved = {a: h.qty for a, h in mom.st.holdings.items()}
         result["harvest"] = hv.run_once(force_rebalance=True)
         result["harvest"]["capital"] = harvest_eur

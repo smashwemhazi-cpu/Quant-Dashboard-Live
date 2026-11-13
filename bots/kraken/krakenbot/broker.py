@@ -231,10 +231,12 @@ class PaperBroker:
         # Approximation: fills at once at the limit price plus slippage. Real post-only orders can miss;
         # the backtest and paper runs therefore overstate fill certainty slightly, never the price.
         px = price * (1 + self.slip if side == "buy" else 1 - self.slip)
-        o = {"id": cid, "clientOrderId": cid, "side": side, "amount": qty, "filled": qty, "average": px,
-             "status": "closed", "fee": {"cost": qty * px * self.cfg.fee_rate, "currency": symbol.split("/")[1]}}
+        o = {"id": cid, "clientOrderId": cid, "symbol": symbol, "side": side, "amount": qty, "filled": qty,
+             "average": px, "status": "closed",
+             "fee": {"cost": qty * px * self.cfg.fee_rate, "currency": symbol.split("/")[1]}}
         self.orders[cid] = o
-        return o
+        # like Kraken's AddOrder reply: an id, and NO status / fill information
+        return {"id": cid, "clientOrderId": cid, "status": None, "filled": None}
 
     def place_stop(self, symbol, qty, trigger, cid):
         assert_tradeable(symbol, self.cfg)
