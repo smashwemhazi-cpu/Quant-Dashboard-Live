@@ -1,0 +1,2942 @@
+// =====================================================================================
+//  cTrader cBot template v3 | STRATEGY: GBPUSD Session Liquidity - Asia / London / New York (sweep reversal + trend continuation, runner management), M5
+//
+//  PROTECTIVE LAYER (house rules, enforced in code):
+//    - 2% max risk per trade incl. commission + stop-slippage buffer
+//    - every trade sized to fit remaining daily/total drawdown headroom (account-wide,
+//      including pending orders)
+//    - 5% daily / 10% total kill-switch with safety buffer, persisted across restarts
+//    - session filter (time-zone aware), flat before weekend, news filter incl. open
+//      positions and pending orders
+//    - mandatory hard SL; slippage control on market (range) and breakout (stop-limit) orders
+//
+//  TRADING LAYER (v3):
+//    - TradeIntent contract: market, stop-limit and limit entries, structure stops,
+//      price targets, OCO groups, per-trade time stops
+//    - day limits (trades/day, consecutive losses/day, profit lock), losing-streak throttle
+//    - regime filter (ADX trend/range, ATR-percentile volatility gate), multi-timeframe access
+//    - partial take-profit, time exits, trade journal with MAE/MFE
+//
+//  Implement the strategy ONLY between the STRATEGY markers. Use scripts/assemble.py to
+//  splice a library strategy in. Not compiled by the generator: build in cTrader (Ctrl+B).
+//  Assumes a HEDGING account.
+// =====================================================================================
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Text.Json;
+using cAlgo.API;
+using cAlgo.API.Indicators;
+using cAlgo.API.Internals;
+
+namespace cAlgo.Robots
+{
+    public enum StopMode { AtrMultiple, FixedPips }
+    public enum DailyDdBasis { StartOfDayBalance, StartOfDayEquity }
+    public enum TotalDdMode { StaticFromStart, TrailingHighWaterBalance, TrailingHighWaterEquity }
+    public enum KillScope { ThisBotOnly, WholeAccount }
+    public enum NewsPositionAction { None, ClosePositions, BreakevenIfProfitable }
+    public enum OpenOutcome { Opened, Placed, RetryLater, Rejected }
+    public enum DrawdownState { Ok, DailyBreached, TotalBreached }
+    public enum EntryKind { Market, StopLimit, Limit }
+    public enum MarketRegime { Unknown, Trending, Neutral, Ranging }
+
+    // ---- The contract between a strategy and the bot ---------------------------------
+    public class TradeIntent
+    {
+        public TradeType Direction;
+        public EntryKind Kind = EntryKind.Market;
+        public double EntryPrice;             // required for StopLimit / Limit
+        public double? StopLossPrice;         // structure stop (preferred when the strategy has one)
+        public double? StopLossPips;          // explicit distance; else the bot's default stop
+        public double? TakeProfitPrice;       // price target (e.g. VWAP, opposite band)
+        public double? TakeProfitR;           // overrides the bot's Take Profit R
+        public DateTime? ExpiryUtc;           // pending-order expiry / market retry window
+        public string OcoGroup;               // siblings cancelled when one fills
+        public int? MaxBarsInTrade;           // overrides the bot's time stop
+        public string Tag = "";               // journal tag, e.g. "ORB-L"
+    }
+
+    // AccessRights.None is sufficient for Http and LocalStorage per current docs. If Http.Get
+    // throws on your cTrader version, change to AccessRights.FullAccess.
+    [Robot(AccessRights = AccessRights.None, TimeZone = TimeZones.UTC)]
+    public class GbpUsdSessionBot : Robot
+    {
+        // ---- House-rule hard caps (edit deliberately, never via parameters) ----
+        public const double HardMaxRiskPercent = 2.0;
+        public const double HardMaxDailyDdPercent = 5.0;
+        public const double HardMaxTotalDdPercent = 10.0;
+
+        // ================================ PARAMETERS =================================
+        [Parameter("Bot Label", DefaultValue = "GbpUsdSession", Group = "General")]
+        public string BotLabel { get; set; }
+
+        // ---- Risk ----
+        [Parameter("Risk % of Equity", DefaultValue = 0.5, MinValue = 0.05, MaxValue = 2.0, Step = 0.05, Group = "Risk")]
+        public double RiskPercent { get; set; }
+
+        [Parameter("Max Account Open Risk %", DefaultValue = 4.0, MinValue = 0.1, MaxValue = 10.0, Step = 0.5, Group = "Risk")]
+        public double MaxAccountOpenRiskPercent { get; set; }
+
+        [Parameter("Block If Account Has Orders/Positions Without SL", DefaultValue = true, Group = "Risk")]
+        public bool BlockIfUnprotectedPositions { get; set; }
+
+        [Parameter("Round-Turn Commission per 100k Units (acct ccy)", DefaultValue = 7.0, MinValue = 0, Group = "Risk")]
+        public double RoundTurnCommissionPer100k { get; set; }
+
+        [Parameter("Stop Slippage Buffer Pips", DefaultValue = 0.5, MinValue = 0, Group = "Risk")]
+        public double StopSlippageBufferPips { get; set; }
+
+        [Parameter("Default Stop Mode", DefaultValue = StopMode.AtrMultiple, Group = "Risk")]
+        public StopMode StopModeInput { get; set; }
+
+        [Parameter("ATR Period", DefaultValue = 14, MinValue = 2, Group = "Risk")]
+        public int AtrPeriod { get; set; }
+
+        [Parameter("SL ATR Multiple", DefaultValue = 1.5, MinValue = 0.1, Step = 0.1, Group = "Risk")]
+        public double SlAtrMultiple { get; set; }
+
+        [Parameter("SL Fixed Pips", DefaultValue = 20, MinValue = 1, Group = "Risk")]
+        public double SlFixedPips { get; set; }
+
+        [Parameter("Min SL Pips", DefaultValue = 5, MinValue = 0.5, Group = "Risk")]
+        public double MinStopPips { get; set; }
+
+        [Parameter("Max SL Pips (0 = off)", DefaultValue = 30, MinValue = 0, Group = "Risk")]
+        public double MaxStopPips { get; set; }
+
+        [Parameter("Take Profit R (0 = none)", DefaultValue = 2.0, MinValue = 0, Step = 0.25, Group = "Risk")]
+        public double TakeProfitR { get; set; }
+
+        [Parameter("Max Positions+Orders (this bot+symbol)", DefaultValue = 2, MinValue = 1, Group = "Risk")]
+        public int MaxPositions { get; set; }
+
+        [Parameter("Close On Opposite Signal", DefaultValue = false, Group = "Risk")]
+        public bool CloseOnOppositeSignal { get; set; }
+
+        // ---- Day limits (day-trading discipline) ----
+        [Parameter("Max Trades Per Day (0 = off)", DefaultValue = 3, MinValue = 0, Group = "Day Limits")]
+        public int MaxTradesPerDay { get; set; }
+
+        [Parameter("Stop After Consecutive Losses Today (0 = off)", DefaultValue = 2, MinValue = 0, Group = "Day Limits")]
+        public int MaxConsecutiveLossesPerDay { get; set; }
+
+        [Parameter("Daily Profit Lock % (0 = off)", DefaultValue = 0, MinValue = 0, Step = 0.25, Group = "Day Limits")]
+        public double DailyProfitLockPercent { get; set; }
+
+        [Parameter("Profit Lock Closes Positions", DefaultValue = false, Group = "Day Limits")]
+        public bool ProfitLockClosesPositions { get; set; }
+
+        [Parameter("Throttle After N Losses In A Row (0 = off)", DefaultValue = 3, MinValue = 0, Group = "Day Limits")]
+        public int ThrottleAfterLosses { get; set; }
+
+        [Parameter("Throttled Risk Multiplier", DefaultValue = 0.5, MinValue = 0.1, MaxValue = 1.0, Step = 0.1, Group = "Day Limits")]
+        public double ThrottleRiskMultiplier { get; set; }
+
+        // ---- Trade management ----
+        [Parameter("Use Trailing Stop", DefaultValue = true, Group = "Trade Management")]
+        public bool UseTrailing { get; set; }
+
+        [Parameter("Trail Start (R)", DefaultValue = 2.0, MinValue = 0, Step = 0.25, Group = "Trade Management")]
+        public double TrailStartR { get; set; }
+
+        [Parameter("Trail ATR Multiple", DefaultValue = 1.0, MinValue = 0.1, Step = 0.1, Group = "Trade Management")]
+        public double TrailAtrMultiple { get; set; }
+
+        [Parameter("Min Trail Step Pips", DefaultValue = 0.5, MinValue = 0.1, Group = "Trade Management")]
+        public double MinTrailStepPips { get; set; }
+
+        [Parameter("Break-even At (R, 0 = off)", DefaultValue = 1.0, MinValue = 0, Step = 0.25, Group = "Trade Management")]
+        public double BreakevenR { get; set; }
+
+        [Parameter("Break-even Buffer Pips (cover costs)", DefaultValue = 1.0, MinValue = 0, Group = "Trade Management")]
+        public double BreakevenBufferPips { get; set; }
+
+        [Parameter("Partial Take-Profit At (R, 0 = off)", DefaultValue = 1.0, MinValue = 0, Step = 0.25, Group = "Trade Management")]
+        public double PartialAtR { get; set; }
+
+        [Parameter("Partial Close %", DefaultValue = 50, MinValue = 5, MaxValue = 95, Step = 5, Group = "Trade Management")]
+        public double PartialClosePercent { get; set; }
+
+        [Parameter("Time Stop Bars (0 = off)", DefaultValue = 0, MinValue = 0, Group = "Trade Management")]
+        public int TimeStopBars { get; set; }
+
+        // ---- Regime / volatility ----
+        // ---- Runner / trend-aware management: lets winners run while the trend holds ----
+        [Parameter("Runner: Trend-Aware Management", DefaultValue = true, Group = "Runner Management")]
+        public bool UseRunnerMode { get; set; }
+
+        [Parameter("Runner: Trend Timeframe", DefaultValue = RunnerTimeFrame.Minute15, Group = "Runner Management")]
+        public RunnerTimeFrame RunnerTf { get; set; }
+
+        [Parameter("Runner: Trend EMA Period", DefaultValue = 21, MinValue = 5, Group = "Runner Management")]
+        public int RunnerEmaPeriod { get; set; }
+
+        [Parameter("Runner: ATR Period", DefaultValue = 14, MinValue = 2, Group = "Runner Management")]
+        public int RunnerAtrPeriod { get; set; }
+
+        [Parameter("Runner: Trail x ATR While Trend Intact", DefaultValue = 3.0, MinValue = 0.5, Step = 0.25, Group = "Runner Management")]
+        public double RunnerTrendAtrMult { get; set; }
+
+        [Parameter("Runner: Trail x ATR When Trend Weakens", DefaultValue = 1.5, MinValue = 0.25, Step = 0.25, Group = "Runner Management")]
+        public double RunnerWeakAtrMult { get; set; }
+
+        [Parameter("Runner: Remove Take-Profit While Trend Intact", DefaultValue = true, Group = "Runner Management")]
+        public bool RunnerRemoveTp { get; set; }
+
+        [Parameter("Runner: Profit Ratchet Gap R (0 = off)", DefaultValue = 1.0, MinValue = 0, Step = 0.25, Group = "Runner Management")]
+        public double RunnerRatchetGapR { get; set; }
+
+        [Parameter("Runner: Hold Past Session End", DefaultValue = true, Group = "Runner Management")]
+        public bool RunnerHoldPastSession { get; set; }
+
+        [Parameter("Runner: Max Hold Hours (0 = no limit)", DefaultValue = 24, MinValue = 0, Group = "Runner Management")]
+        public int RunnerMaxHours { get; set; }
+
+        [Parameter("ADX Period", DefaultValue = 14, MinValue = 2, Group = "Regime")]
+        public int AdxPeriod { get; set; }
+
+        [Parameter("ADX Trend Level", DefaultValue = 25, MinValue = 5, Group = "Regime")]
+        public double AdxTrendLevel { get; set; }
+
+        [Parameter("ADX Range Level", DefaultValue = 20, MinValue = 5, Group = "Regime")]
+        public double AdxRangeLevel { get; set; }
+
+        [Parameter("Use Volatility Gate", DefaultValue = false, Group = "Regime")]
+        public bool UseVolatilityGate { get; set; }
+
+        [Parameter("ATR Percentile Lookback Bars", DefaultValue = 100, MinValue = 20, Group = "Regime")]
+        public int AtrPercentileLookback { get; set; }
+
+        [Parameter("Min ATR Percentile", DefaultValue = 10, MinValue = 0, MaxValue = 100, Group = "Regime")]
+        public double MinAtrPercentile { get; set; }
+
+        [Parameter("Max ATR Percentile", DefaultValue = 95, MinValue = 0, MaxValue = 100, Group = "Regime")]
+        public double MaxAtrPercentile { get; set; }
+
+        // ---- Execution ----
+        [Parameter("Max Slippage Pips (market + stop-limit range)", DefaultValue = 1.0, MinValue = 0, Group = "Execution")]
+        public double MaxSlippagePips { get; set; }
+
+        [Parameter("Max Spread Pips", DefaultValue = 1.5, MinValue = 0.1, Group = "Execution")]
+        public double MaxSpreadPips { get; set; }
+
+        [Parameter("Max Spread % of SL", DefaultValue = 15, MinValue = 1, MaxValue = 100, Group = "Execution")]
+        public double MaxSpreadPercentOfSl { get; set; }
+
+        [Parameter("Market Signal Valid Seconds", DefaultValue = 60, MinValue = 0, Group = "Execution")]
+        public int SignalValidSeconds { get; set; }
+
+        [Parameter("Pending Order Expiry Minutes (default)", DefaultValue = 120, MinValue = 1, Group = "Execution")]
+        public int PendingExpiryMinutes { get; set; }
+
+        [Parameter("Max Order Retries", DefaultValue = 1, MinValue = 0, MaxValue = 3, Group = "Execution")]
+        public int MaxRetries { get; set; }
+
+        // ---- Drawdown kill-switch ----
+        [Parameter("Daily DD %", DefaultValue = 5.0, MinValue = 0.5, MaxValue = 5.0, Step = 0.5, Group = "Drawdown")]
+        public double DailyDdPercent { get; set; }
+
+        [Parameter("Total DD %", DefaultValue = 10.0, MinValue = 1, MaxValue = 10.0, Step = 0.5, Group = "Drawdown")]
+        public double TotalDdPercent { get; set; }
+
+        [Parameter("Kill-Switch Safety Buffer % pts", DefaultValue = 0.5, MinValue = 0, MaxValue = 2, Step = 0.1, Group = "Drawdown")]
+        public double KillSwitchBufferPercent { get; set; }
+
+        [Parameter("Daily DD Basis", DefaultValue = DailyDdBasis.StartOfDayBalance, Group = "Drawdown")]
+        public DailyDdBasis DailyBasis { get; set; }
+
+        [Parameter("Total DD Mode", DefaultValue = TotalDdMode.StaticFromStart, Group = "Drawdown")]
+        public TotalDdMode TotalMode { get; set; }
+
+        [Parameter("Daily Reset Time Zone (e.g. UTC, Europe/Prague)", DefaultValue = "UTC", Group = "Drawdown")]
+        public string DailyResetTimeZone { get; set; }
+
+        [Parameter("Daily Reset Hour (in that zone)", DefaultValue = 0, MinValue = 0, MaxValue = 23, Group = "Drawdown")]
+        public int DailyResetHour { get; set; }
+
+        [Parameter("Kill-Switch Closes", DefaultValue = KillScope.ThisBotOnly, Group = "Drawdown")]
+        public KillScope KillSwitchScope { get; set; }
+
+        [Parameter("Starting Balance (0 = saved or current)", DefaultValue = 0, MinValue = 0, Group = "Drawdown")]
+        public double StartingBalanceInput { get; set; }
+
+        [Parameter("Reset Halt (after total DD stop)", DefaultValue = false, Group = "Drawdown")]
+        public bool ResetHalt { get; set; }
+
+        // ---- Session ----
+        [Parameter("Session Time Zone (e.g. UTC, Europe/London)", DefaultValue = "Europe/London", Group = "Session")]
+        public string SessionTimeZone { get; set; }
+
+        [Parameter("Session Start Hour", DefaultValue = 0, MinValue = 0, MaxValue = 23, Group = "Session")]
+        public int SessionStartHour { get; set; }
+
+        [Parameter("Session End Hour", DefaultValue = 20, MinValue = 0, MaxValue = 24, Group = "Session")]
+        public int SessionEndHour { get; set; }
+
+        [Parameter("Trade Fridays", DefaultValue = true, Group = "Session")]
+        public bool TradeFridays { get; set; }
+
+        [Parameter("Flat At Session End (day trading)", DefaultValue = true, Group = "Session")]
+        public bool CloseAtSessionEnd { get; set; }
+
+        [Parameter("Flat Before Weekend", DefaultValue = true, Group = "Session")]
+        public bool FlatBeforeWeekend { get; set; }
+
+        [Parameter("Friday Cutoff Hour UTC", DefaultValue = 20, MinValue = 0, MaxValue = 23, Group = "Session")]
+        public int FridayCutoffHourUtc { get; set; }
+
+        // ---- News ----
+        [Parameter("Use News Filter", DefaultValue = true, Group = "News")]
+        public bool UseNewsFilter { get; set; }
+
+        [Parameter("News Feed URL", DefaultValue = "https://nfs.faireconomy.media/ff_calendar_thisweek.json", Group = "News")]
+        public string NewsFeedUrl { get; set; }
+
+        [Parameter("Minutes Before Event", DefaultValue = 30, MinValue = 0, Group = "News")]
+        public int NewsMinutesBefore { get; set; }
+
+        [Parameter("Minutes After Event", DefaultValue = 30, MinValue = 0, Group = "News")]
+        public int NewsMinutesAfter { get; set; }
+
+        [Parameter("Include Medium Impact", DefaultValue = false, Group = "News")]
+        public bool NewsIncludeMedium { get; set; }
+
+        [Parameter("Open Positions Before News", DefaultValue = NewsPositionAction.BreakevenIfProfitable, Group = "News")]
+        public NewsPositionAction NewsAction { get; set; }
+
+        [Parameter("Feed Refresh Hours", DefaultValue = 4, MinValue = 1, MaxValue = 24, Group = "News")]
+        public int NewsRefreshHours { get; set; }
+
+        [Parameter("Block Trading If Feed Down", DefaultValue = true, Group = "News")]
+        public bool BlockIfFeedDown { get; set; }
+
+        [Parameter("Extra Currencies (CSV, e.g. USD for US30/XAU)", DefaultValue = "", Group = "News")]
+        public string NewsExtraCurrencies { get; set; }
+
+        [Parameter("Manual Blackouts UTC (yyyy-MM-dd HH:mm;...)", DefaultValue = "", Group = "News")]
+        public string ManualBlackouts { get; set; }
+
+        // ---- Journal ----
+        [Parameter("Shadow Audit: log what EVERY setup would have done", DefaultValue = true, Group = "Journal")]
+        public bool EnableShadowAudit { get; set; }
+
+        [Parameter("Print Trade Journal (CSV lines in log)", DefaultValue = true, Group = "Journal")]
+        public bool EnableJournal { get; set; }
+
+        // <STRATEGY-PARAMETERS>
+        // ---- Killzone 0: Asia (Tokyo), sweeps the previous New York session range ---------
+        [Parameter("Asia: Enabled", DefaultValue = true, Group = "Killzone: Asia (sweeps prior NY range)")]
+        public bool AsrAsiaEnabled { get; set; }
+
+        [Parameter("Asia: Range Start Hour (previous day)", DefaultValue = 13, MinValue = 0, MaxValue = 23, Group = "Killzone: Asia (sweeps prior NY range)")]
+        public int AsrAsiaRangeStart { get; set; }
+
+        [Parameter("Asia: Sweep Start Hour (= range end)", DefaultValue = 0, MinValue = 0, MaxValue = 23, Group = "Killzone: Asia (sweeps prior NY range)")]
+        public int AsrAsiaSweepStart { get; set; }
+
+        [Parameter("Asia: Sweep Window Hours", DefaultValue = 6, MinValue = 1, MaxValue = 12, Group = "Killzone: Asia (sweeps prior NY range)")]
+        public int AsrAsiaWindow { get; set; }
+
+        [Parameter("Asia: Min Range (% of ADR)", DefaultValue = 20, MinValue = 0, MaxValue = 200, Group = "Killzone: Asia (sweeps prior NY range)")]
+        public double AsrAsiaMinPct { get; set; }
+
+        [Parameter("Asia: Max Range (% of ADR)", DefaultValue = 120, MinValue = 5, MaxValue = 300, Group = "Killzone: Asia (sweeps prior NY range)")]
+        public double AsrAsiaMaxPct { get; set; }
+
+        // ---- Killzone 1: London open, sweeps the Asian range -------------------------------
+        [Parameter("London: Enabled", DefaultValue = true, Group = "Killzone: London (sweeps Asian range)")]
+        public bool AsrLonEnabled { get; set; }
+
+        [Parameter("London: Range Start Hour", DefaultValue = 0, MinValue = 0, MaxValue = 23, Group = "Killzone: London (sweeps Asian range)")]
+        public int AsrLonRangeStart { get; set; }
+
+        [Parameter("London: Sweep Start Hour (= range end)", DefaultValue = 8, MinValue = 0, MaxValue = 23, Group = "Killzone: London (sweeps Asian range)")]
+        public int AsrLonSweepStart { get; set; }
+
+        [Parameter("London: Sweep Window Hours", DefaultValue = 4, MinValue = 1, MaxValue = 12, Group = "Killzone: London (sweeps Asian range)")]
+        public int AsrLonWindow { get; set; }
+
+        [Parameter("London: Min Range (% of ADR)", DefaultValue = 15, MinValue = 0, MaxValue = 200, Group = "Killzone: London (sweeps Asian range)")]
+        public double AsrLonMinPct { get; set; }
+
+        [Parameter("London: Max Range (% of ADR)", DefaultValue = 90, MinValue = 5, MaxValue = 300, Group = "Killzone: London (sweeps Asian range)")]
+        public double AsrLonMaxPct { get; set; }
+
+        // ---- Killzone 2: New York open, sweeps the London range ----------------------------
+        [Parameter("New York: Enabled", DefaultValue = true, Group = "Killzone: New York (sweeps London range)")]
+        public bool AsrNyEnabled { get; set; }
+
+        [Parameter("New York: Range Start Hour", DefaultValue = 8, MinValue = 0, MaxValue = 23, Group = "Killzone: New York (sweeps London range)")]
+        public int AsrNyRangeStart { get; set; }
+
+        [Parameter("New York: Sweep Start Hour (= range end)", DefaultValue = 13, MinValue = 0, MaxValue = 23, Group = "Killzone: New York (sweeps London range)")]
+        public int AsrNySweepStart { get; set; }
+
+        [Parameter("New York: Sweep Window Hours", DefaultValue = 4, MinValue = 1, MaxValue = 12, Group = "Killzone: New York (sweeps London range)")]
+        public int AsrNyWindow { get; set; }
+
+        [Parameter("New York: Min Range (% of ADR)", DefaultValue = 25, MinValue = 0, MaxValue = 200, Group = "Killzone: New York (sweeps London range)")]
+        public double AsrNyMinPct { get; set; }
+
+        [Parameter("New York: Max Range (% of ADR)", DefaultValue = 90, MinValue = 5, MaxValue = 300, Group = "Killzone: New York (sweeps London range)")]
+        public double AsrNyMaxPct { get; set; }
+
+        // ---- Shared sweep / MSS / entry logic ----------------------------------------------
+        [Parameter("Avg Daily Range Days", DefaultValue = 20, MinValue = 5, Group = "Strategy: Sweep + MSS")]
+        public int AsrAdrDays { get; set; }
+
+        [Parameter("Min Sweep Penetration Pips", DefaultValue = 1.0, MinValue = 0, Group = "Strategy: Sweep + MSS")]
+        public double AsrMinPenPips { get; set; }
+
+        [Parameter("Max Bars Breach -> Reclaim (0 = same bar)", DefaultValue = 2, MinValue = 0, MaxValue = 6, Group = "Strategy: Sweep + MSS")]
+        public int AsrMaxReclaimBars { get; set; }
+
+        [Parameter("Max Bars Sweep -> MSS", DefaultValue = 6, MinValue = 1, MaxValue = 20, Group = "Strategy: Sweep + MSS")]
+        public int AsrMaxBarsToMss { get; set; }
+
+        [Parameter("MSS Swing Strength (bars each side)", DefaultValue = 2, MinValue = 1, MaxValue = 5, Group = "Strategy: Sweep + MSS")]
+        public int AsrSwingStrength { get; set; }
+
+        [Parameter("MSS Swing Lookback Bars", DefaultValue = 12, MinValue = 3, Group = "Strategy: Sweep + MSS")]
+        public int AsrSwingLookback { get; set; }
+
+        [Parameter("Min Displacement Body (x ATR, 0 = off)", DefaultValue = 0.5, MinValue = 0, Step = 0.1, Group = "Strategy: Sweep + MSS")]
+        public double AsrMinDisplacementAtr { get; set; }
+
+        [Parameter("Use Volume Surge Filter", DefaultValue = false, Group = "Strategy: Sweep + MSS")]
+        public bool AsrUseVolume { get; set; }
+
+        [Parameter("Volume Baseline", DefaultValue = AsrVolumeBaseline.SameTimeOfDay, Group = "Strategy: Sweep + MSS")]
+        public AsrVolumeBaseline AsrVolumeBase { get; set; }
+
+        [Parameter("Volume Lookback (days or bars)", DefaultValue = 20, MinValue = 2, Group = "Strategy: Sweep + MSS")]
+        public int AsrVolumePeriod { get; set; }
+
+        [Parameter("Volume Surge Multiplier", DefaultValue = 1.3, MinValue = 1.0, Step = 0.1, Group = "Strategy: Sweep + MSS")]
+        public double AsrVolumeMult { get; set; }
+
+        [Parameter("Entry Mode", DefaultValue = AsrEntryMode.LimitRetrace, Group = "Strategy: Sweep + MSS")]
+        public AsrEntryMode AsrEntry { get; set; }
+
+        [Parameter("Limit Retrace % of Displacement Leg", DefaultValue = 50, MinValue = 10, MaxValue = 90, Group = "Strategy: Sweep + MSS")]
+        public double AsrRetracePct { get; set; }
+
+        [Parameter("Limit Order Expiry Bars", DefaultValue = 6, MinValue = 1, Group = "Strategy: Sweep + MSS")]
+        public int AsrLimitExpiryBars { get; set; }
+
+        [Parameter("Stop Buffer Pips", DefaultValue = 1.0, MinValue = 0, Group = "Strategy: Sweep + MSS")]
+        public double AsrStopBufferPips { get; set; }
+
+        [Parameter("Target Mode", DefaultValue = AsrTargetMode.OppositeRange, Group = "Strategy: Sweep + MSS")]
+        public AsrTargetMode AsrTarget { get; set; }
+
+        [Parameter("Fixed Target R (Target Mode = FixedR)", DefaultValue = 3.0, MinValue = 0.5, Step = 0.25, Group = "Strategy: Sweep + MSS")]
+        public double AsrFixedR { get; set; }
+
+        [Parameter("Min R To Opposite Range (else skip)", DefaultValue = 1.5, MinValue = 0, Step = 0.25, Group = "Strategy: Sweep + MSS")]
+        public double AsrMinRR { get; set; }
+
+        [Parameter("Use HTF Bias", DefaultValue = true, Group = "Strategy: Sweep + MSS")]
+        public bool AsrUseHtfBias { get; set; }
+
+        [Parameter("HTF EMA Slope Bars (H4)", DefaultValue = 3, MinValue = 1, MaxValue = 10, Group = "Strategy: Sweep + MSS")]
+        public int AsrHtfSlopeBars { get; set; }
+
+        // ---- Trend continuation: when a range break HOLDS, trade with it instead of sitting out --
+        [Parameter("Continuation: Enabled", DefaultValue = true, Group = "Strategy: Trend Continuation")]
+        public bool AsrUseContinuation { get; set; }
+
+        [Parameter("Continuation: Min Close Beyond Level (pips)", DefaultValue = 2.0, MinValue = 0, Step = 0.5, Group = "Strategy: Trend Continuation")]
+        public double AsrContMinClosePips { get; set; }
+
+        [Parameter("Continuation: Stop Beyond Level (x ATR)", DefaultValue = 1.5, MinValue = 0.1, Step = 0.1, Group = "Strategy: Trend Continuation")]
+        public double AsrContStopAtr { get; set; }
+
+        [Parameter("Continuation: Initial Target R", DefaultValue = 2.0, MinValue = 0.5, Step = 0.25, Group = "Strategy: Trend Continuation")]
+        public double AsrContTargetR { get; set; }
+
+        [Parameter("Continuation: Retest Order Expiry Bars", DefaultValue = 12, MinValue = 1, Group = "Strategy: Trend Continuation")]
+        public int AsrContExpiryBars { get; set; }
+
+        [Parameter("HTF EMA Period (H4)", DefaultValue = 50, MinValue = 5, Group = "Strategy: Sweep + MSS")]
+        public int AsrHtfEmaPeriod { get; set; }
+
+        [Parameter("Max Bars In Trade (0 = core default)", DefaultValue = 36, MinValue = 0, Group = "Strategy: Sweep + MSS")]
+        public int AsrMaxBarsInTrade { get; set; }
+// </STRATEGY-PARAMETERS>
+
+        // ================================ STATE =====================================
+        private AverageTrueRange _atr;
+        private StrategyContext _ctx;
+        private SignalEngine _signals;
+        private StateStore _store;
+        private TradeMetaRegistry _meta;
+        private ExposureCalculator _exposure;
+        private DrawdownGuard _ddGuard;
+        private DayLimiter _dayLimits;
+        private RiskManager _risk;
+        private SessionFilter _session;
+        private NewsFilter _news;
+        private RegimeFilter _regime;
+        private ExecutionService _exec;
+        private TrailingManager _trailing;
+        private ShadowAudit _shadow;
+        private TradeJournal _journal;
+
+        private bool _disconnected;
+        private bool _halted;
+        private DateTime _nextNewsRefresh = DateTime.MinValue;
+
+        private TradeIntent _queuedIntent;
+        private DateTime _queuedExpiry;
+        private string _lastBlockReason;
+
+        public AverageTrueRange Atr { get { return _atr; } }
+
+        // ================================ LIFECYCLE =================================
+        protected override void OnStart()
+        {
+            if (RiskPercent > HardMaxRiskPercent)
+            {
+                Log("Risk {0}% exceeds hard cap; clamped to {1}%.", RiskPercent, HardMaxRiskPercent);
+                RiskPercent = HardMaxRiskPercent;
+            }
+
+            _atr = Indicators.AverageTrueRange(AtrPeriod, MovingAverageType.Exponential);
+            _store = new StateStore(this);
+            _meta = new TradeMetaRegistry(this);
+            _session = new SessionFilter(this);
+            _regime = new RegimeFilter(this, _atr);
+            _ctx = new StrategyContext(this, _session, _regime);
+            _signals = new SignalEngine(this, _ctx);
+            _exposure = new ExposureCalculator(this);
+            _ddGuard = new DrawdownGuard(this, _store);
+            _dayLimits = new DayLimiter(this, _store, _ddGuard);
+            _risk = new RiskManager(this, _exposure, _ddGuard, _dayLimits);
+            _news = new NewsFilter(this);
+            _exec = new ExecutionService(this);
+            _trailing = new TrailingManager(this, _meta);
+            _shadow = new ShadowAudit(this);
+            _journal = new TradeJournal(this, _meta);
+
+            if (_ddGuard.IsHalted)
+            {
+                Log("HALTED: total drawdown limit was hit in a previous run. Set 'Reset Halt' = true to resume deliberately.");
+                _halted = true;
+                Stop();
+                return;
+            }
+
+            Positions.Opened += OnPositionOpened;
+            Positions.Closed += OnPositionClosed;
+            PendingOrders.Filled += OnPendingFilled;
+
+            foreach (var p in BotPositions())
+                _meta.Register(p, null, false, _regime.Current);
+            Log("Started. Strategy={0}, Mode={1}. Re-attached {2} position(s), {3} pending order(s).",
+                _signals.Name, RunningMode, BotPositions().Count(), BotPendingOrders().Count());
+
+            RefreshNewsIfDue();
+            bool simulated = IsBacktesting || RunningMode == RunningMode.Optimization;
+            Timer.Start(TimeSpan.FromSeconds(simulated ? 60 : 1));
+        }
+
+        protected override void OnTimer()
+        {
+            if (_halted) return;
+            RefreshNewsIfDue();
+            RiskTick();
+        }
+
+        protected override void OnTick()
+        {
+            if (_halted) return;
+            if (!QuotesValid()) return;
+            if (_disconnected)
+            {
+                _disconnected = false;
+                Log("Valid quotes received again; connection assumed restored.");
+            }
+
+            if (!RiskTick()) return;
+
+            double atr = _atr.Result.Last(1);
+            foreach (var p in BotPositions().ToList())
+            {
+                _journal.Track(p);
+                _trailing.ManagePartial(p);
+                _trailing.Manage(p, atr);
+            }
+
+            if (_queuedIntent != null) TryEnterQueued();
+        }
+
+        protected override void OnBar()
+        {
+            if (_halted) return;
+            _regime.Update();
+
+            foreach (var p in BotPositions().ToList())
+                _trailing.ManageTimeStop(p);
+            _shadow.OnBar();
+
+            List<TradeIntent> intents;
+            try { intents = _signals.OnBar() ?? new List<TradeIntent>(); }
+            catch (Exception ex) { Log("Strategy error in OnBar: {0}", ex.Message); return; }
+            if (intents.Count == 0) return;
+
+            if (CloseOnOppositeSignal)
+            {
+                var dirs = new HashSet<TradeType>(intents.Select(i => i.Direction));
+                if (dirs.Count == 1)
+                {
+                    var d = dirs.First();
+                    foreach (var p in BotPositions().Where(x => x.TradeType != d).ToList())
+                    {
+                        var r = p.Close();
+                        Log(r.IsSuccessful ? "Closed {0} on opposite signal." : "FAILED closing {0} on opposite signal: {1}", p.Id, r.Error);
+                    }
+                }
+            }
+
+            foreach (var intent in intents)
+            {
+                string status;
+                if (intent.Kind == EntryKind.Market)
+                {
+                    _queuedIntent = intent;
+                    _queuedExpiry = intent.ExpiryUtc ?? Server.Time.AddSeconds(SignalValidSeconds);
+                    _lastBlockReason = null;
+                    TryEnterQueued();
+                    status = _queuedIntent == null ? "TAKEN" : "BLOCKED: " + (_lastBlockReason ?? "waiting");
+                }
+                else
+                {
+                    status = PlacePendingIntent(intent);
+                }
+                _shadow.Add(intent, status);
+            }
+        }
+
+        protected override void OnError(Error error)
+        {
+            Log("OnError: {0}", error.Code);
+            switch (error.Code)
+            {
+                case ErrorCode.Disconnected:
+                    _disconnected = true;
+                    break;
+                case ErrorCode.NoMoney:
+                    _ddGuard.BlockForDay("NoMoney error");
+                    break;
+            }
+        }
+
+        protected override void OnStop()
+        {
+            Timer.Stop();
+            Positions.Opened -= OnPositionOpened;
+            Positions.Closed -= OnPositionClosed;
+            PendingOrders.Filled -= OnPendingFilled;
+            if (_store != null) _store.Flush();
+            if (_shadow != null) _shadow.PrintSummary();
+            Log("Stopped.");
+        }
+
+        // ================================ CORE LOGIC ================================
+        // Runs on every tick and timer event. Returns false if trading must stop.
+        private bool RiskTick()
+        {
+            if (_ddGuard.Check() == DrawdownState.TotalBreached)
+            {
+                _halted = true;
+                return false;
+            }
+
+            DateTime now = Server.Time;
+            string reason;
+
+            if (_ddGuard.IsBlocked(out reason)) CancelBotPendingOrders(reason);
+
+            if (_dayLimits.ProfitLockHit())
+            {
+                CancelBotPendingOrders("daily profit lock");
+                if (ProfitLockClosesPositions && BotPositions().Any()) CloseAllBotPositions("daily profit lock");
+            }
+            else if (!_dayLimits.CanTrade(out reason))
+            {
+                CancelBotPendingOrders(reason);
+            }
+
+            if (FlatBeforeWeekend && _session.IsPastFridayCutoff(now))
+            {
+                CancelBotPendingOrders("weekend flat rule");
+                if (BotPositions().Any()) CloseAllBotPositions("weekend flat rule");
+            }
+
+            if (CloseAtSessionEnd && !_session.IsOpen(now))
+            {
+                CancelBotPendingOrders("session end");
+                // Runners (partial taken, stop locked at/after break-even) may stay open.
+                var toClose = BotPositions().Where(x => !_trailing.IsRunner(x)).ToList();
+                if (toClose.Any()) ClosePositions(toClose, "session end");
+            }
+
+            string title;
+            if (_news.InEventWindow(now, out title))
+            {
+                CancelBotPendingOrders("news: " + title);
+                if (NewsAction != NewsPositionAction.None && BotPositions().Any())
+                    ApplyNewsAction(title);
+            }
+            return true;
+        }
+
+        private void TryEnterQueued()
+        {
+            var intent = _queuedIntent;
+            if (intent == null) return;
+            if (Server.Time > _queuedExpiry)
+            {
+                Log("Signal {0} {1} expired without entry. Last block: {2}", intent.Tag, intent.Direction, _lastBlockReason ?? "n/a");
+                _queuedIntent = null;
+                return;
+            }
+
+            string reason;
+            if (!CanOpenNewTrade(out reason)) { NoteBlock(reason); return; }
+
+            double refPrice = intent.Direction == TradeType.Buy ? Symbol.Ask : Symbol.Bid;
+            double slPips; double? tpPips;
+            if (!ResolveStops(intent, refPrice, out slPips, out tpPips, out reason))
+            {
+                Log("Signal {0} rejected: {1}", intent.Tag, reason);
+                _queuedIntent = null;
+                return;
+            }
+
+            double volume = _risk.CalculateVolume(slPips, null, out reason);
+            if (volume <= 0) { NoteBlock(reason); return; }
+
+            Position position;
+            var outcome = _exec.OpenMarket(intent, volume, slPips, tpPips, out position, out reason);
+            switch (outcome)
+            {
+                case OpenOutcome.Opened:
+                    _queuedIntent = null;
+                    break;
+                case OpenOutcome.RetryLater:
+                    NoteBlock(reason);
+                    break;
+                default:
+                    Log("Signal {0} abandoned: {1}", intent.Tag, reason);
+                    _queuedIntent = null;
+                    break;
+            }
+        }
+
+        // Returns "TAKEN" when the order was placed, otherwise "BLOCKED: <reason>" (used by the shadow audit).
+        private string PlacePendingIntent(TradeIntent intent)
+        {
+            string reason;
+            if (!CanOpenNewTrade(intent.OcoGroup, out reason)) { LogDebug("Pending {0} not placed: {1}", intent.Tag, reason); return "BLOCKED: " + reason; }
+
+            double slPips; double? tpPips;
+            if (!ResolveStops(intent, intent.EntryPrice, out slPips, out tpPips, out reason))
+            {
+                Log("Pending {0} rejected: {1}", intent.Tag, reason);
+                return "BLOCKED: " + reason;
+            }
+
+            double volume = _risk.CalculateVolume(slPips, intent.OcoGroup, out reason);
+            if (volume <= 0) { Log("Pending {0} not placed: {1}", intent.Tag, reason); return "BLOCKED: " + reason; }
+
+            DateTime expiry = intent.ExpiryUtc ?? Server.Time.AddMinutes(PendingExpiryMinutes);
+            var outcome = _exec.PlacePending(intent, volume, slPips, tpPips, expiry, out reason);
+            if (reason != null) Log("Pending {0}: {1}", intent.Tag, reason);
+            return outcome == OpenOutcome.Placed ? "TAKEN" : "BLOCKED: " + (reason ?? outcome.ToString());
+        }
+
+        // Converts an intent's stops to pips relative to the reference entry price.
+        private bool ResolveStops(TradeIntent intent, double refPrice, out double slPips, out double? tpPips, out string reason)
+        {
+            reason = null;
+            tpPips = null;
+            bool isBuy = intent.Direction == TradeType.Buy;
+
+            if (intent.StopLossPips.HasValue) slPips = intent.StopLossPips.Value;
+            else if (intent.StopLossPrice.HasValue)
+            {
+                double d = isBuy ? refPrice - intent.StopLossPrice.Value : intent.StopLossPrice.Value - refPrice;
+                if (d <= 0) { slPips = 0; reason = "structure stop on wrong side of entry"; return false; }
+                slPips = d / Symbol.PipSize;
+            }
+            else slPips = DefaultStopPips();
+
+            if (slPips < MinStopPips) { reason = string.Format(CultureInfo.InvariantCulture, "SL {0:F1} pips below minimum {1}", slPips, MinStopPips); return false; }
+            if (MaxStopPips > 0 && slPips > MaxStopPips) { reason = string.Format(CultureInfo.InvariantCulture, "SL {0:F1} pips above maximum {1}", slPips, MaxStopPips); return false; }
+
+            if (intent.TakeProfitPrice.HasValue)
+            {
+                double t = isBuy ? intent.TakeProfitPrice.Value - refPrice : refPrice - intent.TakeProfitPrice.Value;
+                if (t <= 0) { reason = "take-profit target already passed"; return false; }
+                tpPips = t / Symbol.PipSize;
+            }
+            else
+            {
+                double r = intent.TakeProfitR ?? TakeProfitR;
+                if (r > 0) tpPips = slPips * r;
+            }
+            return true;
+        }
+
+        public double DefaultStopPips()
+        {
+            if (StopModeInput == StopMode.FixedPips) return SlFixedPips;
+            return _atr.Result.Last(1) * SlAtrMultiple / Symbol.PipSize;
+        }
+
+        private void NoteBlock(string reason)
+        {
+            if (reason == _lastBlockReason) return;
+            _lastBlockReason = reason;
+            LogDebug("Entry deferred: {0}", reason);
+        }
+
+        // Open slots used: positions + ungrouped pending orders + one per OCO group (a group is
+        // one trade idea). The group being placed is not counted against itself.
+        private int SlotsUsed(string ocoGroup)
+        {
+            var pend = BotPendingOrders().ToList();
+            int ungrouped = pend.Count(o => string.IsNullOrEmpty(TradeTag.Get(o.Comment, "G")));
+            int groups = pend.Select(o => TradeTag.Get(o.Comment, "G"))
+                             .Where(g => !string.IsNullOrEmpty(g) && g != ocoGroup).Distinct().Count();
+            return BotPositions().Count() + ungrouped + groups;
+        }
+
+        private bool CanOpenNewTrade(out string reason) { return CanOpenNewTrade(null, out reason); }
+
+        private bool CanOpenNewTrade(string ocoGroup, out string reason)
+        {
+            DateTime now = Server.Time;
+            if (_disconnected) { reason = "disconnected"; return false; }
+            if (!QuotesValid()) { reason = "invalid quotes"; return false; }
+            if (_ddGuard.IsBlocked(out reason)) return false;
+            if (!_dayLimits.CanTrade(out reason)) return false;
+            if (!_session.IsOpen(now)) { reason = "outside session"; return false; }
+            if (FlatBeforeWeekend && _session.IsPastFridayCutoff(now)) { reason = "past Friday cutoff"; return false; }
+            if (_news.IsBlocked(now, out reason)) return false;
+            if (!_regime.VolatilityOk(out reason)) return false;
+            if (SlotsUsed(ocoGroup) >= MaxPositions) { reason = "max positions/orders reached"; return false; }
+            reason = null;
+            return true;
+        }
+
+        private void ApplyNewsAction(string title)
+        {
+            foreach (var p in BotPositions().ToList())
+            {
+                if (NewsAction == NewsPositionAction.ClosePositions)
+                {
+                    var r = p.Close();
+                    Log(r.IsSuccessful ? "Closed {0} before news ({2})." : "FAILED closing {0} before news: {1}", p.Id, r.Error, title);
+                }
+                else if (NewsAction == NewsPositionAction.BreakevenIfProfitable)
+                {
+                    _trailing.MoveToBreakevenIfProfitable(p, "news: " + title);
+                }
+            }
+        }
+
+        private void RefreshNewsIfDue()
+        {
+            if (Server.Time < _nextNewsRefresh) return;
+            _news.Refresh();
+            _nextNewsRefresh = Server.Time.AddHours(NewsRefreshHours);
+        }
+
+        // ================================ EVENTS ====================================
+        private void OnPositionOpened(PositionOpenedEventArgs args)
+        {
+            var p = args.Position;
+            if (!IsBotPosition(p)) return;
+            _meta.Register(p, null, true, _regime.Current);
+            _dayLimits.OnTradeOpened();
+        }
+
+        private void OnPendingFilled(PendingOrderFilledEventArgs args)
+        {
+            var o = args.PendingOrder;
+            if (o.Label != BotLabel || o.SymbolName != SymbolName) return;
+            // Position comment normally carries the order comment; register from the order to be safe.
+            _meta.Register(args.Position, o.Comment, true, _regime.Current);
+
+            string group = TradeTag.Get(o.Comment, "G");
+            if (!string.IsNullOrEmpty(group))
+            {
+                foreach (var sibling in BotPendingOrders().Where(x => x.Id != o.Id && TradeTag.Get(x.Comment, "G") == group).ToList())
+                {
+                    var r = sibling.Cancel();
+                    Log(r.IsSuccessful ? "OCO: cancelled sibling order {0}." : "OCO: FAILED to cancel sibling {0}: {1}", sibling.Id, r.Error);
+                }
+            }
+        }
+
+        private void OnPositionClosed(PositionClosedEventArgs args)
+        {
+            var p = args.Position;
+            if (!IsBotPosition(p)) return;
+            _journal.Write(p, args.Reason);
+            _dayLimits.OnTradeClosed(p.NetProfit);
+            _meta.Remove(p);
+            Log("Position {0} closed: reason={1}, net={2:F2}, pips={3:F1}", p.Id, args.Reason, p.NetProfit, p.Pips);
+        }
+
+        // ================================ HELPERS ===================================
+        public bool QuotesValid()
+        {
+            double bid = Symbol.Bid, ask = Symbol.Ask;
+            return !double.IsNaN(bid) && !double.IsNaN(ask) && bid > 0 && ask > 0 && ask >= bid;
+        }
+
+        public double SpreadPips() { return (Symbol.Ask - Symbol.Bid) / Symbol.PipSize; }
+
+        private bool IsBotPosition(Position p) { return p.Label == BotLabel && p.SymbolName == SymbolName; }
+
+        public IEnumerable<Position> BotPositions() { return Positions.Where(IsBotPosition); }
+
+        public IEnumerable<PendingOrder> BotPendingOrders()
+        {
+            return PendingOrders.Where(o => o.Label == BotLabel && o.SymbolName == SymbolName);
+        }
+
+        public void CancelBotPendingOrders(string why)
+        {
+            foreach (var o in BotPendingOrders().ToList())
+            {
+                var r = o.Cancel();
+                if (r.IsSuccessful) Log("Cancelled pending order {0} ({1}).", o.Id, why);
+                else Log("FAILED to cancel pending order {0} ({1}): {2}", o.Id, why, r.Error);
+            }
+        }
+
+        public void CloseAllBotPositions(string why) { ClosePositions(BotPositions().ToList(), why); }
+
+        public void CloseForKillSwitch(string why)
+        {
+            CancelBotPendingOrders(why);
+            var targets = KillSwitchScope == KillScope.WholeAccount ? Positions.ToList() : BotPositions().ToList();
+            ClosePositions(targets, why);
+        }
+
+        private void ClosePositions(List<Position> targets, string why)
+        {
+            foreach (var p in targets)
+            {
+                var r = p.Close();
+                if (r.IsSuccessful) Log("Closed position {0} {1} ({2}).", p.Id, p.SymbolName, why);
+                else Log("FAILED to close position {0} {1} ({2}): {3}", p.Id, p.SymbolName, why, r.Error);
+            }
+        }
+
+        public void Log(string format, params object[] args)
+        {
+            Print("[" + BotLabel + "] " + string.Format(CultureInfo.InvariantCulture, format, args));
+        }
+
+        public void LogDebug(string format, params object[] args)
+        {
+            if (RunningMode == RunningMode.Optimization) return;
+            Log(format, args);
+        }
+    }
+
+    // <SIGNAL-ENGINE>
+    // =====================================================================================
+    //  STRATEGY: GBPUSD Session Liquidity - Asia / London / New York (M5)
+    //  Two setups per killzone, decided by what price does at the previous session's range:
+    //    REVERSAL     - the range extreme is swept and reclaimed -> trade back into the range
+    //                   (allowed unless the H4 trend is strongly against it).
+    //    CONTINUATION - the range extreme breaks and HOLDS (no reclaim) -> that is a trend move;
+    //                   with H4 bias agreeing, place a limit on the retest of the broken level.
+    //  Winners are handed to the core Runner Management (trend-aware trailing, take-profit
+    //  removed while the trend holds, profit ratchet) so trends are not cut short.
+    //  Edge: resting stops cluster beyond the previous session's high/low. When the next
+    //        session opens, that liquidity is often run and rejected (Judas swing); a close
+    //        through the pre-sweep structure (MSS) confirms the reversal. Target = the
+    //        opposite side of the swept range (the next pool of liquidity).
+    //  Killzones (hours in the core "Session Time Zone", default Europe/London so the
+    //  Asia, London and New York opens follow daylight saving automatically):
+    //    Asia     : range 13-24 prev day (New York) -> hunted 00-06 London time (no Mondays)
+    //    London   : range 00-08  (Asian session)   -> hunted 08-12 London time
+    //    New York : range 08-13  (London session)  -> hunted 13-17 London time
+    //  If the log warns that the time zone was not found, use "GMT Standard Time" (Windows).
+    //  Per killzone, per day: one attempt per side, at most one trade.
+    //  Definitions (closed bars only, nothing repaints):
+    //    Range      = high/low of bars opening in [range start, sweep start), accepted only
+    //                 if its height is within the zone's band of the average daily range.
+    //    Sweep      = first breach of a range extreme today, >= Min Penetration beyond it, and a
+    //                 bar CLOSES back inside the range (in the rejection half of that bar) within
+    //                 Max Bars Breach -> Reclaim. No reclaim in time = real breakout; side dropped.
+    //    Filters    = H4 EMA bias; optional tick-volume surge vs the SAME clock time on prior days.
+    //    MSS        = within Max Bars Sweep -> MSS, a close beyond max(last confirmed swing before
+    //                 the breach, opposite extreme of the sweep leg) with a body >= k x ATR.
+    //    Invalidate = a closed bar beyond the sweep extreme, or the MSS window expires.
+    //  Entry: limit at a retracement of the displacement leg (or market at the MSS close).
+    //  Stop: sweep extreme +/- buffer. Target: opposite range extreme (skip if < Min R) or fixed R.
+    //  Known weaknesses: trend days continue through the sweep (H4 bias + news filter help);
+    //    tick volume is a broker-side proxy, not real flow; many parameters -> walk-forward.
+    // =====================================================================================
+    public enum AsrEntryMode { Market, LimitRetrace }
+    public enum AsrTargetMode { OppositeRange, FixedR }
+    public enum AsrVolumeBaseline { SameTimeOfDay, RollingBars }
+
+    public class Killzone
+    {
+        public enum Setup { None, Bull, Bear, Done }
+
+        // Configuration
+        public string Name, Tag;
+        public bool SkipMonday;
+        public int RangeStartHour, SweepStartHour, WindowHours;
+        public double MinPct, MaxPct;
+
+        // Per-day state
+        public DateTime Day = DateTime.MinValue;   // local date of the session this state belongs to
+        public DateTime SweepStartUtc, SweepEndUtc;
+        public bool RangeValid;
+        public double High, Low;
+        public bool HighSpent, LowSpent;
+        public int LowBreachIdx = -1, HighBreachIdx = -1;
+        public double LowBreachExt, HighBreachExt;
+        public bool LowBreachVol, HighBreachVol;
+        public Setup State = Setup.None;
+        public int SweepIndex;
+        public double SweepExtreme, MssLevel;
+
+        public void Reset(DateTime day)
+        {
+            Day = day;
+            RangeValid = false;
+            HighSpent = LowSpent = false;
+            LowBreachIdx = HighBreachIdx = -1;
+            LowBreachVol = HighBreachVol = false;
+            State = Setup.None;
+        }
+    }
+
+    public class SignalEngine
+    {
+        private readonly GbpUsdSessionBot _bot;
+        private readonly StrategyContext _ctx;
+        private readonly TimeZoneInfo _tz;
+        private readonly Bars _daily;
+        private readonly Bars _h4;
+        private readonly ExponentialMovingAverage _h4Ema;
+        private readonly List<Killzone> _zones = new List<Killzone>();
+
+        public string Name { get { return "GBPUSD Session Liquidity (Asia / London / New York)"; } }
+
+        public SignalEngine(GbpUsdSessionBot bot, StrategyContext ctx)
+        {
+            _bot = bot;
+            _ctx = ctx;
+            _tz = TimeHelper.Resolve(bot.SessionTimeZone, bot, "killzones");
+            _daily = ctx.Mtf(TimeFrame.Daily);
+            _h4 = ctx.Mtf(TimeFrame.Hour4);
+            _h4Ema = bot.Indicators.ExponentialMovingAverage(_h4.ClosePrices, bot.AsrHtfEmaPeriod);
+
+            if (bot.AsrAsiaEnabled)
+                _zones.Add(new Killzone { Name = "Asia", Tag = "ASIA", SkipMonday = true, RangeStartHour = bot.AsrAsiaRangeStart, SweepStartHour = bot.AsrAsiaSweepStart,
+                    WindowHours = bot.AsrAsiaWindow, MinPct = bot.AsrAsiaMinPct, MaxPct = bot.AsrAsiaMaxPct });
+            if (bot.AsrLonEnabled)
+                _zones.Add(new Killzone { Name = "London", Tag = "LON", RangeStartHour = bot.AsrLonRangeStart, SweepStartHour = bot.AsrLonSweepStart,
+                    WindowHours = bot.AsrLonWindow, MinPct = bot.AsrLonMinPct, MaxPct = bot.AsrLonMaxPct });
+            if (bot.AsrNyEnabled)
+                _zones.Add(new Killzone { Name = "NewYork", Tag = "NY", RangeStartHour = bot.AsrNyRangeStart, SweepStartHour = bot.AsrNySweepStart,
+                    WindowHours = bot.AsrNyWindow, MinPct = bot.AsrNyMinPct, MaxPct = bot.AsrNyMaxPct });
+            if (_zones.Count == 0) bot.Log("WARNING - no killzone enabled; the bot will not trade.");
+        }
+
+        public List<TradeIntent> OnBar()
+        {
+            var list = new List<TradeIntent>();
+            var bars = _bot.Bars;
+            if (bars.Count < _bot.AsrSwingLookback + 30) return list;
+
+            DateTime now = _bot.Server.Time;
+            DateTime localDay = TimeHelper.ToZone(now, _tz).Date;
+            if (localDay.DayOfWeek == DayOfWeek.Saturday || localDay.DayOfWeek == DayOfWeek.Sunday) return list;
+            foreach (var z in _zones)
+            {
+                if (z.SkipMonday && localDay.DayOfWeek == DayOfWeek.Monday) continue;   // prior "NY range" = Sunday gap
+                if (z.Day != localDay)
+                {
+                    DateTime sweepStart = TimeHelper.ToUtc(localDay.AddHours(z.SweepStartHour), _tz);
+                    if (now < sweepStart) continue;      // this zone's session has not opened yet today
+                    NewSession(z, localDay, sweepStart);
+                }
+                TradeIntent intent = Process(z, now);
+                if (intent != null) list.Add(intent);
+            }
+            return list;
+        }
+
+        // ---------------------------------------------------------------------------------
+        private TradeIntent Process(Killzone z, DateTime now)
+        {
+            if (!z.RangeValid || z.State == Killzone.Setup.Done) return null;
+            var bars = _bot.Bars;
+            int i = bars.Count - 2;                                // last closed bar
+            if (bars.OpenTimes[i] < z.SweepStartUtc) return null;  // range window still closing
+
+            double o = bars.OpenPrices[i], h = bars.HighPrices[i], l = bars.LowPrices[i], c = bars.ClosePrices[i];
+
+            // 1. Armed setup: invalidation, timeout, MSS.
+            if (z.State == Killzone.Setup.Bull || z.State == Killzone.Setup.Bear)
+            {
+                bool bull = z.State == Killzone.Setup.Bull;
+                if (i > z.SweepIndex && (bull ? l < z.SweepExtreme : h > z.SweepExtreme))
+                {
+                    _bot.Log("{0}: {1} sweep invalidated (new extreme beyond sweep).", z.Name, bull ? "bull" : "bear");
+                    z.State = Killzone.Setup.None;
+                }
+                else if (i - z.SweepIndex > _bot.AsrMaxBarsToMss)
+                {
+                    _bot.Log("{0}: {1} sweep expired without MSS.", z.Name, bull ? "bull" : "bear");
+                    z.State = Killzone.Setup.None;
+                }
+                else if (i > z.SweepIndex && (bull ? c > z.MssLevel : c < z.MssLevel) && DisplacementOk(o, c))
+                {
+                    z.State = Killzone.Setup.Done;   // one trade per killzone per day
+                    return BuildIntent(z, bull, c, h, l);
+                }
+                if (z.State != Killzone.Setup.None) return null;
+            }
+
+            // 2. Hunt for a sweep while the zone's window is open.
+            if (now > z.SweepEndUtc) return null;
+            double range = h - l;
+            if (range <= 0) return null;
+            double mid = l + range / 2.0;
+            double pen = _bot.AsrMinPenPips * _bot.Symbol.PipSize;
+
+            // Bullish: breach of the range low, reclaimed (close back above it) within N bars.
+            if (!z.LowSpent && (z.LowBreachIdx >= 0 || l < z.Low))
+            {
+                if (z.LowBreachIdx < 0) { z.LowBreachIdx = i; z.LowBreachExt = l; z.LowBreachVol = false; }
+                z.LowBreachExt = Math.Min(z.LowBreachExt, l);
+                z.LowBreachVol |= VolumeOk(i);
+
+                if (c > z.Low)
+                {
+                    z.LowSpent = true;
+                    bool deep = z.LowBreachExt <= z.Low - pen, vol = z.LowBreachVol || !_bot.AsrUseVolume, bias = !StrongTrendAgainst(true);
+                    if (deep && c > mid && vol && bias)
+                        Arm(z, Killzone.Setup.Bull, i, z.LowBreachExt, MssLevel(true, z.LowBreachIdx, HighestHigh(z.LowBreachIdx, i)));
+                    else
+                        _bot.Log("{0}: low reclaimed but rejected (depth {1}, upper-half close {2}, volume {3}, bias {4}).", z.Name, deep, c > mid, vol, bias);
+                }
+                else if (i - z.LowBreachIdx >= _bot.AsrMaxReclaimBars)
+                {
+                    z.LowSpent = true;
+                    TradeIntent cont = TryContinuation(z, false, i, c);
+                    if (cont != null) return cont;
+                }
+            }
+            // Bearish: breach of the range high, reclaimed (close back below it) within N bars.
+            if (z.State == Killzone.Setup.None && !z.HighSpent && (z.HighBreachIdx >= 0 || h > z.High))
+            {
+                if (z.HighBreachIdx < 0) { z.HighBreachIdx = i; z.HighBreachExt = h; z.HighBreachVol = false; }
+                z.HighBreachExt = Math.Max(z.HighBreachExt, h);
+                z.HighBreachVol |= VolumeOk(i);
+
+                if (c < z.High)
+                {
+                    z.HighSpent = true;
+                    bool deep = z.HighBreachExt >= z.High + pen, vol = z.HighBreachVol || !_bot.AsrUseVolume, bias = !StrongTrendAgainst(false);
+                    if (deep && c < mid && vol && bias)
+                        Arm(z, Killzone.Setup.Bear, i, z.HighBreachExt, MssLevel(false, z.HighBreachIdx, LowestLow(z.HighBreachIdx, i)));
+                    else
+                        _bot.Log("{0}: high reclaimed but rejected (depth {1}, lower-half close {2}, volume {3}, bias {4}).", z.Name, deep, c < mid, vol, bias);
+                }
+                else if (i - z.HighBreachIdx >= _bot.AsrMaxReclaimBars)
+                {
+                    z.HighSpent = true;
+                    TradeIntent cont = TryContinuation(z, true, i, c);
+                    if (cont != null) return cont;
+                }
+            }
+            return null;
+        }
+
+        private void NewSession(Killzone z, DateTime localDay, DateTime sweepStartUtc)
+        {
+            z.Reset(localDay);
+            z.SweepStartUtc = sweepStartUtc;
+            z.SweepEndUtc = sweepStartUtc.AddHours(z.WindowHours);
+            DateTime rangeStartLocal = localDay.AddHours(z.RangeStartHour);
+            if (z.RangeStartHour > z.SweepStartHour) rangeStartLocal = rangeStartLocal.AddDays(-1);   // range spans midnight
+            DateTime rangeStartUtc = TimeHelper.ToUtc(rangeStartLocal, _tz);
+
+            var bars = _bot.Bars;
+            double hi = double.MinValue, lo = double.MaxValue;
+            int n = 0;
+            for (int k = bars.Count - 2; k >= 0; k--)
+            {
+                DateTime t = bars.OpenTimes[k];
+                if (t < rangeStartUtc) break;
+                if (t >= sweepStartUtc) continue;
+                hi = Math.Max(hi, bars.HighPrices[k]);
+                lo = Math.Min(lo, bars.LowPrices[k]);
+                n++;
+            }
+            if (n < 3) { _bot.Log("{0}: not enough bars in the range window ({1}); no setup today.", z.Name, n); return; }
+
+            double adr = AverageDailyRange(), height = hi - lo;
+            if (adr > 0)
+            {
+                double pct = height / adr * 100.0;
+                if (pct < z.MinPct || pct > z.MaxPct)
+                {
+                    _bot.Log("{0}: range {1:F1} pips = {2:F0}% of ADR, outside {3}-{4}%; no setup today.",
+                        z.Name, height / _bot.Symbol.PipSize, pct, z.MinPct, z.MaxPct);
+                    return;
+                }
+            }
+            z.High = hi; z.Low = lo; z.RangeValid = true;
+
+            // Restart mid-session: a level already traded through is no longer fresh liquidity.
+            for (int k = bars.Count - 2; k >= 0 && bars.OpenTimes[k] >= sweepStartUtc; k--)
+            {
+                if (bars.HighPrices[k] > hi) z.HighSpent = true;
+                if (bars.LowPrices[k] < lo) z.LowSpent = true;
+            }
+            _bot.Log("{0}: range {1:F5}-{2:F5} ({3:F1} pips); hunting sweeps until {4:HH:mm} UTC.",
+                z.Name, lo, hi, height / _bot.Symbol.PipSize, z.SweepEndUtc);
+        }
+
+        // Average (High-Low) of the last N CLOSED daily bars.
+        private double AverageDailyRange()
+        {
+            int cnt = _daily.Count;
+            if (cnt < 3) return 0;
+            int last = cnt - 2, first = Math.Max(0, last - _bot.AsrAdrDays + 1);
+            double sum = 0; int n = 0;
+            for (int k = first; k <= last; k++) { sum += _daily.HighPrices[k] - _daily.LowPrices[k]; n++; }
+            return n > 0 ? sum / n : 0;
+        }
+
+        private void Arm(Killzone z, Killzone.Setup s, int sweepIdx, double extreme, double mss)
+        {
+            z.State = s;
+            z.SweepIndex = sweepIdx;
+            z.SweepExtreme = extreme;
+            z.MssLevel = mss;
+            _bot.Log("{0}: {1} sweep at {2:F5}, MSS level {3:F5}.", z.Name, s == Killzone.Setup.Bull ? "Bull" : "Bear", extreme, mss);
+        }
+
+        // MSS level = the stricter of (last confirmed swing before the breach) and (opposite
+        // extreme of the sweep leg), so the close breaks both internal structure and the sweep leg.
+        private double MssLevel(bool bull, int breachIdx, double legOpposite)
+        {
+            double p; int idx;
+            bool found = bull
+                ? _ctx.LastSwingHigh(_bot.AsrSwingStrength, _bot.AsrSwingLookback, out p, out idx, breachIdx - 1)
+                : _ctx.LastSwingLow(_bot.AsrSwingStrength, _bot.AsrSwingLookback, out p, out idx, breachIdx - 1);
+            if (!found) return legOpposite;
+            return bull ? Math.Max(p, legOpposite) : Math.Min(p, legOpposite);
+        }
+
+        private bool DisplacementOk(double o, double c)
+        {
+            if (_bot.AsrMinDisplacementAtr <= 0) return true;
+            double atr = _ctx.Atr.Result.Last(1);
+            return atr > 0 && Math.Abs(c - o) >= _bot.AsrMinDisplacementAtr * atr;
+        }
+
+        // Tick volume of bar i vs a baseline (FX tick volume = broker-side activity proxy).
+        //   SameTimeOfDay: mean of bars at the same clock time on the previous N trading days.
+        //   RollingBars:   mean of the N bars before bar i.
+        private bool VolumeOk(int i)
+        {
+            if (!_bot.AsrUseVolume) return true;
+            var v = _bot.Bars.TickVolumes;
+            var t = _bot.Bars.OpenTimes;
+            int n = _bot.AsrVolumePeriod;
+            double sum = 0; int cnt = 0;
+            if (_bot.AsrVolumeBase == AsrVolumeBaseline.RollingBars)
+            {
+                for (int k = i - 1; k >= 0 && cnt < n; k--) { sum += v[k]; cnt++; }
+            }
+            else
+            {
+                TimeSpan tod = t[i].TimeOfDay;
+                DateTime oldest = t[i].AddDays(-(n * 1.5 + 4));
+                for (int k = i - 1; k >= 0 && cnt < n && t[k] >= oldest; k--)
+                    if (t[k].TimeOfDay == tod) { sum += v[k]; cnt++; }
+                if (cnt < Math.Min(5, n)) return true;   // not enough history yet: do not block
+            }
+            if (cnt == 0) return false;
+            double avg = sum / cnt;
+            return avg > 0 && v[i] >= avg * _bot.AsrVolumeMult;
+        }
+
+        private double HighestHigh(int from, int to)
+        {
+            double m = double.MinValue;
+            for (int k = from; k <= to; k++) m = Math.Max(m, _bot.Bars.HighPrices[k]);
+            return m;
+        }
+
+        private double LowestLow(int from, int to)
+        {
+            double m = double.MaxValue;
+            for (int k = from; k <= to; k++) m = Math.Min(m, _bot.Bars.LowPrices[k]);
+            return m;
+        }
+
+        // H4 bias from the last CLOSED H4 bar: close on the trade's side of the H4 EMA.
+        // Used for CONTINUATION trades (must go with the trend).
+        private bool BiasAllows(bool bull)
+        {
+            if (!_bot.AsrUseHtfBias) return true;
+            if (_h4.Count < _bot.AsrHtfEmaPeriod + 2) return true;
+            double hc = _h4.ClosePrices.Last(1), he = _h4Ema.Result.Last(1);
+            return bull ? hc > he : hc < he;
+        }
+
+        // Strong H4 trend AGAINST the trade = close beyond the EMA on the wrong side AND the EMA
+        // sloping that way. Used for REVERSAL trades: a sweep against a mild or flat H4 is allowed,
+        // a sweep against a clearly trending H4 is not (those sweeps tend to continue).
+        private bool StrongTrendAgainst(bool bull)
+        {
+            if (!_bot.AsrUseHtfBias) return false;
+            int sb = _bot.AsrHtfSlopeBars;
+            if (_h4.Count < _bot.AsrHtfEmaPeriod + sb + 2) return false;
+            double hc = _h4.ClosePrices.Last(1), e1 = _h4Ema.Result.Last(1), eN = _h4Ema.Result.Last(1 + sb);
+            return bull ? (hc < e1 && e1 < eN) : (hc > e1 && e1 > eN);
+        }
+
+        // The range extreme broke and held: if the H4 trend agrees, buy (sell) the retest of the
+        // broken level with a limit order. Stop on the far side of the level by k x ATR, or beyond
+        // the breakout leg's extreme, whichever is further.
+        private TradeIntent TryContinuation(Killzone z, bool bull, int i, double close)
+        {
+            double pip = _bot.Symbol.PipSize;
+            double level = bull ? z.High : z.Low;
+            string side = bull ? "high" : "low";
+            if (!_bot.AsrUseContinuation)
+            {
+                _bot.Log("{0}: range {1} accepted - breakout (continuation disabled).", z.Name, side);
+                return null;
+            }
+            if ((bull ? close - level : level - close) < _bot.AsrContMinClosePips * pip)
+            {
+                _bot.Log("{0}: range {1} accepted but close too near the level; no continuation.", z.Name, side);
+                return null;
+            }
+            if (!BiasAllows(bull))
+            {
+                _bot.Log("{0}: range {1} broke against the H4 trend; no continuation.", z.Name, side);
+                return null;
+            }
+            double atr = _ctx.Atr.Result.Last(1);
+            if (atr <= 0) return null;
+
+            int from = bull ? z.HighBreachIdx : z.LowBreachIdx;
+            double legExtreme = bull ? LowestLow(from, i) : HighestHigh(from, i);
+            double buf = _bot.AsrStopBufferPips * pip;
+            double stop = bull ? Math.Min(level - _bot.AsrContStopAtr * atr, legExtreme) - buf
+                               : Math.Max(level + _bot.AsrContStopAtr * atr, legExtreme) + buf;
+            double entry = Math.Round(level / _bot.Symbol.TickSize) * _bot.Symbol.TickSize;
+
+            z.State = Killzone.Setup.Done;   // one trade per killzone per day
+            DateTime now = _bot.Server.Time;
+            DateTime expiry = now.AddMinutes(_bot.AsrContExpiryBars * BarMinutes());
+            DateTime sessionEnd = _ctx.Session.SessionEndUtc(_ctx.Session.SessionStartUtc(now));
+            var intent = new TradeIntent
+            {
+                Direction = bull ? TradeType.Buy : TradeType.Sell,
+                Kind = EntryKind.Limit,
+                EntryPrice = entry,
+                StopLossPrice = stop,
+                TakeProfitR = _bot.AsrContTargetR,
+                ExpiryUtc = expiry < sessionEnd ? expiry : sessionEnd,
+                Tag = z.Tag + "-C" + (bull ? "L" : "S"),
+            };
+            if (_bot.AsrMaxBarsInTrade > 0) intent.MaxBarsInTrade = _bot.AsrMaxBarsInTrade;
+            _bot.Log("{0}: range {1} broke and held with the H4 trend -> continuation {2} limit {3:F5} stop {4:F5} ({5:F1} pips).",
+                z.Name, side, intent.Direction, entry, stop, Math.Abs(entry - stop) / pip);
+            return intent;
+        }
+
+        private TradeIntent BuildIntent(Killzone z, bool bull, double mssClose, double mssHigh, double mssLow)
+        {
+            double pip = _bot.Symbol.PipSize;
+            double buf = _bot.AsrStopBufferPips * pip;
+            double stop = bull ? z.SweepExtreme - buf : z.SweepExtreme + buf;
+
+            var intent = new TradeIntent
+            {
+                Direction = bull ? TradeType.Buy : TradeType.Sell,
+                StopLossPrice = stop,
+                Tag = z.Tag + "-R" + (bull ? "L" : "S"),
+            };
+            if (_bot.AsrMaxBarsInTrade > 0) intent.MaxBarsInTrade = _bot.AsrMaxBarsInTrade;
+
+            double entry = mssClose;
+            if (_bot.AsrEntry == AsrEntryMode.LimitRetrace)
+            {
+                double legEnd = bull ? mssHigh : mssLow;
+                double r = _bot.AsrRetracePct / 100.0;
+                entry = bull ? legEnd - (legEnd - z.SweepExtreme) * r : legEnd + (z.SweepExtreme - legEnd) * r;
+                entry = Math.Round(entry / _bot.Symbol.TickSize) * _bot.Symbol.TickSize;
+                intent.Kind = EntryKind.Limit;
+                intent.EntryPrice = entry;
+                DateTime now = _bot.Server.Time;
+                DateTime expiry = now.AddMinutes(_bot.AsrLimitExpiryBars * BarMinutes());
+                DateTime sessionEnd = _ctx.Session.SessionEndUtc(_ctx.Session.SessionStartUtc(now));
+                intent.ExpiryUtc = expiry < sessionEnd ? expiry : sessionEnd;
+            }
+
+            double risk = Math.Abs(entry - stop);
+            if (risk <= 0) return null;
+
+            if (_bot.AsrTarget == AsrTargetMode.OppositeRange)
+            {
+                double target = bull ? z.High : z.Low;
+                double rr = (bull ? target - entry : entry - target) / risk;
+                if (rr < _bot.AsrMinRR)
+                {
+                    _bot.Log("{0}: skip, opposite range only {1:F2}R away (min {2}).", z.Name, rr, _bot.AsrMinRR);
+                    return null;
+                }
+                intent.TakeProfitPrice = target;
+            }
+            else intent.TakeProfitR = _bot.AsrFixedR;
+
+            _bot.Log("{0}: MSS confirmed -> {1} {2} entry {3:F5} stop {4:F5} ({5:F1} pips).",
+                z.Name, intent.Kind, intent.Direction, entry, stop, risk / pip);
+            return intent;
+        }
+
+        // Chart bar length = smallest gap among recent bars (robust to weekend/session gaps).
+        private double BarMinutes()
+        {
+            var t = _bot.Bars.OpenTimes;
+            double best = double.MaxValue;
+            for (int k = Math.Max(1, t.Count - 10); k < t.Count; k++)
+            {
+                double m = (t[k] - t[k - 1]).TotalMinutes;
+                if (m > 0 && m < best) best = m;
+            }
+            return best == double.MaxValue ? 5 : best;
+        }
+    }
+// </SIGNAL-ENGINE>
+
+    // =====================================================================================
+    //  STRATEGY CONTEXT — shared utilities for signal engines.
+    // =====================================================================================
+    public class StrategyContext
+    {
+        private readonly GbpUsdSessionBot _bot;
+        private readonly Dictionary<string, Bars> _mtf = new Dictionary<string, Bars>();
+
+        public SessionFilter Session { get; private set; }
+        public RegimeFilter Regime { get; private set; }
+
+        public StrategyContext(GbpUsdSessionBot bot, SessionFilter session, RegimeFilter regime)
+        {
+            _bot = bot;
+            Session = session;
+            Regime = regime;
+        }
+
+        public AverageTrueRange Atr { get { return _bot.Atr; } }
+
+        // Higher-timeframe bars. Use Last(1) on them for the last CLOSED higher-timeframe bar.
+        public Bars Mtf(TimeFrame tf)
+        {
+            string key = tf.ToString();
+            Bars b;
+            if (!_mtf.TryGetValue(key, out b))
+            {
+                b = _bot.MarketData.GetBars(tf, _bot.SymbolName);
+                _mtf[key] = b;
+            }
+            return b;
+        }
+
+        // Session-anchored VWAP and standard deviation of typical price, from closed bars.
+        // FX/CFD volume is broker tick volume: a proxy, not true traded volume.
+        public bool SessionVwap(out double vwap, out double stdDev)
+        {
+            vwap = 0; stdDev = 0;
+            var bars = _bot.Bars;
+            DateTime anchor = Session.SessionStartUtc(_bot.Server.Time);
+            double sumPV = 0, sumV = 0, sumP2V = 0;
+            for (int i = bars.Count - 2; i >= 0; i--)
+            {
+                if (bars.OpenTimes[i] < anchor) break;
+                double tp = (bars.HighPrices[i] + bars.LowPrices[i] + bars.ClosePrices[i]) / 3.0;
+                double v = Math.Max(1.0, bars.TickVolumes[i]);
+                sumPV += tp * v; sumV += v; sumP2V += tp * tp * v;
+            }
+            if (sumV <= 0) return false;
+            vwap = sumPV / sumV;
+            stdDev = Math.Sqrt(Math.Max(0, sumP2V / sumV - vwap * vwap));
+            return true;
+        }
+
+        // Last CONFIRMED swing high/low: a bar whose high (low) is the extreme of `strength`
+        // bars on each side. Confirmation lags by `strength` bars, so it never repaints.
+        // endIndex = newest bar allowed in the confirmation window (default: last closed bar).
+        // Pass Bars.Count - 3 to find swings formed BEFORE the last closed bar (e.g. sweeps).
+        public bool LastSwingHigh(int strength, int lookback, out double price, out int index, int endIndex = -1)
+        {
+            return FindSwing(true, strength, lookback, endIndex, out price, out index);
+        }
+
+        public bool LastSwingLow(int strength, int lookback, out double price, out int index, int endIndex = -1)
+        {
+            return FindSwing(false, strength, lookback, endIndex, out price, out index);
+        }
+
+        private bool FindSwing(bool high, int strength, int lookback, int endIndex, out double price, out int index)
+        {
+            var bars = _bot.Bars;
+            price = 0; index = -1;
+            int end = endIndex < 0 ? bars.Count - 2 : Math.Min(endIndex, bars.Count - 2);
+            int newestCandidate = end - strength; // right side must be closed bars
+            int oldest = Math.Max(strength, end - lookback);
+            for (int i = newestCandidate; i >= oldest; i--)
+            {
+                double v = high ? bars.HighPrices[i] : bars.LowPrices[i];
+                bool ok = true;
+                for (int k = 1; k <= strength && ok; k++)
+                {
+                    double l = high ? bars.HighPrices[i - k] : bars.LowPrices[i - k];
+                    double r = high ? bars.HighPrices[i + k] : bars.LowPrices[i + k];
+                    ok = high ? (v > l && v >= r) : (v < l && v <= r);
+                }
+                if (ok) { price = v; index = i; return true; }
+            }
+            return false;
+        }
+
+        // Highest high / lowest low of closed bars from `fromIndex` to the last closed bar.
+        public void RangeSince(int fromIndex, out double hi, out double lo)
+        {
+            var bars = _bot.Bars;
+            hi = double.MinValue; lo = double.MaxValue;
+            for (int i = Math.Max(0, fromIndex); i <= bars.Count - 2; i++)
+            {
+                hi = Math.Max(hi, bars.HighPrices[i]);
+                lo = Math.Min(lo, bars.LowPrices[i]);
+            }
+        }
+    }
+
+    // =====================================================================================
+    //  REGIME FILTER — ADX trend/range classification and ATR-percentile volatility gate.
+    // =====================================================================================
+    public class RegimeFilter
+    {
+        private readonly GbpUsdSessionBot _bot;
+        private readonly AverageTrueRange _atr;
+        private readonly DirectionalMovementSystem _dms;
+        private double _atrPercentile = double.NaN;
+
+        public MarketRegime Current { get; private set; }
+        public double Adx { get; private set; }
+        public double DiPlus { get; private set; }
+        public double DiMinus { get; private set; }
+        public double AtrPercentile { get { return _atrPercentile; } }
+
+        public RegimeFilter(GbpUsdSessionBot bot, AverageTrueRange atr)
+        {
+            _bot = bot;
+            _atr = atr;
+            _dms = bot.Indicators.DirectionalMovementSystem(bot.AdxPeriod);
+            Current = MarketRegime.Unknown;
+        }
+
+        public bool IsTrending { get { return Current == MarketRegime.Trending; } }
+        public bool IsRanging { get { return Current == MarketRegime.Ranging; } }
+        public bool TrendUp { get { return IsTrending && DiPlus > DiMinus; } }
+        public bool TrendDown { get { return IsTrending && DiMinus > DiPlus; } }
+
+        public void Update()
+        {
+            if (_bot.Bars.Count < Math.Max(_bot.AdxPeriod * 3, _bot.AtrPercentileLookback + 2)) { Current = MarketRegime.Unknown; return; }
+
+            Adx = _dms.ADX.Last(1);
+            DiPlus = _dms.DIPlus.Last(1);
+            DiMinus = _dms.DIMinus.Last(1);
+            if (double.IsNaN(Adx)) Current = MarketRegime.Unknown;
+            else if (Adx >= _bot.AdxTrendLevel) Current = MarketRegime.Trending;
+            else if (Adx <= _bot.AdxRangeLevel) Current = MarketRegime.Ranging;
+            else Current = MarketRegime.Neutral;
+
+            double now = _atr.Result.Last(1);
+            int below = 0, n = 0;
+            for (int i = 2; i <= _bot.AtrPercentileLookback + 1; i++)
+            {
+                double v = _atr.Result.Last(i);
+                if (double.IsNaN(v)) continue;
+                n++;
+                if (v < now) below++;
+            }
+            _atrPercentile = n > 0 ? 100.0 * below / n : double.NaN;
+        }
+
+        public bool VolatilityOk(out string reason)
+        {
+            reason = null;
+            if (!_bot.UseVolatilityGate || double.IsNaN(_atrPercentile)) return true;
+            if (_atrPercentile < _bot.MinAtrPercentile) { reason = string.Format(CultureInfo.InvariantCulture, "volatility too low (ATR pct {0:F0})", _atrPercentile); return false; }
+            if (_atrPercentile > _bot.MaxAtrPercentile) { reason = string.Format(CultureInfo.InvariantCulture, "volatility too high (ATR pct {0:F0})", _atrPercentile); return false; }
+            return true;
+        }
+    }
+
+    // =====================================================================================
+    //  TRADE TAG — compact key=value metadata in order/position comments ("R=12.5;V=10000").
+    // =====================================================================================
+    public static class TradeTag
+    {
+        public static string Build(double riskPips, double volume, int maxBars, string group, string tag)
+        {
+            var parts = new List<string>
+            {
+                "R=" + riskPips.ToString("F2", CultureInfo.InvariantCulture),
+                "V=" + volume.ToString("F0", CultureInfo.InvariantCulture)
+            };
+            if (maxBars > 0) parts.Add("B=" + maxBars.ToString(CultureInfo.InvariantCulture));
+            if (!string.IsNullOrEmpty(group)) parts.Add("G=" + group);
+            if (!string.IsNullOrEmpty(tag)) parts.Add("T=" + tag);
+            return string.Join(";", parts);
+        }
+
+        public static string Get(string comment, string key)
+        {
+            if (string.IsNullOrEmpty(comment)) return null;
+            foreach (var part in comment.Split(';'))
+            {
+                int eq = part.IndexOf('=');
+                if (eq > 0 && part.Substring(0, eq).Trim() == key) return part.Substring(eq + 1).Trim();
+            }
+            return null;
+        }
+
+        public static double? GetDouble(string comment, string key)
+        {
+            double v;
+            string s = Get(comment, key);
+            return s != null && double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v) ? v : (double?)null;
+        }
+    }
+
+    // =====================================================================================
+    //  TRADE META REGISTRY — per-position facts used by trailing, partials, time stops and
+    //  the journal. Rebuilt from comments after a restart.
+    // =====================================================================================
+    public enum RunnerTimeFrame { Minute15, Hour }
+
+    public class TradeMeta
+    {
+        public bool TpRemoved;
+        public double RiskPips;
+        public double OriginalVolume;
+        public int MaxBars;
+        public string Tag = "";
+        public string RegimeAtEntry = "";
+        public double MaePips;
+        public double MfePips;
+        public bool PartialDone;
+        public bool FromComment;
+        public bool TrackedFromOpen;
+    }
+
+    public class TradeMetaRegistry
+    {
+        private readonly GbpUsdSessionBot _bot;
+        private readonly Dictionary<long, TradeMeta> _map = new Dictionary<long, TradeMeta>();
+
+        public TradeMetaRegistry(GbpUsdSessionBot bot) { _bot = bot; }
+
+        public TradeMeta Get(Position p)
+        {
+            TradeMeta m;
+            return _map.TryGetValue(p.Id, out m) ? m : null;
+        }
+
+        public void Remove(Position p) { _map.Remove(p.Id); }
+
+        // Idempotent; upgrades an estimate when better (comment-based) data arrives.
+        public void Register(Position p, string commentOverride, bool freshOpen, MarketRegime regime)
+        {
+            string comment = commentOverride ?? p.Comment;
+            double? r = TradeTag.GetDouble(comment, "R");
+            TradeMeta existing = Get(p);
+            if (existing != null && (existing.FromComment || !r.HasValue)) return;
+
+            var m = existing ?? new TradeMeta { RegimeAtEntry = regime.ToString(), TrackedFromOpen = freshOpen };
+            if (r.HasValue)
+            {
+                m.RiskPips = r.Value;
+                m.OriginalVolume = TradeTag.GetDouble(comment, "V") ?? p.VolumeInUnits;
+                m.MaxBars = (int)(TradeTag.GetDouble(comment, "B") ?? 0);
+                m.Tag = TradeTag.Get(comment, "T") ?? "";
+                m.FromComment = true;
+                m.PartialDone = p.VolumeInUnits < m.OriginalVolume - _bot.Symbol.VolumeInUnitsMin / 2.0;
+            }
+            else
+            {
+                m.OriginalVolume = p.VolumeInUnits;
+                if (p.StopLoss.HasValue)
+                {
+                    double est = Math.Abs(p.EntryPrice - p.StopLoss.Value) / _bot.Symbol.PipSize;
+                    if (est >= _bot.MinStopPips) m.RiskPips = est;
+                }
+                _bot.Log(m.RiskPips > 0
+                    ? "Position {0}: R not in comment; estimated {1:F1} pips from current SL."
+                    : "Position {0}: initial risk unknown; R-based management disabled (SL still protects it).", p.Id, m.RiskPips);
+            }
+            _map[p.Id] = m;
+        }
+    }
+
+    // =====================================================================================
+    //  STATE STORE — persists protective state across restarts (real-time only).
+    // =====================================================================================
+    public class StateStore
+    {
+        private readonly GbpUsdSessionBot _bot;
+        private readonly bool _enabled;
+        private readonly string _prefix;
+
+        public StateStore(GbpUsdSessionBot bot)
+        {
+            _bot = bot;
+            _enabled = bot.RunningMode == RunningMode.RealTime;
+            _prefix = bot.BotLabel + " " + bot.SymbolName + " ";
+        }
+
+        // cTrader LocalStorage keys: max 50 characters, letters/digits/spaces only (cAlgo.API docs).
+        // Anything else is replaced by a space; long keys are shortened with a stable FNV-1a hash
+        // (string.GetHashCode is randomised per process in .NET 6, so it cannot be used here).
+        private string StorageKey(string key)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (char ch in _prefix + key)
+                sb.Append(char.IsLetterOrDigit(ch) && ch < 128 ? ch : ' ');
+            string k = sb.ToString().Trim();
+            if (k.Length <= 50) return k;
+            uint h = 2166136261;
+            foreach (char ch in k) { h ^= ch; h *= 16777619; }
+            return k.Substring(0, 41) + " " + h.ToString("X8", CultureInfo.InvariantCulture);
+        }
+
+        public string Get(string key)
+        {
+            if (!_enabled) return null;
+            try { return _bot.LocalStorage.GetString(StorageKey(key)); }
+            catch (Exception ex) { _bot.Log("State read failed ({0}): {1}", key, ex.Message); return null; }
+        }
+
+        public void Set(string key, string value)
+        {
+            if (!_enabled) return;
+            try { _bot.LocalStorage.SetString(StorageKey(key), value); }
+            catch (Exception ex) { _bot.Log("State write failed ({0}): {1}", key, ex.Message); }
+        }
+
+        public double? GetDouble(string key)
+        {
+            double v;
+            string s = Get(key);
+            return s != null && double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out v) ? v : (double?)null;
+        }
+
+        public void SetDouble(string key, double value) { Set(key, value.ToString("R", CultureInfo.InvariantCulture)); }
+
+        public void Flush()
+        {
+            if (!_enabled) return;
+            try { _bot.LocalStorage.Flush(LocalStorageScope.Instance); }
+            catch (Exception ex) { _bot.Log("State flush failed: {0}", ex.Message); }
+        }
+    }
+
+    // =====================================================================================
+    //  TIME HELPER — time-zone conversion with safe fallback to UTC.
+    // =====================================================================================
+    public static class TimeHelper
+    {
+        public static TimeZoneInfo Resolve(string id, GbpUsdSessionBot bot, string purpose)
+        {
+            if (string.IsNullOrWhiteSpace(id) || id.Trim().Equals("UTC", StringComparison.OrdinalIgnoreCase))
+                return TimeZoneInfo.Utc;
+            try { return TimeZoneInfo.FindSystemTimeZoneById(id.Trim()); }
+            catch (Exception ex)
+            {
+                bot.Log("WARNING: time zone '{0}' for {1} not found ({2}); using UTC. Try the Windows id (e.g. 'Central Europe Standard Time') or IANA id (e.g. 'Europe/Prague').", id, purpose, ex.Message);
+                return TimeZoneInfo.Utc;
+            }
+        }
+
+        public static DateTime ToZone(DateTime utc, TimeZoneInfo tz)
+        {
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), tz);
+        }
+
+        public static DateTime ToUtc(DateTime local, TimeZoneInfo tz)
+        {
+            try { return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), tz); }
+            catch (ArgumentException) { return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(local.AddHours(1), DateTimeKind.Unspecified), tz); } // DST gap
+        }
+    }
+
+    // =====================================================================================
+    //  EXPOSURE CALCULATOR — worst-case loss if every stop on the ACCOUNT is hit now,
+    //  including pending orders (an OCO group counts once, at its largest leg).
+    // =====================================================================================
+    public class ExposureCalculator
+    {
+        private readonly GbpUsdSessionBot _bot;
+        public ExposureCalculator(GbpUsdSessionBot bot) { _bot = bot; }
+
+        public double WorstCaseOpenLoss(string excludeOcoGroup, out bool hasUnprotected)
+        {
+            hasUnprotected = false;
+            double total = 0;
+
+            foreach (var p in _bot.Positions)
+            {
+                if (!p.StopLoss.HasValue) { hasUnprotected = true; continue; }
+                double dist = p.TradeType == TradeType.Buy ? p.CurrentPrice - p.StopLoss.Value
+                                                           : p.StopLoss.Value - p.CurrentPrice;
+                double closingCommission = Math.Abs(p.Commissions);
+                if (dist <= 0) { total += closingCommission; continue; }
+                total += ToAccount(dist * p.VolumeInUnits, p.Symbol) + closingCommission;
+            }
+
+            var groupMax = new Dictionary<string, double>();
+            foreach (var o in _bot.PendingOrders)
+            {
+                Symbol sym;
+                try { sym = _bot.Symbols.GetSymbol(o.SymbolName); } catch { hasUnprotected = true; continue; }
+                double? slPips = o.StopLossPips;
+                if (!slPips.HasValue && o.StopLoss.HasValue) slPips = Math.Abs(o.TargetPrice - o.StopLoss.Value) / sym.PipSize;
+                if (!slPips.HasValue || slPips.Value <= 0) { hasUnprotected = true; continue; }
+
+                double loss = ToAccount(slPips.Value * sym.PipSize * o.VolumeInUnits, sym);
+                string group = (o.Label == _bot.BotLabel) ? TradeTag.Get(o.Comment, "G") : null;
+                if (!string.IsNullOrEmpty(group))
+                {
+                    if (group == excludeOcoGroup) continue;
+                    double cur;
+                    groupMax[group] = groupMax.TryGetValue(group, out cur) ? Math.Max(cur, loss) : loss;
+                }
+                else total += loss;
+            }
+            return total + groupMax.Values.Sum();
+        }
+
+        private double ToAccount(double quoteAmount, Symbol sym)
+        {
+            try { return _bot.AssetConverter.Convert(quoteAmount, sym.QuoteAsset, _bot.Account.Asset); }
+            catch { return quoteAmount / sym.PipSize * sym.PipValue; } // static fallback
+        }
+    }
+
+    // =====================================================================================
+    //  RISK MANAGER — equity-based sizing incl. costs, losing-streak throttle, capped by
+    //  drawdown headroom and account-wide open risk.
+    // =====================================================================================
+    public class RiskManager
+    {
+        private readonly GbpUsdSessionBot _bot;
+        private readonly ExposureCalculator _exposure;
+        private readonly DrawdownGuard _dd;
+        private readonly DayLimiter _day;
+        private const double DivergenceWarnPct = 5.0;
+
+        public RiskManager(GbpUsdSessionBot bot, ExposureCalculator exposure, DrawdownGuard dd, DayLimiter day)
+        {
+            _bot = bot; _exposure = exposure; _dd = dd; _day = day;
+        }
+
+        public double CalculateVolume(double slPips, string ocoGroup, out string reason)
+        {
+            reason = null;
+            var sym = _bot.Symbol;
+            double equity = _bot.Account.Equity;
+            if (equity <= 0 || slPips <= 0) { reason = "invalid equity or SL"; return 0; }
+
+            bool unprotected;
+            double openLoss = _exposure.WorstCaseOpenLoss(ocoGroup, out unprotected);
+            if (unprotected && _bot.BlockIfUnprotectedPositions) { reason = "account has positions/orders without SL"; return 0; }
+
+            double riskPct = Math.Min(_bot.RiskPercent, GbpUsdSessionBot.HardMaxRiskPercent) * _day.RiskMultiplier;
+            double budget = equity * riskPct / 100.0;
+            double ddCapacity = _dd.RiskCapacity(equity - openLoss);
+            double accountCap = equity * _bot.MaxAccountOpenRiskPercent / 100.0 - openLoss;
+            double riskMoney = Math.Min(budget, Math.Min(ddCapacity, accountCap));
+
+            if (riskMoney <= 0)
+            {
+                reason = string.Format(CultureInfo.InvariantCulture,
+                    "no risk capacity (worst-case open loss {0:F2}, DD headroom {1:F2}, account cap room {2:F2})", openLoss, ddCapacity, accountCap);
+                return 0;
+            }
+
+            double pipValuePerUnit = PipValuePerUnit(sym);
+            if (pipValuePerUnit <= 0) { reason = "no valid pip value"; return 0; }
+
+            double commissionPerUnit = _bot.RoundTurnCommissionPer100k / 100000.0;
+            double lossPerUnit = pipValuePerUnit * (slPips + _bot.StopSlippageBufferPips) + commissionPerUnit;
+
+            double volume = sym.NormalizeVolumeInUnits(riskMoney / lossPerUnit, RoundingMode.Down);
+            if (volume > sym.VolumeInUnitsMax) volume = sym.NormalizeVolumeInUnits(sym.VolumeInUnitsMax, RoundingMode.Down);
+            if (volume < sym.VolumeInUnitsMin)
+            {
+                reason = string.Format(CultureInfo.InvariantCulture,
+                    "risk-based volume below symbol minimum {0} (risk money {1:F2})", sym.VolumeInUnitsMin, riskMoney);
+                return 0;
+            }
+
+            double finalRisk = volume * lossPerUnit;
+            if (finalRisk > budget * 1.0001 || finalRisk > equity * GbpUsdSessionBot.HardMaxRiskPercent / 100.0)
+            {
+                reason = "post-sizing risk check failed";
+                return 0;
+            }
+            if (riskMoney < budget)
+                _bot.Log("Risk reduced to {0:F2} ({1:F2}% of equity) to respect drawdown/open-risk headroom.", riskMoney, riskMoney / equity * 100);
+            if (_day.RiskMultiplier < 1.0)
+                _bot.LogDebug("Losing-streak throttle active: risk x{0}.", _day.RiskMultiplier);
+
+            return volume;
+        }
+
+        private double PipValuePerUnit(Symbol sym)
+        {
+            double live = double.NaN;
+            try { live = _bot.AssetConverter.Convert(sym.PipSize, sym.QuoteAsset, _bot.Account.Asset); }
+            catch (Exception ex) { _bot.LogDebug("AssetConverter unavailable ({0}); using PipValue.", ex.Message); }
+
+            double stat = sym.PipValue;
+            bool liveOk = !double.IsNaN(live) && !double.IsInfinity(live) && live > 0;
+            if (liveOk && stat > 0 && Math.Abs(live - stat) / stat * 100.0 > DivergenceWarnPct)
+                _bot.LogDebug("Pip value: live {0} vs start-of-run {1} differ by >{2}% (using live).", live, stat, DivergenceWarnPct);
+            return liveOk ? live : stat;
+        }
+    }
+
+    // =====================================================================================
+    //  DAY LIMITER — trades/day, consecutive losses/day, daily profit lock, losing-streak
+    //  risk throttle. Uses the drawdown guard's trading day so it matches the firm's day.
+    // =====================================================================================
+    public class DayLimiter
+    {
+        private readonly GbpUsdSessionBot _bot;
+        private readonly StateStore _store;
+        private readonly DrawdownGuard _dd;
+        private DateTime _day;
+        private int _tradesToday;
+        private int _lossesInRowToday;
+        private int _lossStreak; // across days, for the throttle
+
+        public DayLimiter(GbpUsdSessionBot bot, StateStore store, DrawdownGuard dd)
+        {
+            _bot = bot; _store = store; _dd = dd;
+            _day = dd.DayKey;
+            if (_store.Get("lim.day") == _day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
+            {
+                _tradesToday = (int)(_store.GetDouble("lim.trades") ?? 0);
+                _lossesInRowToday = (int)(_store.GetDouble("lim.lossesToday") ?? 0);
+            }
+            _lossStreak = (int)(_store.GetDouble("lim.streak") ?? 0);
+        }
+
+        public double RiskMultiplier
+        {
+            get { return _bot.ThrottleAfterLosses > 0 && _lossStreak >= _bot.ThrottleAfterLosses ? _bot.ThrottleRiskMultiplier : 1.0; }
+        }
+
+        private void Roll()
+        {
+            if (_dd.DayKey == _day) return;
+            _day = _dd.DayKey;
+            _tradesToday = 0;
+            _lossesInRowToday = 0;
+            Persist();
+        }
+
+        private void Persist()
+        {
+            _store.Set("lim.day", _day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+            _store.SetDouble("lim.trades", _tradesToday);
+            _store.SetDouble("lim.lossesToday", _lossesInRowToday);
+            _store.SetDouble("lim.streak", _lossStreak);
+        }
+
+        public void OnTradeOpened() { Roll(); _tradesToday++; Persist(); }
+
+        public void OnTradeClosed(double netProfit)
+        {
+            Roll();
+            if (netProfit < 0) { _lossesInRowToday++; _lossStreak++; }
+            else { _lossesInRowToday = 0; _lossStreak = 0; }
+            Persist();
+        }
+
+        public bool ProfitLockHit()
+        {
+            if (_bot.DailyProfitLockPercent <= 0) return false;
+            return _bot.Account.Equity >= _dd.DayReference * (1 + _bot.DailyProfitLockPercent / 100.0);
+        }
+
+        public bool CanTrade(out string reason)
+        {
+            Roll();
+            reason = null;
+            if (_bot.MaxTradesPerDay > 0 && _tradesToday >= _bot.MaxTradesPerDay) { reason = "max trades per day reached"; return false; }
+            if (_bot.MaxConsecutiveLossesPerDay > 0 && _lossesInRowToday >= _bot.MaxConsecutiveLossesPerDay) { reason = "consecutive-loss limit for today reached"; return false; }
+            if (ProfitLockHit()) { reason = "daily profit lock reached"; return false; }
+            return true;
+        }
+    }
+
+    // =====================================================================================
+    //  DRAWDOWN GUARD — daily and total kill-switch with safety buffer, firm-aligned day
+    //  boundary, static or trailing total DD, persisted across restarts.
+    // =====================================================================================
+    public class DrawdownGuard
+    {
+        private readonly GbpUsdSessionBot _bot;
+        private readonly StateStore _store;
+        private readonly TimeZoneInfo _resetTz;
+        private double _startBalance;
+        private double _highWater;
+        private DateTime _dayKey;
+        private double _dayReference;
+        private DateTime? _blockedDayKey;
+        private string _blockReason;
+
+        public bool IsHalted { get; private set; }
+        public DateTime DayKey { get { return _dayKey; } }
+        public double DayReference { get { return _dayReference; } }
+
+        public DrawdownGuard(GbpUsdSessionBot bot, StateStore store)
+        {
+            _bot = bot;
+            _store = store;
+            _resetTz = TimeHelper.Resolve(bot.DailyResetTimeZone, bot, "daily reset");
+
+            IsHalted = _store.Get("halted") == "1";
+            bool haltCleared = false;
+            if (IsHalted && bot.ResetHalt)
+            {
+                bot.Log("Halt flag cleared by 'Reset Halt'. Drawdown baseline restarts from current balance. Set 'Reset Halt' back to false.");
+                IsHalted = false;
+                haltCleared = true;
+                _store.Set("halted", "0");
+                _store.Set("start", "");
+                _store.Set("hwm", "");
+            }
+
+            double? savedStart = haltCleared ? null : _store.GetDouble("start");
+            _startBalance = bot.StartingBalanceInput > 0 ? bot.StartingBalanceInput : (savedStart ?? bot.Account.Balance);
+            double? savedHwm = haltCleared ? null : _store.GetDouble("hwm");
+            _highWater = Math.Max(_startBalance, savedHwm ?? _startBalance);
+
+            _dayKey = CurrentDayKey();
+            double? savedRef = _store.Get("dayKey") == DayKeyString(_dayKey) ? _store.GetDouble("dayRef") : null;
+            _dayReference = savedRef ?? CurrentReferenceValue();
+            if (_store.Get("blockedDay") == DayKeyString(_dayKey)) { _blockedDayKey = _dayKey; _blockReason = "restored daily block"; }
+
+            Persist();
+            bot.Log("Drawdown guard: start {0:F2}, day ref {1:F2}{2}, daily trigger {3}%, total trigger {4}% ({5}), reset {6:00}:00 {7}.",
+                _startBalance, _dayReference, savedRef.HasValue ? " (restored)" : "", DailyTrigger(), TotalTrigger(),
+                bot.TotalMode, bot.DailyResetHour, _resetTz.Id);
+        }
+
+        private double DailyTrigger()
+        {
+            return Math.Max(0.1, Math.Min(_bot.DailyDdPercent, GbpUsdSessionBot.HardMaxDailyDdPercent) - _bot.KillSwitchBufferPercent);
+        }
+
+        private double TotalTrigger()
+        {
+            return Math.Max(0.1, Math.Min(_bot.TotalDdPercent, GbpUsdSessionBot.HardMaxTotalDdPercent) - _bot.KillSwitchBufferPercent);
+        }
+
+        private double TotalReference() { return _bot.TotalMode == TotalDdMode.StaticFromStart ? _startBalance : _highWater; }
+
+        public double DailyFloor { get { return _dayReference * (1 - DailyTrigger() / 100.0); } }
+        public double TotalFloor { get { return TotalReference() * (1 - TotalTrigger() / 100.0); } }
+
+        public double RiskCapacity(double worstCaseEquity)
+        {
+            return Math.Min(worstCaseEquity - DailyFloor, worstCaseEquity - TotalFloor);
+        }
+
+        private DateTime CurrentDayKey()
+        {
+            return TimeHelper.ToZone(_bot.Server.Time, _resetTz).AddHours(-_bot.DailyResetHour).Date;
+        }
+
+        private static string DayKeyString(DateTime d) { return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
+
+        private double CurrentReferenceValue()
+        {
+            return _bot.DailyBasis == DailyDdBasis.StartOfDayEquity ? _bot.Account.Equity : _bot.Account.Balance;
+        }
+
+        private void Persist()
+        {
+            _store.SetDouble("start", _startBalance);
+            _store.SetDouble("hwm", _highWater);
+            _store.Set("dayKey", DayKeyString(_dayKey));
+            _store.SetDouble("dayRef", _dayReference);
+            _store.Set("blockedDay", _blockedDayKey.HasValue ? DayKeyString(_blockedDayKey.Value) : "");
+            _store.Set("halted", IsHalted ? "1" : "0");
+        }
+
+        public DrawdownState Check()
+        {
+            if (IsHalted) return DrawdownState.TotalBreached;
+
+            DateTime key = CurrentDayKey();
+            if (key != _dayKey)
+            {
+                _dayKey = key;
+                _dayReference = CurrentReferenceValue();
+                _blockedDayKey = null;
+                Persist();
+                _bot.Log("New trading day {0}: reference {1:F2}.", DayKeyString(_dayKey), _dayReference);
+            }
+
+            double equity = _bot.Account.Equity;
+            double hwmCandidate = _bot.TotalMode == TotalDdMode.TrailingHighWaterEquity ? equity : _bot.Account.Balance;
+            if (_bot.TotalMode != TotalDdMode.StaticFromStart && hwmCandidate > _highWater)
+            {
+                _highWater = hwmCandidate;
+                _store.SetDouble("hwm", _highWater);
+            }
+
+            if (equity <= TotalFloor)
+            {
+                _bot.Log("TOTAL DRAWDOWN TRIGGER: equity {0:F2} <= {1:F2}. Closing, halting and stopping.", equity, TotalFloor);
+                IsHalted = true;
+                Persist();
+                _store.Flush();
+                _bot.CloseForKillSwitch("total DD kill-switch");
+                _bot.Stop();
+                return DrawdownState.TotalBreached;
+            }
+
+            if (equity <= DailyFloor && _blockedDayKey != _dayKey)
+            {
+                _bot.Log("DAILY DRAWDOWN TRIGGER: equity {0:F2} <= {1:F2}. Closing; blocked until next trading day.", equity, DailyFloor);
+                _bot.CloseForKillSwitch("daily DD kill-switch");
+                BlockForDay("daily drawdown");
+                return DrawdownState.DailyBreached;
+            }
+            return DrawdownState.Ok;
+        }
+
+        public void BlockForDay(string reason)
+        {
+            _blockedDayKey = _dayKey;
+            _blockReason = reason;
+            Persist();
+            _store.Flush();
+        }
+
+        public bool IsBlocked(out string reason)
+        {
+            if (IsHalted) { reason = "halted (total drawdown)"; return true; }
+            if (_blockedDayKey.HasValue && _blockedDayKey.Value == _dayKey)
+            {
+                reason = "blocked for trading day " + DayKeyString(_dayKey) + " (" + _blockReason + ")";
+                return true;
+            }
+            reason = null;
+            return false;
+        }
+    }
+
+    // =====================================================================================
+    //  SESSION FILTER — hours in a chosen time zone (handles DST), weekend cutoff in UTC.
+    // =====================================================================================
+    public class SessionFilter
+    {
+        private readonly GbpUsdSessionBot _bot;
+        private readonly TimeZoneInfo _tz;
+
+        public SessionFilter(GbpUsdSessionBot bot)
+        {
+            _bot = bot;
+            _tz = TimeHelper.Resolve(bot.SessionTimeZone, bot, "session");
+        }
+
+        public DateTime LocalTime(DateTime utc) { return TimeHelper.ToZone(utc, _tz); }
+
+        // UTC time of the most recent session start at or before `utc`.
+        public DateTime SessionStartUtc(DateTime utc)
+        {
+            DateTime local = LocalTime(utc);
+            DateTime startLocal = local.Date.AddHours(_bot.SessionStartHour);
+            if (startLocal > local) startLocal = startLocal.AddDays(-1);
+            return TimeHelper.ToUtc(startLocal, _tz);
+        }
+
+        // UTC time at which the session that started at `sessionStartUtc` ends.
+        public DateTime SessionEndUtc(DateTime sessionStartUtc)
+        {
+            DateTime startLocal = LocalTime(sessionStartUtc);
+            int hours = _bot.SessionEndHour - _bot.SessionStartHour;
+            if (hours <= 0) hours += 24;
+            return TimeHelper.ToUtc(startLocal.AddHours(hours), _tz);
+        }
+
+        public bool IsOpen(DateTime utc)
+        {
+            DateTime local = LocalTime(utc);
+            if (local.DayOfWeek == DayOfWeek.Saturday || local.DayOfWeek == DayOfWeek.Sunday) return false;
+            if (!_bot.TradeFridays && local.DayOfWeek == DayOfWeek.Friday) return false;
+
+            int start = _bot.SessionStartHour, end = _bot.SessionEndHour, h = local.Hour;
+            if (start == end) return true;
+            return start < end ? (h >= start && h < end) : (h >= start || h < end);
+        }
+
+        public bool IsPastFridayCutoff(DateTime utc)
+        {
+            if (utc.DayOfWeek == DayOfWeek.Saturday) return true;
+            return utc.DayOfWeek == DayOfWeek.Friday && utc.Hour >= _bot.FridayCutoffHourUtc;
+        }
+    }
+
+    // =====================================================================================
+    //  NEWS FILTER — external JSON feed (live only) + manual blackout list (live and backtest).
+    // =====================================================================================
+    public class NewsFilter
+    {
+        private struct NewsEvent { public DateTime TimeUtc; public string Currency; public string Title; }
+
+        private readonly GbpUsdSessionBot _bot;
+        private readonly HashSet<string> _currencies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly List<DateTime> _manual = new List<DateTime>();
+        private List<NewsEvent> _events = new List<NewsEvent>();
+        private DateTime _lastGoodFetch = DateTime.MinValue;
+        private readonly bool _feedActive;
+
+        public NewsFilter(GbpUsdSessionBot bot)
+        {
+            _bot = bot;
+            AddCurrency(SafeAssetName(bot.Symbol.BaseAsset));
+            AddCurrency(SafeAssetName(bot.Symbol.QuoteAsset));
+            foreach (var c in (bot.NewsExtraCurrencies ?? "").Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+                AddCurrency(c);
+            ParseManual(bot.ManualBlackouts);
+
+            _feedActive = bot.UseNewsFilter && !bot.IsBacktesting && bot.RunningMode != RunningMode.Optimization;
+            if (bot.UseNewsFilter && !_feedActive)
+                bot.Log("News feed disabled in backtest/optimisation (Http returns current data). Using {0} manual blackout(s).", _manual.Count);
+            bot.Log("News currencies: {0}", string.Join(",", _currencies));
+        }
+
+        private static string SafeAssetName(Asset a)
+        {
+            // Brokers may suffix asset names (e.g. "GBP.mp"); the news feed uses plain ISO codes.
+            try
+            {
+                if (a == null || a.Name == null) return null;
+                string n = a.Name.Trim();
+                int cut = n.IndexOfAny(new[] { '.', '_', '-', ' ' });
+                return cut > 0 ? n.Substring(0, cut) : n;
+            }
+            catch { return null; }
+        }
+
+        private void AddCurrency(string c)
+        {
+            if (!string.IsNullOrWhiteSpace(c)) _currencies.Add(c.Trim());
+        }
+
+        private void ParseManual(string text)
+        {
+            foreach (var part in (text ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                DateTime t;
+                if (DateTime.TryParseExact(part.Trim(), "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out t))
+                    _manual.Add(t);
+                else
+                    _bot.Log("Ignored invalid manual blackout '{0}' (expected yyyy-MM-dd HH:mm UTC).", part.Trim());
+            }
+        }
+
+        public void Refresh()
+        {
+            if (!_feedActive) return;
+            try
+            {
+                var response = _bot.Http.Get(_bot.NewsFeedUrl);
+                if (!response.IsSuccessful || string.IsNullOrWhiteSpace(response.Body))
+                {
+                    _bot.Log("News feed request failed; keeping {0} cached event(s).", _events.Count);
+                    return;
+                }
+
+                var parsed = new List<NewsEvent>();
+                using (var doc = JsonDocument.Parse(response.Body))
+                {
+                    if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                    {
+                        _bot.Log("News feed format unexpected (not an array); keeping cache.");
+                        return;
+                    }
+                    foreach (var el in doc.RootElement.EnumerateArray())
+                    {
+                        string impact = GetString(el, "impact");
+                        bool relevant = string.Equals(impact, "High", StringComparison.OrdinalIgnoreCase)
+                                        || (_bot.NewsIncludeMedium && string.Equals(impact, "Medium", StringComparison.OrdinalIgnoreCase));
+                        if (!relevant) continue;
+
+                        string ccy = GetString(el, "country");
+                        if (ccy == null || !_currencies.Contains(ccy)) continue;
+
+                        DateTimeOffset dto;
+                        if (!DateTimeOffset.TryParse(GetString(el, "date"), CultureInfo.InvariantCulture, DateTimeStyles.None, out dto))
+                            continue;
+
+                        parsed.Add(new NewsEvent { TimeUtc = dto.UtcDateTime, Currency = ccy, Title = GetString(el, "title") });
+                    }
+                }
+                _events = parsed;
+                _lastGoodFetch = _bot.Server.Time;
+                _bot.LogDebug("News feed refreshed: {0} relevant event(s).", _events.Count);
+            }
+            catch (Exception ex)
+            {
+                _bot.Log("News feed error ({0}); keeping {1} cached event(s).", ex.Message, _events.Count);
+            }
+        }
+
+        private static string GetString(JsonElement el, string name)
+        {
+            JsonElement v;
+            return el.TryGetProperty(name, out v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        }
+
+        public bool InEventWindow(DateTime utcNow, out string title)
+        {
+            title = null;
+            if (!_bot.UseNewsFilter) return false;
+            var before = TimeSpan.FromMinutes(_bot.NewsMinutesBefore);
+            var after = TimeSpan.FromMinutes(_bot.NewsMinutesAfter);
+
+            foreach (var t in _manual)
+                if (utcNow >= t - before && utcNow <= t + after) { title = "manual blackout " + t.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture); return true; }
+
+            if (!_feedActive) return false;
+            foreach (var e in _events)
+                if (utcNow >= e.TimeUtc - before && utcNow <= e.TimeUtc + after) { title = e.Currency + " " + e.Title; return true; }
+            return false;
+        }
+
+        public bool IsBlocked(DateTime utcNow, out string reason)
+        {
+            reason = null;
+            if (!_bot.UseNewsFilter) return false;
+
+            string title;
+            if (InEventWindow(utcNow, out title)) { reason = "news: " + title; return true; }
+
+            if (_feedActive && _bot.BlockIfFeedDown)
+            {
+                bool stale = _lastGoodFetch == DateTime.MinValue || (utcNow - _lastGoodFetch) > TimeSpan.FromHours(_bot.NewsRefreshHours * 3);
+                if (stale) { reason = "news feed unavailable/stale (fail-safe)"; return true; }
+            }
+            return false;
+        }
+    }
+
+    // =====================================================================================
+    //  EXECUTION SERVICE — slippage-bounded market orders (range orders), slippage-bounded
+    //  breakout orders (stop-limit), limit orders; spread gate; mandatory SL; safe retries.
+    // =====================================================================================
+    public class ExecutionService
+    {
+        private readonly GbpUsdSessionBot _bot;
+        public ExecutionService(GbpUsdSessionBot bot) { _bot = bot; }
+
+        private bool SpreadOk(double slPips, out string reason)
+        {
+            double spread = _bot.SpreadPips();
+            double maxSpread = Math.Min(_bot.MaxSpreadPips, slPips * _bot.MaxSpreadPercentOfSl / 100.0);
+            reason = spread > maxSpread
+                ? string.Format(CultureInfo.InvariantCulture, "spread {0:F1} > allowed {1:F1} pips", spread, maxSpread)
+                : null;
+            return reason == null;
+        }
+
+        private int MaxBarsFor(TradeIntent intent) { return intent.MaxBarsInTrade ?? _bot.TimeStopBars; }
+
+        public OpenOutcome OpenMarket(TradeIntent intent, double volume, double slPips, double? tpPips, out Position position, out string reason)
+        {
+            position = null;
+            if (slPips <= 0) { reason = "no valid stop-loss"; return OpenOutcome.Rejected; }
+            if (!_bot.QuotesValid()) { reason = "invalid quotes"; return OpenOutcome.RetryLater; }
+            if (!SpreadOk(slPips, out reason)) return OpenOutcome.RetryLater;
+
+            TradeType type = intent.Direction;
+            string comment = TradeTag.Build(slPips, volume, MaxBarsFor(intent), null, intent.Tag);
+            for (int attempt = 0; attempt <= _bot.MaxRetries; attempt++)
+            {
+                DateTime sentAt = _bot.Server.Time;
+                double basePrice = type == TradeType.Buy ? _bot.Symbol.Ask : _bot.Symbol.Bid;
+
+                TradeResult result = _bot.ExecuteMarketRangeOrder(type, _bot.SymbolName, volume, _bot.MaxSlippagePips,
+                    basePrice, _bot.BotLabel, slPips, tpPips, comment);
+
+                if (result.IsSuccessful && result.Position != null)
+                {
+                    _bot.Log("Opened {0} {1} {2} units @ {3} SL {4:F1}p TP {5}", intent.Tag, type, volume, result.Position.EntryPrice, slPips,
+                        tpPips.HasValue ? tpPips.Value.ToString("F1", CultureInfo.InvariantCulture) + "p" : "none");
+                    position = EnsureStopLoss(result.Position, slPips);
+                    if (position == null) { reason = "position closed: SL could not be attached"; return OpenOutcome.Rejected; }
+                    reason = null;
+                    return OpenOutcome.Opened;
+                }
+
+                _bot.Log("Order attempt {0} failed: {1}", attempt + 1, result.Error);
+                switch (result.Error)
+                {
+                    case ErrorCode.Timeout:
+                    case ErrorCode.TechnicalError:
+                        var filled = _bot.BotPositions().FirstOrDefault(p => p.TradeType == type && p.EntryTime >= sentAt.AddSeconds(-1));
+                        if (filled != null)
+                        {
+                            _bot.Log("Found position {0} opened despite error; not retrying.", filled.Id);
+                            position = EnsureStopLoss(filled, slPips);
+                            reason = position != null ? null : "position closed: SL could not be attached";
+                            return position != null ? OpenOutcome.Opened : OpenOutcome.Rejected;
+                        }
+                        continue;
+                    case ErrorCode.Disconnected:
+                        reason = "disconnected";
+                        return OpenOutcome.RetryLater;
+                    default:
+                        reason = "order rejected: " + result.Error;
+                        return OpenOutcome.Rejected;
+                }
+            }
+            reason = "retries exhausted";
+            return OpenOutcome.Rejected;
+        }
+
+        // Places a stop-limit (breakout) or limit order. Stop-limit is used instead of a plain
+        // stop order because only stop-limit orders cap slippage (stopLimitRangePips).
+        public OpenOutcome PlacePending(TradeIntent intent, double volume, double slPips, double? tpPips, DateTime expiryUtc, out string reason)
+        {
+            var sym = _bot.Symbol;
+            bool isBuy = intent.Direction == TradeType.Buy;
+            double target = Math.Round(intent.EntryPrice, sym.Digits);
+
+            if (intent.Kind == EntryKind.StopLimit)
+            {
+                if (isBuy && target <= sym.Ask) { reason = "buy stop-limit price is not above the market"; return OpenOutcome.Rejected; }
+                if (!isBuy && target >= sym.Bid) { reason = "sell stop-limit price is not below the market"; return OpenOutcome.Rejected; }
+            }
+            else if (intent.Kind == EntryKind.Limit)
+            {
+                if (isBuy && target >= sym.Bid) { reason = "buy limit price is not below the market"; return OpenOutcome.Rejected; }
+                if (!isBuy && target <= sym.Ask) { reason = "sell limit price is not above the market"; return OpenOutcome.Rejected; }
+            }
+            if (!SpreadOk(slPips, out reason)) return OpenOutcome.RetryLater;
+
+            string comment = TradeTag.Build(slPips, volume, MaxBarsFor(intent), intent.OcoGroup, intent.Tag);
+            TradeResult result = intent.Kind == EntryKind.StopLimit
+                ? _bot.PlaceStopLimitOrder(intent.Direction, _bot.SymbolName, volume, target, _bot.MaxSlippagePips, _bot.BotLabel,
+                    slPips, tpPips, ProtectionType.Relative, expiryUtc, comment)
+                : _bot.PlaceLimitOrder(intent.Direction, _bot.SymbolName, volume, target, _bot.BotLabel,
+                    slPips, tpPips, ProtectionType.Relative, expiryUtc, comment);
+
+            if (result.IsSuccessful)
+            {
+                reason = string.Format(CultureInfo.InvariantCulture, "placed {0} {1} {2} @ {3} SL {4:F1}p, expires {5:yyyy-MM-dd HH:mm} UTC",
+                    intent.Kind, intent.Direction, volume, target, slPips, expiryUtc);
+                return OpenOutcome.Placed;
+            }
+            reason = "pending order rejected: " + result.Error;
+            return OpenOutcome.Rejected;
+        }
+
+        private Position EnsureStopLoss(Position p, double slPips)
+        {
+            if (p.StopLoss.HasValue) return p;
+            _bot.Log("Position {0} has no SL attached; setting it now.", p.Id);
+            var r = p.ModifyStopLossPips(slPips);
+            if (r.IsSuccessful) return p;
+
+            _bot.Log("Could not attach SL ({0}); closing position {1} for safety.", r.Error, p.Id);
+            p.Close();
+            return null;
+        }
+    }
+
+    // =====================================================================================
+    //  SHADOW AUDIT — follows EVERY setup the strategy produces (taken or blocked) on closed
+    //  bars and records what it would have done with the strategy's own entry, stop and initial
+    //  target. Answers "what did the filters cost or save me?".
+    //  Simplifications (state them when reading results): fills at the exact limit/market price,
+    //  no spread/commission/slippage, if stop and target are touched in the same bar the STOP is
+    //  assumed first, no partials/runner trailing (initial target or time stop only).
+    //  Output: one "SHADOW," CSV line per resolved setup + a summary table when the bot stops.
+    // =====================================================================================
+    public class ShadowAudit
+    {
+        private class Shadow
+        {
+            public string Tag, Status;
+            public bool IsBuy, Filled;
+            public double Entry, Stop, Target;   // Target = 0 -> none
+            public DateTime Created, Expiry;
+            public int FillIndex, MaxBars;
+        }
+
+        private class Stat { public int N, Fills, Wins, Losses, NoFill, Timed; public double SumR; }
+
+        private readonly GbpUsdSessionBot _bot;
+        private readonly List<Shadow> _open = new List<Shadow>();
+        private readonly SortedDictionary<string, Stat> _byGroup = new SortedDictionary<string, Stat>();
+
+        public ShadowAudit(GbpUsdSessionBot bot)
+        {
+            _bot = bot;
+            if (bot.EnableShadowAudit)
+                bot.Print("SHADOW,tag,status,createdUtc,side,entry,stop,target,result,R,barsHeld");
+        }
+
+        public void Add(TradeIntent intent, string status)
+        {
+            if (!_bot.EnableShadowAudit || intent == null) return;
+            var sym = _bot.Symbol;
+            bool isBuy = intent.Direction == TradeType.Buy;
+            double entry = intent.Kind == EntryKind.Market ? (isBuy ? sym.Ask : sym.Bid) : intent.EntryPrice;
+            double stop;
+            if (intent.StopLossPrice.HasValue) stop = intent.StopLossPrice.Value;
+            else
+            {
+                double pips = intent.StopLossPips ?? _bot.DefaultStopPips();
+                stop = isBuy ? entry - pips * sym.PipSize : entry + pips * sym.PipSize;
+            }
+            double risk = isBuy ? entry - stop : stop - entry;
+            if (risk <= 0) return;
+
+            double target = 0;
+            if (intent.TakeProfitPrice.HasValue) target = intent.TakeProfitPrice.Value;
+            else
+            {
+                double r = intent.TakeProfitR ?? _bot.TakeProfitR;
+                if (r > 0) target = isBuy ? entry + r * risk : entry - r * risk;
+            }
+
+            int maxBars = intent.MaxBarsInTrade ?? _bot.TimeStopBars;
+            var sh = new Shadow
+            {
+                Tag = intent.Tag ?? "", Status = status ?? "?", IsBuy = isBuy, Entry = entry, Stop = stop, Target = target,
+                Created = _bot.Server.Time,
+                Expiry = intent.Kind == EntryKind.Market ? _bot.Server.Time : (intent.ExpiryUtc ?? _bot.Server.Time.AddMinutes(_bot.PendingExpiryMinutes)),
+                Filled = intent.Kind == EntryKind.Market,
+                FillIndex = _bot.Bars.Count - 1,
+                MaxBars = maxBars > 0 ? maxBars : 288,
+            };
+            _open.Add(sh);
+        }
+
+        // Called once per bar: evaluates the last CLOSED bar against every open shadow.
+        public void OnBar()
+        {
+            if (!_bot.EnableShadowAudit || _open.Count == 0) return;
+            var b = _bot.Bars;
+            int i = b.Count - 2;
+            if (i < 0) return;
+            double h = b.HighPrices[i], l = b.LowPrices[i], c = b.ClosePrices[i];
+            DateTime barOpen = b.OpenTimes[i];
+
+            for (int k = _open.Count - 1; k >= 0; k--)
+            {
+                var s = _open[k];
+                if (barOpen < s.Created.AddSeconds(-1) && !s.Filled) continue;   // bar formed before the setup
+                double risk = s.IsBuy ? s.Entry - s.Stop : s.Stop - s.Entry;
+
+                if (!s.Filled)
+                {
+                    if (barOpen >= s.Expiry) { Resolve(k, "NOFILL", 0, 0); continue; }
+                    bool touched = s.IsBuy ? l <= s.Entry : h >= s.Entry;
+                    if (!touched) continue;
+                    s.Filled = true;
+                    s.FillIndex = i;
+                }
+
+                bool stopHit = s.IsBuy ? l <= s.Stop : h >= s.Stop;
+                bool tgtHit = s.Target > 0 && (s.IsBuy ? h >= s.Target : l <= s.Target);
+                int held = i - s.FillIndex + 1;
+                if (stopHit) { Resolve(k, "LOSS", -1.0, held); continue; }
+                if (tgtHit)
+                {
+                    double r = (s.IsBuy ? s.Target - s.Entry : s.Entry - s.Target) / risk;
+                    Resolve(k, "WIN", r, held);
+                    continue;
+                }
+                if (held >= s.MaxBars)
+                {
+                    double r = (s.IsBuy ? c - s.Entry : s.Entry - c) / risk;
+                    Resolve(k, "TIME", r, held);
+                }
+            }
+        }
+
+        private void Resolve(int k, string result, double r, int held)
+        {
+            var s = _open[k];
+            _open.RemoveAt(k);
+            _bot.Print(string.Format(CultureInfo.InvariantCulture, "SHADOW,{0},{1},{2:yyyy-MM-dd HH:mm},{3},{4},{5},{6},{7},{8:F2},{9}",
+                s.Tag, s.Status.Replace(',', ';'), s.Created, s.IsBuy ? "Buy" : "Sell", s.Entry, s.Stop, s.Target, result, r, held));
+
+            string session = s.Tag.Split('-')[0];
+            string setup = s.Tag.Contains("-C") ? "Continuation" : s.Tag.Contains("-R") ? "Reversal" : "Other";
+            string gate = s.Status.StartsWith("TAKEN") ? "taken" : "blocked (" + Shorten(s.Status) + ")";
+            foreach (var key in new[] { "ALL", "Session " + session, "Setup " + setup, "Status " + gate })
+            {
+                Stat st;
+                if (!_byGroup.TryGetValue(key, out st)) { st = new Stat(); _byGroup[key] = st; }
+                st.N++;
+                if (result == "NOFILL") { st.NoFill++; continue; }
+                st.Fills++;
+                st.SumR += r;
+                if (result == "TIME") st.Timed++;
+                if (r > 0) st.Wins++; else st.Losses++;
+            }
+        }
+
+        private static string Shorten(string status)
+        {
+            string s = status.StartsWith("BLOCKED: ") ? status.Substring(9) : status;
+            int cut = s.IndexOf('(');
+            if (cut > 0) s = s.Substring(0, cut);
+            return s.Trim();
+        }
+
+        public void PrintSummary()
+        {
+            if (!_bot.EnableShadowAudit) return;
+            _bot.Print("SHADOW SUMMARY (fills at signal price, no costs, stop-first on ambiguous bars, initial target only)");
+            _bot.Print("SHADOWSUM,group,setups,filled,noFill,wins,losses,timeExits,winRate%,totalR,avgR");
+            foreach (var kv in _byGroup)
+            {
+                var st = kv.Value;
+                double wr = st.Fills > 0 ? 100.0 * st.Wins / st.Fills : 0;
+                double avg = st.Fills > 0 ? st.SumR / st.Fills : 0;
+                _bot.Print(string.Format(CultureInfo.InvariantCulture, "SHADOWSUM,{0},{1},{2},{3},{4},{5},{6},{7:F1},{8:F2},{9:F2}",
+                    kv.Key, st.N, st.Fills, st.NoFill, st.Wins, st.Losses, st.Timed, wr, st.SumR, avg));
+            }
+            if (_open.Count > 0) _bot.Print(string.Format(CultureInfo.InvariantCulture, "SHADOW: {0} setup(s) still open at stop (not counted).", _open.Count));
+        }
+    }
+
+    // =====================================================================================
+    //  TRAILING MANAGER — break-even, ATR trailing, partial take-profit and time stops,
+    //  all measured in R (initial risk) from the trade meta registry.
+    // =====================================================================================
+    public class TrailingManager
+    {
+        private readonly GbpUsdSessionBot _bot;
+        private readonly TradeMetaRegistry _meta;
+
+        private readonly Bars _tfBars;
+        private readonly ExponentialMovingAverage _tfEma;
+
+        public TrailingManager(GbpUsdSessionBot bot, TradeMetaRegistry meta)
+        {
+            _bot = bot;
+            _meta = meta;
+            if (bot.UseRunnerMode)
+            {
+                _tfBars = bot.MarketData.GetBars(bot.RunnerTf == RunnerTimeFrame.Hour ? TimeFrame.Hour : TimeFrame.Minute15);
+                _tfEma = bot.Indicators.ExponentialMovingAverage(_tfBars.ClosePrices, bot.RunnerEmaPeriod);
+            }
+        }
+
+        // A runner = partial profit taken AND stop locked at or beyond entry: it can no longer lose,
+        // so it is exempt from the session-end close and the bar time stop (weekend rule still applies).
+        public bool IsRunner(Position p)
+        {
+            if (!_bot.UseRunnerMode || !_bot.RunnerHoldPastSession || !p.StopLoss.HasValue) return false;
+            var m = _meta.Get(p);
+            if (m == null || !m.PartialDone) return false;
+            return p.TradeType == TradeType.Buy ? p.StopLoss.Value >= p.EntryPrice : p.StopLoss.Value <= p.EntryPrice;
+        }
+
+        // Trend on the runner timeframe (last CLOSED bar): close on the trade's side of a sloping EMA.
+        private bool TrendIntact(bool isBuy)
+        {
+            if (_tfBars == null || _tfBars.Count < _bot.RunnerEmaPeriod + 5) return false;
+            double c = _tfBars.ClosePrices.Last(1), e1 = _tfEma.Result.Last(1), e3 = _tfEma.Result.Last(3);
+            return isBuy ? (c > e1 && e1 > e3) : (c < e1 && e1 < e3);
+        }
+
+        // Simple ATR (mean true range) of the last N CLOSED bars on the runner timeframe.
+        private double TfAtr()
+        {
+            if (_tfBars == null) return 0;
+            int n = _bot.RunnerAtrPeriod, last = _tfBars.Count - 2;
+            if (last - n < 1) return 0;
+            double sum = 0;
+            for (int k = last - n + 1; k <= last; k++)
+            {
+                double h = _tfBars.HighPrices[k], l = _tfBars.LowPrices[k], pc = _tfBars.ClosePrices[k - 1];
+                sum += Math.Max(h - l, Math.Max(Math.Abs(h - pc), Math.Abs(l - pc)));
+            }
+            return sum / n;
+        }
+
+        // Runner management (per tick):
+        //  * break-even at Break-even R;
+        //  * profit ratchet: once the best excursion reaches n R (n >= 2), lock (n - gap) R;
+        //  * chandelier trail from the best price reached: wide (k_trend x ATR) while the trend on the
+        //    runner timeframe is intact, tight (k_weak x ATR) as soon as it weakens;
+        //  * take-profit removed after the partial while the trend is intact, so the runner is not
+        //    capped at the original target - the trail decides the exit.
+        private void ManageRunner(Position p, TradeMeta m)
+        {
+            var sym = _bot.Symbol;
+            bool isBuy = p.TradeType == TradeType.Buy;
+            double pip = sym.PipSize, riskPrice = m.RiskPips * pip;
+            double currentSl = p.StopLoss.Value;
+            double best = currentSl;
+            double mfeR = m.MfePips / m.RiskPips;
+            bool trend = TrendIntact(isBuy);
+
+            if (_bot.BreakevenR > 0 && p.Pips >= _bot.BreakevenR * m.RiskPips)
+            {
+                double be = BreakevenPrice(p);
+                if (Improves(isBuy, best, be)) best = be;
+            }
+
+            if (_bot.RunnerRatchetGapR > 0 && mfeR >= 2.0)
+            {
+                double lockR = Math.Floor(mfeR) - _bot.RunnerRatchetGapR;
+                if (lockR > 0)
+                {
+                    double lockPx = isBuy ? p.EntryPrice + lockR * riskPrice : p.EntryPrice - lockR * riskPrice;
+                    if (Improves(isBuy, best, lockPx)) best = lockPx;
+                }
+            }
+
+            double atr = TfAtr();
+            if (_bot.UseTrailing && atr > 0 && (m.PartialDone || mfeR >= _bot.TrailStartR))
+            {
+                double k = trend ? _bot.RunnerTrendAtrMult : _bot.RunnerWeakAtrMult;
+                double extreme = isBuy ? p.EntryPrice + m.MfePips * pip : p.EntryPrice - m.MfePips * pip;
+                double chand = isBuy ? extreme - k * atr : extreme + k * atr;
+                if (Improves(isBuy, best, chand)) best = chand;
+            }
+
+            if (_bot.RunnerRemoveTp && !m.TpRemoved && m.PartialDone && trend && p.TakeProfit.HasValue)
+            {
+                var r = p.ModifyTakeProfitPrice(null);
+                if (r.IsSuccessful)
+                {
+                    m.TpRemoved = true;
+                    _bot.Log("Runner {0}: trend intact - take-profit removed, trailing decides the exit.", p.Id);
+                }
+                else _bot.LogDebug("TP removal failed for {0}: {1}", p.Id, r.Error);
+            }
+
+            if (Improves(isBuy, currentSl, best)) ApplyStop(p, best, null);
+        }
+
+        public void Manage(Position p, double atr)
+        {
+            var m = _meta.Get(p);
+            if (m == null || m.RiskPips <= 0 || !p.StopLoss.HasValue) return;
+            if (_bot.UseRunnerMode) { ManageRunner(p, m); return; }
+
+            var sym = _bot.Symbol;
+            double profitPips = p.Pips;
+            bool isBuy = p.TradeType == TradeType.Buy;
+            double currentSl = p.StopLoss.Value;
+            double? candidate = null;
+
+            if (_bot.BreakevenR > 0 && profitPips >= _bot.BreakevenR * m.RiskPips)
+            {
+                double be = BreakevenPrice(p);
+                if (Improves(isBuy, currentSl, be)) candidate = be;
+            }
+
+            if (_bot.UseTrailing && profitPips >= _bot.TrailStartR * m.RiskPips && atr > 0)
+            {
+                double trail = isBuy ? sym.Bid - _bot.TrailAtrMultiple * atr
+                                     : sym.Ask + _bot.TrailAtrMultiple * atr;
+                double best = candidate ?? currentSl;
+                if (Improves(isBuy, best, trail)) candidate = trail;
+            }
+
+            if (candidate.HasValue) ApplyStop(p, candidate.Value, null);
+        }
+
+        public void ManagePartial(Position p)
+        {
+            var m = _meta.Get(p);
+            if (_bot.PartialAtR <= 0 || m == null || m.PartialDone || m.RiskPips <= 0) return;
+            if (p.Pips < _bot.PartialAtR * m.RiskPips) return;
+
+            var sym = _bot.Symbol;
+            double closeVol = sym.NormalizeVolumeInUnits(m.OriginalVolume * _bot.PartialClosePercent / 100.0, RoundingMode.Down);
+            double remaining = p.VolumeInUnits - closeVol;
+            if (closeVol < sym.VolumeInUnitsMin || remaining < sym.VolumeInUnitsMin)
+            {
+                m.PartialDone = true; // too small to split; manage as a whole
+                _bot.LogDebug("Partial skipped for {0}: volume too small to split.", p.Id);
+                return;
+            }
+
+            var r = _bot.ClosePosition(p, closeVol);
+            if (r.IsSuccessful)
+            {
+                m.PartialDone = true;
+                _bot.Log("Partial take-profit: closed {0} of position {1} at {2:F1}R.", closeVol, p.Id, p.Pips / m.RiskPips);
+            }
+            else _bot.LogDebug("Partial close failed for {0}: {1}", p.Id, r.Error);
+        }
+
+        // Called once per bar. Closes positions held longer than their bar limit.
+        public void ManageTimeStop(Position p)
+        {
+            if (IsRunner(p))
+            {
+                if (_bot.RunnerMaxHours > 0 && _bot.Server.Time - p.EntryTime >= TimeSpan.FromHours(_bot.RunnerMaxHours))
+                {
+                    var rr = p.Close();
+                    _bot.Log(rr.IsSuccessful ? "Runner {0}: max hold time reached, closed." : "Runner {0}: FAILED closing at max hold: {1}", p.Id, rr.Error);
+                }
+                return;
+            }
+            var m = _meta.Get(p);
+            int maxBars = m != null && m.MaxBars > 0 ? m.MaxBars : _bot.TimeStopBars;
+            if (maxBars <= 0) return;
+
+            int entryIndex = _bot.Bars.OpenTimes.GetIndexByTime(p.EntryTime);
+            if (entryIndex < 0) return;
+            int held = (_bot.Bars.Count - 1) - entryIndex;
+            if (held < maxBars) return;
+
+            var r = p.Close();
+            _bot.Log(r.IsSuccessful ? "Time stop: closed {0} after {1} bars." : "Time stop: FAILED closing {0}: {2}", p.Id, held, r.Error);
+        }
+
+        public void MoveToBreakevenIfProfitable(Position p, string why)
+        {
+            if (!p.StopLoss.HasValue) return;
+            if (p.Pips <= _bot.BreakevenBufferPips) return;
+            double be = BreakevenPrice(p);
+            if (Improves(p.TradeType == TradeType.Buy, p.StopLoss.Value, be)) ApplyStop(p, be, why);
+        }
+
+        private double BreakevenPrice(Position p)
+        {
+            double offset = _bot.BreakevenBufferPips * _bot.Symbol.PipSize;
+            return p.TradeType == TradeType.Buy ? p.EntryPrice + offset : p.EntryPrice - offset;
+        }
+
+        private void ApplyStop(Position p, double price, string why)
+        {
+            var sym = _bot.Symbol;
+            bool isBuy = p.TradeType == TradeType.Buy;
+            double newSl = Math.Round(price, sym.Digits);
+            if (!p.StopLoss.HasValue) return;
+            if (Math.Abs(newSl - p.StopLoss.Value) / sym.PipSize < _bot.MinTrailStepPips) return;
+            if (isBuy && newSl >= sym.Bid) return;
+            if (!isBuy && newSl <= sym.Ask) return;
+
+            var r = p.ModifyStopLossPrice(newSl);
+            if (!r.IsSuccessful) _bot.LogDebug("SL modify failed for {0}: {1}", p.Id, r.Error);
+            else if (why != null) _bot.Log("SL of {0} moved to {1} ({2}).", p.Id, newSl, why);
+        }
+
+        private static bool Improves(bool isBuy, double current, double proposed)
+        {
+            return isBuy ? proposed > current : proposed < current;
+        }
+    }
+
+    // =====================================================================================
+    //  TRADE JOURNAL — one CSV line per closed trade (prefix "JOURNAL,"), with MAE/MFE in
+    //  pips and R. Copy the log lines into a spreadsheet for analysis.
+    // =====================================================================================
+    public class TradeJournal
+    {
+        private readonly GbpUsdSessionBot _bot;
+        private readonly TradeMetaRegistry _meta;
+
+        public TradeJournal(GbpUsdSessionBot bot, TradeMetaRegistry meta)
+        {
+            _bot = bot;
+            _meta = meta;
+            if (_bot.EnableJournal)
+                _bot.Print("JOURNAL,id,symbol,side,tag,regime,entryUtc,closeUtc,entry,origVolume,riskPips,pips,rMultiple,maePips,mfePips,maeR,mfeR,net,reason,fullTracking");
+        }
+
+        // Called on every tick for open positions: tracks adverse/favourable excursion.
+        public void Track(Position p)
+        {
+            var m = _meta.Get(p);
+            if (m == null) return;
+            double pips = p.Pips;
+            if (pips < -m.MaePips) m.MaePips = -pips;
+            if (pips > m.MfePips) m.MfePips = pips;
+        }
+
+        public void Write(Position p, PositionCloseReason reason)
+        {
+            if (!_bot.EnableJournal) return;
+            var m = _meta.Get(p) ?? new TradeMeta();
+            double r = m.RiskPips > 0 ? m.RiskPips : double.NaN;
+            var c = CultureInfo.InvariantCulture;
+            string line = string.Join(",", new[]
+            {
+                "JOURNAL",
+                p.Id.ToString(c), p.SymbolName, p.TradeType.ToString(), Clean(m.Tag), m.RegimeAtEntry,
+                p.EntryTime.ToString("yyyy-MM-dd HH:mm:ss", c), _bot.Server.Time.ToString("yyyy-MM-dd HH:mm:ss", c),
+                p.EntryPrice.ToString(c), m.OriginalVolume.ToString("F0", c),
+                Fmt(m.RiskPips), Fmt(p.Pips), Fmt(p.Pips / r), Fmt(m.MaePips), Fmt(m.MfePips),
+                Fmt(m.MaePips / r), Fmt(m.MfePips / r), Fmt(p.NetProfit), reason.ToString(),
+                m.TrackedFromOpen ? "yes" : "no"
+            });
+            _bot.Print(line);
+        }
+
+        private static string Fmt(double v)
+        {
+            return double.IsNaN(v) || double.IsInfinity(v) ? "" : v.ToString("F2", CultureInfo.InvariantCulture);
+        }
+
+        private static string Clean(string s)
+        {
+            return (s ?? "").Replace(",", " ");
+        }
+    }
+}
