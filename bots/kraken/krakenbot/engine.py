@@ -1,16 +1,15 @@
-"""One daily cycle. Run ONCE PER DAY just after the 00:00 UTC close (cron / systemd timer / Task Scheduler).
+"""The live cycle. Run ONCE PER DAY just after 00:00 UTC (cron / systemd timer / Windows Task Scheduler).
 
-Guarantees:
-  * idempotent: re-running on the same day resumes and re-checks protection; it never trades the day twice;
-  * every position gets its Kraken stop-loss IMMEDIATELY after each fill (not at the end of the run), and again
-    after any partial sell; a position that cannot get a stop after 3 tries is closed;
-  * if price is already through the stop when we look, we exit instead of placing a stop that would fire at once;
-  * a stop that filled while the bot was off is detected and booked (partial fills too);
-  * fees charged in the coin (instead of EUR) reduce the coin quantity the ledger thinks it holds;
-  * a position worth less than Kraken's minimum order is written off the ledger as dust, never left "protected"
-    by a stop Kraken would reject;
-  * sub-account ledger: only the EUR `capital` you gave it and the coins IT bought. Your other coins are not touched;
-  * no currency conversions (EUR->USDC etc.) ever, unless authorised in the config (broker enforces it).
+Each run:
+  1. book any disaster stop that filled while the bot was off (partial fills included);
+  2. on the weekly rebalance bar (or if a rebalance was missed for 7+ days): raise stops, rank, trade to the
+     two-sleeve target weights;
+  3. every day: make sure each holding has its stop resting on Kraken (and sell if price is already through it).
+
+Guarantees (each covered by a test): idempotent per daily bar; stop placed straight after every fill; a holding
+that cannot get a stop after 3 tries is sold; dust below Kraken's minimum is written off the ledger; fees charged
+in the coin reduce the ledger quantity; manual sales are detected; no currency conversions (broker gate);
+validate mode never changes the ledger.
 """
 from __future__ import annotations
 
@@ -19,14 +18,13 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from .broker import BelowMinimum, BrokerError, client_id
 from .config import Config
-from .risk import (DrawdownGuard, OrderPlan, PositionState, QuoteError, check_quote, limit_price, new_bar,
-                   on_buy_fill, on_sell_fill, on_stopped_out, plan_rebalance)
-from .signals import features, scale_portfolio, to_frame
-from .strategy import Decision, decide
+from .risk import (DrawdownGuard, Holding, OrderPlan, QuoteError, check_quote, limit_price, on_buy, on_sell,
+                   plan_rebalance, ratchet, stop_level)
+from .signals import features, target_weights, to_frame
 
 log = logging.getLogger("krakenbot.engine")
 
@@ -34,9 +32,10 @@ log = logging.getLogger("krakenbot.engine")
 @dataclass
 class State:
     cash: float = 0.0
-    positions: dict[str, PositionState] = field(default_factory=dict)
+    holdings: dict[str, Holding] = field(default_factory=dict)
     guard: DrawdownGuard = field(default_factory=DrawdownGuard)
     last_bar: str = ""
+    last_rebalance: str = ""
     history: list[dict] = field(default_factory=list)
 
     @classmethod
@@ -44,34 +43,34 @@ class State:
         if os.path.exists(path):
             with open(path) as fh:
                 d = json.load(fh)
-            st = cls(cash=d["cash"], last_bar=d.get("last_bar", ""), history=d.get("history", [])[-1000:])
-            st.positions = {a: PositionState.from_dict(p) for a, p in d.get("positions", {}).items()}
+            st = cls(cash=d["cash"], last_bar=d.get("last_bar", ""), last_rebalance=d.get("last_rebalance", ""),
+                     history=d.get("history", [])[-1000:])
+            st.holdings = {a: Holding.from_dict(h) for a, h in d.get("holdings", {}).items()}
             st.guard = DrawdownGuard(**d.get("guard", {}))
         else:
             if capital is None or capital <= 0:
-                raise SystemExit("First run: pass --capital <EUR> (the amount this bot may manage).")
+                raise SystemExit("First run: pass --capital <EUR> (or use `rebuild` to adopt your current holdings).")
             st = cls(cash=float(capital))
         for a in cfg.assets:
-            st.positions.setdefault(a, PositionState())
+            st.holdings.setdefault(a, Holding())
         return st
 
     def save(self, path: str) -> None:
         tmp = path + ".tmp"
         with open(tmp, "w") as fh:
-            json.dump({"cash": self.cash, "last_bar": self.last_bar, "history": self.history[-1000:],
-                       "positions": {a: p.to_dict() for a, p in self.positions.items()},
+            json.dump({"cash": self.cash, "last_bar": self.last_bar, "last_rebalance": self.last_rebalance,
+                       "history": self.history[-1000:], "holdings": {a: h.to_dict() for a, h in self.holdings.items()},
                        "guard": {"peak": self.guard.peak, "halted": self.guard.halted, "reason": self.guard.reason}},
                       fh, indent=2)
-        os.replace(tmp, path)  # atomic: a crash mid-write never corrupts the state
+        os.replace(tmp, path)  # atomic
 
 
 class Engine:
     def __init__(self, cfg: Config, broker, state: State, state_path: str, sleep=time.sleep):
         self.cfg, self.b, self.st, self.path, self.sleep = cfg, broker, state, state_path, sleep
-        self.atr: dict[str, float] = {}
-        self.decisions: dict[str, Decision] = {}
+        self.vol: dict[str, float] = {}
         self.run_tag = ""
-        self._in_protect = False  # stops protect -> sell -> protect recursion when an exit keeps failing
+        self._in_protect = False
 
     # --- helpers ---------------------------------------------------------------------------------------
     def _sym(self, a: str) -> str:
@@ -85,143 +84,126 @@ class Engine:
         bid, ask, ts = self.b.top_of_book(sym)
         return bid, ask, check_quote(bid, ask, ts, self.cfg)
 
-    def _reconcile_holdings(self, bal: dict) -> None:
-        """If you sold or withdrew coins by hand, the ledger must not believe it still owns them."""
+    def _h(self, a: str) -> Holding:
+        return self.st.holdings.setdefault(a, Holding())
+
+    def reconcile(self, bal: dict) -> None:
+        """If coins were sold or withdrawn by hand, the ledger must not believe it still owns them."""
         if not bal:
             return
-        for a, p in self.st.positions.items():
+        for a, h in self.st.holdings.items():
             have = bal.get(a, {}).get("total", 0.0)
-            if p.qty > have + 1e-9:
-                log.error("%s: ledger says %.8f but account holds %.8f; clamping ledger", a, p.qty, have)
-                p.qty = have
+            if h.qty > have + 1e-9:
+                log.error("%s: ledger %.8f > account %.8f; clamping the ledger", a, h.qty, have)
+                h.qty = have
                 if have <= 0:
-                    p.stop = p.entry = p.high_close = p.take_profit = 0.0
-                    p.stop_order_id, p.sleeve = None, ""
+                    on_sell(h, 0.0)
 
     def _book_sell(self, a: str, f) -> None:
         self.st.cash += f.qty * f.avg_px - f.fee_quote
-        on_sell_fill(self.st.positions[a], f.qty + f.fee_base)
+        on_sell(self._h(a), f.qty + f.fee_base)
 
-    def _check_stops(self) -> None:
-        """Did an exchange-side stop fill since the last run? Book it (fully or partially)."""
-        for a, p in self.st.positions.items():
-            if not p.stop_order_id:
+    def check_stops(self) -> None:
+        for a, h in self.st.holdings.items():
+            if not h.stop_order_id:
                 continue
-            sym = self._sym(a)
-            o = self.b.fetch(p.stop_order_id, sym)
-            filled = float(o.get("filled") or 0)
-            status = o.get("status")
+            o = self.b.fetch(h.stop_order_id, self._sym(a))
+            filled, status = float(o.get("filled") or 0), o.get("status")
             if filled > 0 and status in {"closed", "canceled", "expired"}:
-                f = self.b.to_fill(o, sym, p.stop_order_id)
-                stop_level, high_close = p.stop, p.high_close
-                full = filled >= p.qty - 1e-12
+                f = self.b.to_fill(o, self._sym(a), h.stop_order_id)
+                log.warning("%s DISASTER STOP FILLED: %.8f @ %.4f (stop %.4f)", a, f.qty, f.avg_px, h.stop)
+                h.stop_order_id = None
                 self._book_sell(a, f)
-                log.warning("%s STOP FILLED: %.8f @ %.4f (stop %.4f)%s", a, f.qty, f.avg_px, stop_level,
-                            "" if full else " - partial; remainder will be re-protected")
-                if full or p.qty <= 0:
-                    on_stopped_out(p, self.cfg, high_close)
-                else:
-                    p.stop_order_id = None
             elif status in {"canceled", "expired", "rejected"}:
-                log.error("%s protective stop %s is %s; it will be re-placed", a, p.stop_order_id, status)
-                p.stop_order_id = None
+                log.error("%s stop %s is %s; it will be re-placed", a, h.stop_order_id, status)
+                h.stop_order_id = None
 
     # --- protection --------------------------------------------------------------------------------------
-    def _protect_one(self, a: str) -> None:
-        """Make sure position `a` has a resting Kraken stop-loss at its current stop level (or is closed)."""
+    def protect(self, a: str) -> None:
         if self._in_protect:
             return
         self._in_protect = True
         try:
-            self._protect_inner(a)
+            self._protect(a)
         finally:
             self._in_protect = False
 
-    def _protect_inner(self, a: str) -> None:
-        p, sym = self.st.positions[a], self._sym(a)
-        if p.qty <= 0:
-            if p.stop_order_id:
-                self.b.cancel(p.stop_order_id, sym)
-                p.stop_order_id = None
-            return
-        if p.stop <= 0:
-            log.critical("%s has a position but no stop level; flattening", a)
-            self._execute(OrderPlan(a, "sell", p.qty, 0.0, "no stop level"), stop=0.0)
+    def _protect(self, a: str) -> None:
+        h, sym = self._h(a), self._sym(a)
+        if h.qty <= 0:
+            if h.stop_order_id:
+                self.b.cancel(h.stop_order_id, sym)
+                h.stop_order_id = None
             return
         try:
-            bid, ask, mid = self._mid(sym)
+            _, _, mid = self._mid(sym)
         except (QuoteError, BrokerError) as e:
-            log.error("%s: cannot read price (%s); keeping existing stop as is", a, e)
+            log.error("%s: no usable price (%s); existing stop left as is", a, e)
             return
-        if mid <= p.stop:
-            log.warning("%s price %.4f already through stop %.4f: exiting now", a, mid, p.stop)
-            high_close = p.high_close
-            self._execute(OrderPlan(a, "sell", p.qty, p.qty * mid, "price through stop"), stop=0.0)
-            if p.qty <= 0:
-                on_stopped_out(p, self.cfg, high_close)
-            else:
-                log.critical("%s exit through stop did not complete; %.8f left UNPROTECTED - check Kraken now", a, p.qty)
+        if h.stop <= 0:
+            h.stop = stop_level(mid, self.vol.get(a, float("nan")), self.cfg)
+        if mid <= h.stop:
+            log.warning("%s price %.4f already through stop %.4f: selling now", a, mid, h.stop)
+            self.execute(OrderPlan(a, "sell", h.qty, h.qty * mid, "price through stop"))
+            if h.qty > 0:
+                log.critical("%s: exit through stop incomplete, %.8f UNPROTECTED - check Kraken now", a, h.qty)
             return
-        if p.stop_order_id:
-            o = self.b.fetch(p.stop_order_id, sym)
+        if h.stop_order_id:
+            o = self.b.fetch(h.stop_order_id, sym)
             resting = float(o.get("triggerPrice") or o.get("stopPrice") or 0)
-            same_qty = abs(float(o.get("amount") or 0) - p.qty) <= max(1e-8, p.qty * 1e-4)
-            if o.get("status") == "open" and same_qty and abs(resting - p.stop) / p.stop < 0.002:
+            same_qty = abs(float(o.get("amount") or 0) - h.qty) <= max(1e-8, h.qty * 1e-4)
+            if o.get("status") == "open" and same_qty and resting > 0 and abs(resting - h.stop) / h.stop < 0.002:
                 return
-            self.b.cancel(p.stop_order_id, sym)
-            p.stop_order_id = None
-        cid = client_id(self.run_tag, sym, "stop", f"{p.stop:.8f}", f"{p.qty:.8f}")
+            self.b.cancel(h.stop_order_id, sym)
+            h.stop_order_id = None
+        cid = client_id(self.run_tag, sym, "stop", f"{h.stop:.8f}", f"{h.qty:.8f}")
         for attempt in range(3):
             try:
-                o = self.b.place_stop(sym, p.qty, p.stop, cid)
-                p.stop_order_id = None if self.cfg.mode == "validate" else str(o["id"])
-                log.info("STOP %s %.8f @ %.4f (%s)", sym, p.qty, p.stop,
+                o = self.b.place_stop(sym, h.qty, h.stop, cid)
+                h.stop_order_id = None if self.cfg.mode == "validate" else str(o["id"])
+                log.info("STOP %s %.8f @ %.4f (%s)", sym, h.qty, h.stop,
                          "validated, not placed" if self.cfg.mode == "validate" else "resting on Kraken")
                 self._commit()
                 return
             except BelowMinimum as e:
-                log.warning("%s position %.8f is below Kraken's minimum (%s): writing it off the ledger as dust",
-                            a, p.qty, e)
-                on_sell_fill(p, p.qty)
+                log.warning("%s %.8f is below Kraken's minimum (%s): written off the ledger as dust", a, h.qty, e)
+                on_sell(h, h.qty)
                 self._commit()
                 return
-            except Exception as e:  # noqa: BLE001 - every other failure is handled the same way
+            except Exception as e:  # noqa: BLE001
                 log.error("stop placement %s failed (%d/3): %s", sym, attempt + 1, e)
                 self.sleep(5)
-        log.critical("%s has NO protective stop after 3 attempts: flattening", sym)
-        self._execute(OrderPlan(a, "sell", p.qty, p.qty * mid, "no-stop flatten"), stop=0.0)
+        log.critical("%s has NO stop after 3 attempts: selling it", sym)
+        self.execute(OrderPlan(a, "sell", h.qty, h.qty * mid, "no-stop exit"))
 
     # --- execution ---------------------------------------------------------------------------------------
-    def _execute(self, plan: OrderPlan, stop: float, sleeve: str = "", take_profit: float = 0.0) -> None:
+    def execute(self, plan: OrderPlan) -> None:
         a, sym = plan.asset, self._sym(plan.asset)
-        p = self.st.positions[a]
+        h = self._h(a)
         remaining = plan.qty
-        if plan.side == "sell" and p.stop_order_id:
-            self.b.cancel(p.stop_order_id, sym)  # the stop reserves the coins on spot; release them first
-            p.stop_order_id = None
+        if plan.side == "sell" and h.stop_order_id:
+            self.b.cancel(h.stop_order_id, sym)  # a resting stop reserves the coins; release them first
+            h.stop_order_id = None
         for attempt in range(self.cfg.post_only_attempts + 1):
             try:
                 bid, ask, mid = self._mid(sym)
             except (QuoteError, BrokerError) as e:
-                log.error("%s: no tradable quote (%s); aborting %s", sym, e, plan.side)
+                log.error("%s: no tradable quote (%s); %s aborted", sym, e, plan.side)
                 break
-            if remaining * mid < self.cfg.min_order_quote and plan.side == "buy":
-                break
-            if plan.side == "buy" and mid <= stop:
-                log.warning("%s: price %.4f is at/below the planned stop %.4f; entry cancelled", sym, mid, stop)
+            if plan.side == "buy" and remaining * mid < self.cfg.min_order_quote:
                 break
             price, post_only = limit_price(plan.side, bid, ask, mid, attempt, self.cfg)
             cid = client_id(self.run_tag, sym, plan.side, plan.reason, str(attempt))
             try:
                 o = self.b.place_limit(sym, plan.side, remaining, price, post_only, cid)
-            except BrokerError as e:  # below minimum / not authorised / retries exhausted
+            except BrokerError as e:
                 log.error("%s %s not placed: %s", plan.side, sym, e)
                 break
-            except Exception as e:  # noqa: BLE001 - e.g. post-only rejected because the book moved: re-price
+            except Exception as e:  # noqa: BLE001 - e.g. post-only rejected because the book moved
                 log.error("%s %s attempt %d rejected: %s", plan.side, sym, attempt, e)
                 continue
             if self.cfg.mode == "validate":
-                log.info("VALIDATED (not placed) %s %s %.8f @ %.4f post_only=%s", plan.side, sym, remaining, price, post_only)
+                log.info("VALIDATED (not placed) %s %s %.8f @ %.6f", plan.side, sym, remaining, price)
                 break
             if o.get("status") != "closed" and post_only:
                 self.sleep(self.cfg.post_only_wait_s)
@@ -233,88 +215,90 @@ class Engine:
             if f.qty > 0:
                 if plan.side == "buy":
                     self.st.cash -= f.qty * f.avg_px + f.fee_quote
-                    on_buy_fill(p, f.avg_px, f.qty - f.fee_base, stop, sleeve, take_profit)
+                    on_buy(h, f.avg_px, f.qty - f.fee_base, self.vol.get(a, float("nan")), self.cfg)
                 else:
                     self._book_sell(a, f)
-                log.info("FILL %s %s %.8f @ %.4f fee %.4f %s (attempt %d)", plan.side, sym, f.qty, f.avg_px,
-                         f.fee_quote, self.cfg.quote, attempt)
+                log.info("FILL %s %s %.8f @ %.6f fee %.4f (attempt %d)", plan.side, sym, f.qty, f.avg_px, f.fee_quote, attempt)
                 remaining -= f.qty
-                self._commit()  # persist after every fill: a crash now cannot double-buy on restart
+                self._commit()
                 if plan.side == "buy":
-                    self._protect_one(a)  # stop goes on Kraken right after EACH fill, not at the end
-            if remaining <= 1e-12 or (plan.side == "sell" and p.qty <= 0):
+                    self.protect(a)  # stop on Kraken straight after EACH fill
+            if remaining <= 1e-12 or (plan.side == "sell" and h.qty <= 0):
                 break
-        if plan.side == "sell" and self.st.positions[a].qty > 0:
-            self._protect_one(a)  # partial sell / trim: re-protect what is left at once
+        if plan.side == "sell" and h.qty > 0:
+            self.protect(a)  # trims / partial sells: re-protect what is left at once
 
     # --- the cycle ---------------------------------------------------------------------------------------
-    def run_once(self) -> dict:
+    def run_once(self, force_rebalance: bool = False) -> dict:
         cfg, st = self.cfg, self.st
         feats = {a: features(to_frame(self.b.daily_bars(self._sym(a), 400)), cfg) for a in cfg.assets}
-        last_bar = min(f.index[-1] for f in feats.values()).date().isoformat()
-        self.run_tag = last_bar
-        rows = {a: feats[a].iloc[-1] for a in cfg.assets}
-        self.atr = {a: float(rows[a]["atr"]) for a in cfg.assets}
+        bar = min(f.index[-1] for f in feats.values())
+        self.run_tag = bar.date().isoformat()
+        rows = {a: f.loc[bar] for a, f in feats.items() if bar in f.index}
+        self.vol = {a: float(r["vol"]) for a, r in rows.items()}
 
         bal = self.b.balances()
-        self._reconcile_holdings(bal)
-        self._check_stops()
+        self.reconcile(bal)
+        self.check_stops()
 
         mids = {}
         for a in cfg.assets:
             try:
                 mids[a] = self._mid(self._sym(a))[2]
             except (QuoteError, BrokerError) as e:
-                log.error("no tradable quote for %s (%s): skipping this run, stops stay in place", a, e)
-                for b in cfg.assets:
-                    self._protect_one(b)
-                self._commit()
-                return {"status": "skipped", "reason": str(e)}
-        equity = st.cash + sum(st.positions[a].qty * mids[a] for a in cfg.assets)
+                log.error("%s: no tradable quote (%s); it will not be traded this run", a, e)
+        equity = st.cash + sum(h.qty * mids.get(a, h.entry) for a, h in st.holdings.items())
 
         if st.guard.update(equity, cfg):
-            log.critical("HALTED: %s. Flattening. Delete the 'guard' block in %s to resume after review.",
-                         st.guard.reason, self.path)
-            self.decisions = {a: Decision(0.0, reason="drawdown halt") for a in cfg.assets}
-            targets = {a: 0.0 for a in cfg.assets}
-        elif st.last_bar == last_bar:
-            log.info("bar %s already processed; only re-checking protection", last_bar)
-            for a in cfg.assets:
-                self._protect_one(a)
+            log.critical("HALTED: %s. Selling everything. Delete the 'guard' block in %s to resume.", st.guard.reason, self.path)
+            targets, tables, reason = {a: 0.0 for a in cfg.assets}, {}, "halt"
+        elif st.last_bar == self.run_tag and not force_rebalance:
+            for a in list(st.holdings):
+                self.protect(a)
             self._commit()
-            return {"status": "already-done", "bar": last_bar, "equity": equity}
+            return {"status": "already-done", "bar": self.run_tag, "equity": equity}
         else:
-            raw = {}
-            for a in cfg.assets:
-                p, row = st.positions[a], rows[a]
-                new_bar(p, float(row["close"]), float(row["atr"]), float(row["swing_low"]), float(row["trend_w"]), cfg)
-                d = decide(row, p, cfg)
-                self.decisions[a] = d
-                if p.qty > 0 and not d.is_exit:
-                    p.sleeve = d.sleeve or p.sleeve
-                    p.take_profit = d.take_profit
-                    p.stop = max(p.stop, d.stop)
-                raw[a] = (p.qty * mids[a] / equity) if d.weight is None else d.weight
-                log.info("DECIDE %s regime=%s -> %s", a, row["regime"], d.as_dict())
-            targets = scale_portfolio(raw, cfg)
+            due = bar.dayofweek == cfg.rebalance_weekday
+            stale = not st.last_rebalance or (bar.date() - date.fromisoformat(st.last_rebalance)).days >= 7
+            if not (due or stale or force_rebalance):
+                for a in list(st.holdings):
+                    self.protect(a)
+                st.last_bar = self.run_tag
+                self._log_history(equity, None)
+                self._commit()
+                return {"status": "hold", "bar": self.run_tag, "equity": equity,
+                        "next_rebalance": "on the next weekly rebalance bar"}
+            for a, h in st.holdings.items():
+                if a in rows:
+                    ratchet(h, float(rows[a]["close"]), float(rows[a]["vol"]), cfg)
+            targets, tables = target_weights(rows, cfg)
+            reason = "forced" if force_rebalance else ("weekly" if due else "catch-up (missed rebalance)")
 
-        free_quote = bal.get(cfg.quote, {}).get("free", st.cash) if bal else st.cash
-        plans = plan_rebalance(equity, mids, {a: st.positions[a].qty for a in cfg.assets}, targets, cfg,
-                               free_quote=min(st.cash, free_quote),
-                               reasons={a: d.reason for a, d in self.decisions.items()})
-        for plan in plans:
-            d = self.decisions.get(plan.asset, Decision(0.0))
-            log.info("PLAN %s %s %.8f (~%.2f %s) %s", plan.side, plan.asset, plan.qty, plan.notional, cfg.quote, plan.reason)
-            self._execute(plan, stop=d.stop, sleeve=d.sleeve, take_profit=d.take_profit)
-        for a in cfg.assets:
-            self._protect_one(a)  # ratcheted stops for positions that did not trade today
-        st.last_bar = last_bar
-        equity = st.cash + sum(st.positions[a].qty * mids[a] for a in cfg.assets)
-        st.history.append({"bar": last_bar, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                           "equity": round(equity, 2), "cash": round(st.cash, 2),
-                           "weights": {a: round(targets[a], 4) for a in cfg.assets},
-                           "stops": {a: round(st.positions[a].stop, 6) for a in cfg.assets if st.positions[a].qty > 0},
-                           "halted": st.guard.halted})
+        tradable = {a: w for a, w in targets.items() if a in mids}
+        free_eur = bal.get(cfg.quote, {}).get("free", st.cash) if bal else st.cash
+        plans = plan_rebalance(equity, mids, {a: st.holdings[a].qty for a in tradable}, tradable, cfg,
+                               free_quote=min(st.cash, free_eur))
+        log.info("REBALANCE (%s) bar %s equity %.2f %s targets %s", reason, self.run_tag, equity, cfg.quote,
+                 {a: round(w, 3) for a, w in targets.items() if w})
+        for p in plans:
+            log.info("PLAN %s %s %.8f (~%.2f %s) %s", p.side, p.asset, p.qty, p.notional, cfg.quote, p.reason)
+            self.execute(p)
+        for a in list(st.holdings):
+            self.protect(a)
+        st.last_bar = self.run_tag
+        if reason != "halt":
+            st.last_rebalance = self.run_tag
+        equity = st.cash + sum(h.qty * mids.get(a, h.entry) for a, h in st.holdings.items())
+        self._log_history(equity, targets)
         self._commit()
-        return {"status": "ok", "bar": last_bar, "equity": equity, "targets": targets, "orders": len(plans),
-                "decisions": {a: d.as_dict() for a, d in self.decisions.items()}}
+        return {"status": "rebalanced", "reason": reason, "bar": self.run_tag, "equity": equity,
+                "targets": {a: w for a, w in targets.items() if w}, "orders": len(plans),
+                "rankings": {k: v.round(4).to_dict("index") for k, v in tables.items()}}
+
+    def _log_history(self, equity: float, targets: dict | None) -> None:
+        self.st.history.append({"bar": self.run_tag, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                "equity": round(equity, 2), "cash": round(self.st.cash, 2),
+                                "holdings": {a: round(h.qty, 8) for a, h in self.st.holdings.items() if h.qty > 0},
+                                "stops": {a: round(h.stop, 6) for a, h in self.st.holdings.items() if h.qty > 0},
+                                "targets": None if targets is None else {a: round(w, 4) for a, w in targets.items() if w},
+                                "halted": self.st.guard.halted})

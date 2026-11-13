@@ -1,15 +1,15 @@
 """Command line.
 
-  python -m bots.kraken.krakenbot.run report --assets BTC,ETH,SOL,DOGE         # read-only market structure
-  python -m bots.kraken.krakenbot.run backtest                                   # 2y daily backtest on Kraken EUR data
-  python -m bots.kraken.krakenbot.run paper --capital 1000                       # live public data, simulated fills
-  python -m bots.kraken.krakenbot.run validate --capital 1000                    # real keys; Kraken checks, places nothing
-  python -m bots.kraken.krakenbot.run live --capital 1000 --i-understand-the-risk
-  python -m bots.kraken.krakenbot.run protect --hold BTC=0.01414 --hold SOL=2.0  # plan stops for coins you hold
-  python -m bots.kraken.krakenbot.run protect --hold BTC=0.01414 --i-understand-the-risk   # ...and place them
+  python -m bots.kraken.krakenbot.run report                       # what both sleeves want today (read-only)
+  python -m bots.kraken.krakenbot.run backtest                     # 2y backtest on Kraken EUR data
+  python -m bots.kraken.krakenbot.run rebuild                      # plan: how your CURRENT account maps to the strategy
+  python -m bots.kraken.krakenbot.run rebuild --validate           # Kraken checks every order, places nothing
+  python -m bots.kraken.krakenbot.run rebuild --i-understand-the-risk   # sweep, adopt, first rebalance
+  python -m bots.kraken.krakenbot.run live --i-understand-the-risk # the daily run (cron, 00:05 UTC)
+  python -m bots.kraken.krakenbot.run paper --capital 1600         # simulated fills on live public data
 
-API keys come from KRAKEN_API_KEY / KRAKEN_API_SECRET. Create a key with ONLY: Query Funds, Query Open Orders &
-Trades, Query Closed Orders & Trades, Create & Modify Orders, Cancel/Close Orders. NEVER enable Withdraw Funds.
+API keys: KRAKEN_API_KEY / KRAKEN_API_SECRET with ONLY Query Funds, Query Open Orders & Trades, Query Closed
+Orders & Trades, Create & Modify Orders, Cancel/Close Orders. NEVER enable Withdraw Funds.
 """
 from __future__ import annotations
 
@@ -24,11 +24,8 @@ from .config import load_config
 
 
 def _setup_logging(path: str | None) -> None:
-    handlers = [logging.StreamHandler(sys.stdout)]
-    if path:
-        handlers.append(logging.FileHandler(path))
-    logging.basicConfig(level=logging.INFO, handlers=handlers,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    handlers = [logging.StreamHandler(sys.stdout)] + ([logging.FileHandler(path)] if path else [])
+    logging.basicConfig(level=logging.INFO, handlers=handlers, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
 def _keys() -> tuple[str, str]:
@@ -38,93 +35,71 @@ def _keys() -> tuple[str, str]:
     return key, sec
 
 
-def cmd_backtest(cfg, args) -> int:
-    from .backtest import buy_and_hold, perf, round_trips, run
-    from .broker import KrakenBroker
-    from .signals import to_frame
-
-    md = KrakenBroker(cfg)  # public endpoints only
-    data = {a: to_frame(md.daily_bars(s, 720)) for a, s in zip(cfg.assets, cfg.symbols)}
-    res = run(data, cfg, start_equity=args.capital or 1600.0)
-    rt = round_trips(res.trades)
-    out = {"strategy": res.stats(), "buy_and_hold": perf(buy_and_hold(data, args.capital or 1600.0, cfg.fee_rate)),
-           "by_model": (rt.groupby("sleeve")["pnl"].agg(["count", "sum"]).round(2).to_dict("index") if len(rt) else {})}
-    print(json.dumps(out, indent=2, default=str))
-    return 0
-
-
-def cmd_report(cfg, args) -> int:
-    from .broker import KrakenBroker
-    from .protect import market_report
-
-    assets = [a.strip().upper() for a in (args.assets or "BTC,ETH,SOL,DOGE").split(",") if a.strip()]
-    print(json.dumps(market_report(KrakenBroker(cfg), cfg, assets, args.max_atr), indent=2, default=str))
-    return 0
-
-
-def cmd_protect(cfg, args) -> int:
-    from .broker import KrakenBroker
-    from .protect import protect_holdings
-
-    holds = {}
-    for h in args.hold or []:
-        a, _, q = h.partition("=")
-        holds[a.strip().upper()] = float(q)
-    if not holds:
-        raise SystemExit("Name what to protect, e.g. --hold BTC=0.01414 --hold SOL=2.00989")
-    place = bool(args.i_understand_the_risk)
-    if place or args.validate:
-        key, sec = _keys()
-        broker = KrakenBroker(dc.replace(cfg, mode="validate" if args.validate else "live"), key, sec)
-        cfg = broker.cfg
-    else:
-        broker = KrakenBroker(cfg)
-    res = protect_holdings(broker, cfg, holds, args.state or "krakenbot_protect_state.json", place, args.max_atr)
-    print(json.dumps(res, indent=2, default=str))
-    return 0
-
-
-def cmd_trade(cfg, args) -> int:
-    from .broker import KrakenBroker, PaperBroker
-    from .engine import Engine, State
-
-    if cfg.mode == "live" and not args.i_understand_the_risk:
-        print("Refusing to trade live without --i-understand-the-risk. Run `validate` first.", file=sys.stderr)
-        return 2
-    if cfg.mode == "paper":
-        broker = PaperBroker(cfg, KrakenBroker(cfg))
-    else:
-        broker = KrakenBroker(cfg, *_keys())
-    state = State.load(cfg.state_file, cfg, args.capital)
-    result = Engine(cfg, broker, state, cfg.state_file).run_once()
-    print(json.dumps(result, indent=2, default=str))
-    return 0
+def _print(obj) -> None:
+    print(json.dumps(obj, indent=2, default=str))
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="krakenbot")
-    ap.add_argument("command", choices=["report", "backtest", "paper", "validate", "live", "protect"])
+    ap.add_argument("command", choices=["report", "backtest", "rebuild", "paper", "validate", "live"])
     ap.add_argument("--config", help="TOML file with overrides")
-    ap.add_argument("--capital", type=float, help="EUR the bot may manage (first run only)")
-    ap.add_argument("--assets", help="report: comma-separated coins")
-    ap.add_argument("--hold", action="append", help="protect: COIN=QTY you already hold (repeatable)")
-    ap.add_argument("--max-atr", type=float, default=4.0, help="report/protect: widest stop in ATRs (default 4)")
-    ap.add_argument("--state", help="protect: state file")
-    ap.add_argument("--validate", action="store_true", help="protect: have Kraken validate, place nothing")
+    ap.add_argument("--capital", type=float, help="paper/live first run without rebuild: EUR the bot may manage")
+    ap.add_argument("--validate", action="store_true", help="rebuild: Kraken validates, nothing is placed")
     ap.add_argument("--log", help="also log to this file")
     ap.add_argument("--i-understand-the-risk", action="store_true")
     args = ap.parse_args(argv)
     _setup_logging(args.log)
     cfg = load_config(args.config)
+
+    from .broker import KrakenBroker, PaperBroker
+
     if args.command == "report":
-        return cmd_report(cfg, args)
+        from .portfolio import market_report
+        _print(market_report(KrakenBroker(cfg), cfg))
+        return 0
+
     if args.command == "backtest":
-        return cmd_backtest(cfg, args)
-    if args.command == "protect":
-        return cmd_protect(cfg, args)
-    default_state = cfg.state_file if cfg.state_file != "krakenbot_state.json" else f"krakenbot_{args.command}_state.json"
-    cfg = dc.replace(cfg, mode=args.command, state_file=default_state).validate()
-    return cmd_trade(cfg, args)
+        from .backtest import buy_and_hold, perf, run
+        from .signals import to_frame
+        md = KrakenBroker(cfg)
+        data = {a: to_frame(md.daily_bars(s, 720)) for a, s in zip(cfg.assets, cfg.symbols)}
+        res = run(data, cfg, start_equity=args.capital or 1600.0)
+        first = res.holdings.sum(axis=1).ne(0).idxmax()
+        eq = res.equity[res.equity.index >= first]
+        _print({"strategy": perf(eq, len(res.trades), res.fees, res.stops, res.halted_on),
+                "hold_btc": perf(buy_and_hold(data, ["BTC"], start=first)),
+                "hold_gold": perf(buy_and_hold(data, ["PAXG"], start=first)),
+                "note": "Kraken serves 720 daily bars; 160 are warm-up. See REVIEW.md for the 4.6-year test."})
+        return 0
+
+    state_file = cfg.state_file if cfg.state_file != "krakenbot_state.json" else (
+        "krakenbot_paper_state.json" if args.command == "paper" else "krakenbot_state.json")
+
+    if args.command == "rebuild":
+        from .portfolio import execute_rebuild, plan_rebuild
+        execute = args.i_understand_the_risk or args.validate
+        mode = "validate" if args.validate else ("live" if args.i_understand_the_risk else "paper")
+        cfg = dc.replace(cfg, mode=mode, state_file=state_file).validate()
+        broker = KrakenBroker(cfg, *_keys())
+        plan = plan_rebuild(broker, cfg)
+        _print(plan)
+        if not execute:
+            print("\nPlan only. Add --validate to have Kraken check it, or --i-understand-the-risk to execute.")
+            return 0
+        if mode == "live" and os.path.exists(state_file):
+            raise SystemExit(f"{state_file} already exists: the account is already managed. Move it away to rebuild.")
+        _print(execute_rebuild(broker, cfg, plan, state_file))
+        return 0
+
+    from .engine import Engine, State
+    cfg = dc.replace(cfg, mode=args.command, state_file=state_file).validate()
+    if cfg.mode == "live" and not args.i_understand_the_risk:
+        print("Refusing to trade live without --i-understand-the-risk. Run `rebuild --validate` first.", file=sys.stderr)
+        return 2
+    broker = PaperBroker(cfg, KrakenBroker(cfg)) if cfg.mode == "paper" else KrakenBroker(cfg, *_keys())
+    state = State.load(cfg.state_file, cfg, args.capital)
+    _print(Engine(cfg, broker, state, cfg.state_file).run_once())
+    return 0
 
 
 if __name__ == "__main__":
