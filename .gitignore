@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 /vertex1-update.*
 dist/
+krakenbot_*state.json*
+krakenbot*.log
