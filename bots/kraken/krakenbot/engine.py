@@ -71,6 +71,7 @@ class Engine:
         self.vol: dict[str, float] = {}
         self.run_tag = ""
         self._in_protect = False
+        self.reserved: dict[str, float] = {}  # coins owned by ANOTHER ledger on the same account (e.g. harvest)
 
     # --- helpers ---------------------------------------------------------------------------------------
     def _sym(self, a: str) -> str:
@@ -92,7 +93,7 @@ class Engine:
         if not bal:
             return
         for a, h in self.st.holdings.items():
-            have = bal.get(a, {}).get("total", 0.0)
+            have = max(0.0, bal.get(a, {}).get("total", 0.0) - self.reserved.get(a, 0.0))
             if h.qty > have + 1e-9:
                 log.error("%s: ledger %.8f > account %.8f; clamping the ledger", a, h.qty, have)
                 h.qty = have
@@ -162,7 +163,7 @@ class Engine:
                 o = self.b.place_stop(sym, h.qty, h.stop, cid)
                 h.stop_order_id = None if self.cfg.mode == "validate" else str(o["id"])
                 log.info("STOP %s %.8f @ %.4f (%s)", sym, h.qty, h.stop,
-                         "validated, not placed" if self.cfg.mode == "validate" else "resting on Kraken")
+                         {"validate": "validated, not placed", "paper": "simulated"}.get(self.cfg.mode, "resting on Kraken"))
                 self._commit()
                 return
             except BelowMinimum as e:

@@ -32,6 +32,13 @@ class Config:
     rotation_assets: tuple[str, ...] = ("BTC", "ETH", "SOL", "XRP", "DOGE", "LINK", "PAXG")
     rotation_top_k: int = 2
 
+    # --- harvest engine (separate ledger): constant BTC/gold/EUR mix, rebalanced only on big drifts --------
+    harvest_assets: tuple[str, ...] = ("BTC", "PAXG")
+    harvest_targets: tuple[float, ...] = (0.3333, 0.3333)   # the rest (~1/3) stays EUR
+    harvest_band: float = 0.10                    # rebalance when any weight is this far from its target (pp)
+    harvest_stop_sigma: float = 8.0               # disaster stop, much wider: this engine is MEANT to buy dips
+    harvest_state_file: str = "krakenbot_harvest_state.json"
+
     # --- ranking (shared by both sleeves) ----------------------------------------------------------------
     rank_lookbacks: tuple[int, ...] = (30, 60, 90)  # score = mean(return over L / volatility) across L
     trend_lookbacks: tuple[int, ...] = (10, 20, 40, 80, 160)  # asset must be up over most of these to qualify
@@ -74,6 +81,14 @@ class Config:
                 p.append(f"{name}_weight must be in [0, 1]")
             if w > 0 and not 1 <= k <= len(assets):
                 p.append(f"{name}_top_k must be between 1 and the number of {name}_assets")
+        if len(self.harvest_targets) != len(self.harvest_assets) or sum(self.harvest_targets) > 1 + 1e-9 \
+                or min(self.harvest_targets, default=0) < 0:
+            p.append("harvest_targets: one non-negative weight per harvest asset, summing to <= 1")
+        if not 0.02 <= self.harvest_band <= 0.5 or not 1.0 <= self.harvest_stop_sigma <= 20.0:
+            p.append("harvest_band must be in [0.02, 0.5] and harvest_stop_sigma in [1, 20]")
+        conv_h = [a for a in self.harvest_assets if a in FIAT_AND_STABLES]
+        if conv_h and not self.allow_conversions:
+            p.append(f"harvest assets {conv_h} are currencies; set allow_conversions")
         if self.dual_weight + self.rotation_weight > 1 + 1e-9:
             p.append("dual_weight + rotation_weight must not exceed 1 (no leverage)")
         if not 0 < self.max_weight <= 1 or not 0 < self.target_vol <= 2:
@@ -128,7 +143,11 @@ def _coerce(value: str, like):
         return float(value)
     if isinstance(like, tuple):
         parts = [x.strip() for x in value.split(",") if x.strip()]
-        return tuple(int(x) for x in parts) if like and isinstance(like[0], int) else tuple(parts)
+        if like and isinstance(like[0], int):
+            return tuple(int(x) for x in parts)
+        if like and isinstance(like[0], float):
+            return tuple(float(x) for x in parts)
+        return tuple(parts)
     return value
 
 

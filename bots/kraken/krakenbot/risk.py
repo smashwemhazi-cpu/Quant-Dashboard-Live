@@ -39,8 +39,9 @@ class Holding:
 
 def stop_level(px: float, vol: float, cfg: Config) -> float:
     """Disaster-stop price: k standard deviations of a one-week move below px (never below 10% of px)."""
-    week_sigma = vol * math.sqrt(7 / 365) if math.isfinite(vol) and vol > 0 else 0.5
-    return px * max(0.10, 1 - cfg.stop_sigma * week_sigma)
+    if not (math.isfinite(vol) and vol > 0):
+        return px * 0.10
+    return px * max(0.10, 1 - cfg.stop_sigma * vol * math.sqrt(7 / 365))
 
 
 def on_buy(h: Holding, px: float, qty: float, vol: float, cfg: Config) -> None:

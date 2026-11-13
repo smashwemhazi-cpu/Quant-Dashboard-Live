@@ -11,6 +11,7 @@ from bots.kraken.krakenbot import backtest as bt
 from bots.kraken.krakenbot.broker import (BelowMinimum, ConversionNotAuthorised, Fill, PaperBroker, assert_tradeable,
                                           client_id)
 from bots.kraken.krakenbot.config import Config, load_config
+from bots.kraken.krakenbot import harvest as hv
 from bots.kraken.krakenbot.engine import Engine, State
 from bots.kraken.krakenbot.portfolio import execute_rebuild, market_report, plan_rebuild
 from bots.kraken.krakenbot.risk import (DrawdownGuard, Holding, QuoteError, check_quote, limit_price, on_buy,
@@ -406,7 +407,7 @@ def test_rebuild_execute_sells_junk_adopts_and_rebalances(tmp_path):
     st = json.load(open(cfg.state_file))
     assert ("limit", "JUNK/EUR", "sell") in b.log and "JUNK" not in st["holdings"]
     assert ("limit", "CCC/EUR", "sell") in b.log and st["holdings"]["CCC"]["qty"] == 0   # adopted, then rotated out
-    assert out["first_rebalance"]["status"] == "rebalanced"
+    assert out["first_rebalance"]["momentum"]["status"] == "rebalanced"
     assert not any(s.startswith("USDC") for _, s, *_ in b.log)                          # currency untouched
     for a, h in st["holdings"].items():
         if h["qty"] > 0:
@@ -502,3 +503,96 @@ def test_kraken_stop_order_shape_and_guards():
         b.place_stop("BTC/EUR", 0.000001, 55000, "cid-t")
     with pytest.raises(ConversionNotAuthorised):
         b.place_limit("USDC/EUR", "buy", 10, 1.0, True, "cid-c")
+
+
+# =============================================================== harvest engine (volatility harvesting)
+HCFG = dc.replace(CFG, harvest_assets=("AAA", "GLD"), harvest_targets=(0.3333, 0.3333), min_order_quote=5.0)
+
+
+def _harvest(tmp_path, data, capital=900.0):
+    cfg = dc.replace(HCFG, harvest_state_file=str(tmp_path / "h.json"))
+    broker = Paper(cfg, FakeMarket(data), slippage=0.0)
+    return cfg, broker, hv.HarvestEngine.load(cfg, broker, capital, sleep=lambda s: None)
+
+
+def _w(eng, broker):
+    mids = {a: broker.top_of_book(f"{a}/EUR")[0] for a in eng.st.holdings}
+    eq = eng.st.cash + sum(h.qty * mids[a] for a, h in eng.st.holdings.items())
+    return {a: h.qty * mids[a] / eq for a, h in eng.st.holdings.items()}
+
+
+def test_harvest_first_run_invests_to_target_with_wide_stops(tmp_path):
+    cfg, broker, eng = _harvest(tmp_path, market())
+    r = eng.run_once()
+    assert r["status"] == "rebalanced" and r["reason"] == "initial"
+    for a, w in _w(eng, broker).items():
+        assert w == pytest.approx(1 / 3, abs=0.02)
+        h = eng.st.holdings[a]
+        assert h.stop_order_id and h.stop < h.entry * 0.9          # wide disaster stop, on the exchange
+
+
+def test_harvest_holds_inside_band_and_sells_winner_buys_loser_outside(tmp_path):
+    data = market()
+    cfg, broker, eng = _harvest(tmp_path, data)
+    eng.run_once()
+    next_day(data)
+    eng2 = hv.HarvestEngine.load(cfg, broker, None, sleep=lambda s: None)
+    assert eng2.run_once()["status"] == "hold"
+    aaa_before, gld_before = eng2.st.holdings["AAA"].qty, eng2.st.holdings["GLD"].qty
+    c = data["AAA"][-1][4]
+    next_day(data, lows={"AAA": (c, c * 3.0)})                     # AAA triples -> weight drifts far past the band
+    broker.log.clear()
+    eng3 = hv.HarvestEngine.load(cfg, broker, None, sleep=lambda s: None)
+    r = eng3.run_once()
+    assert r["status"] == "rebalanced" and r["reason"].startswith("drift")
+    assert eng3.st.holdings["AAA"].qty < aaa_before                # sold the winner
+    assert eng3.st.holdings["GLD"].qty > gld_before                # bought the laggard
+    assert all(w == pytest.approx(1 / 3, abs=0.03) for w in _w(eng3, broker).values())
+
+
+def test_two_ledgers_on_one_account_do_not_clamp_each_other():
+    cfg = dc.replace(HCFG)
+    e = Engine(cfg, Paper(cfg, FakeMarket(market())), State(cash=0.0), "unused.json")
+    e.st.holdings["AAA"] = Holding(qty=1.0, entry=100, stop=80)
+    e.reserved = {"AAA": 2.0}                                       # harvest ledger owns 2 of the 3 coins
+    e.reconcile({"AAA": {"total": 3.0, "free": 3.0}})
+    assert e.st.holdings["AAA"].qty == 1.0
+    e.reconcile({"AAA": {"total": 2.5, "free": 2.5}})               # 0.5 sold by hand -> only 0.5 left for us
+    assert e.st.holdings["AAA"].qty == pytest.approx(0.5)
+
+
+def test_rebuild_splits_capital_between_momentum_and_harvest(tmp_path):
+    data = market()
+    bal = {"EUR": {"free": 1000.0, "total": 1000.0}}
+    cfg = dc.replace(HCFG, state_file=str(tmp_path / "s.json"), harvest_state_file=str(tmp_path / "h.json"), mode="live")
+    b = Paper(cfg, FakeMarket(data), balances=bal, slippage=0.0)
+    out = execute_rebuild(b, cfg, plan_rebuild(b, cfg), cfg.state_file, harvest_share=0.5)
+    assert out["first_rebalance"]["harvest"]["capital"] == pytest.approx(500.0)
+    mom, har = json.load(open(cfg.state_file)), json.load(open(cfg.harvest_state_file))
+    spent_m = 500.0 - mom["cash"]
+    assert 0 <= spent_m <= 500.0 and har["cash"] < 500.0           # each ledger spends only its own half
+
+
+def test_harvest_backtest_buys_the_dip():
+    rows_a, rows_g = bars(300, drift=0.0, vol=0.01, seed=3), bars(300, drift=0.0, vol=0.005, seed=4)
+    for i in range(200, 260):                                        # AAA halves, then recovers
+        f = 0.5 ** (1 / 30) if i < 230 else 2 ** (1 / 30)       # -50% in 30 days, then back up
+        prev = rows_a[i - 1][4]
+        c = prev * f
+        rows_a[i] = [rows_a[i][0], prev, max(prev, c) * 1.001, min(prev, c) * 0.999, c, 1.0]
+    for i in range(260, 300):
+        prev = rows_a[i - 1][4]
+        rows_a[i] = [rows_a[i][0], prev, prev * 1.001, prev * 0.999, prev, 1.0]
+    data = {"AAA": to_frame(rows_a), "GLD": to_frame(rows_g)}
+    res = hv.backtest(data, dc.replace(HCFG, harvest_stop_sigma=20.0), 1000)
+    buys_in_dip = res.trades[(res.trades.asset == "AAA") & (res.trades.side == "buy")
+                             & (res.trades.ts > data["AAA"].index[200])]
+    assert len(buys_in_dip) >= 1                                     # rebalanced INTO the fallen asset
+    assert res.equity.iloc[-1] > 0
+
+
+def test_float_tuple_env_override():
+    c = load_config(env={"KRAKENBOT_HARVEST_TARGETS": "0.25,0.25"})
+    assert c.harvest_targets == (0.25, 0.25)
+    with pytest.raises(ValueError):
+        load_config(env={"KRAKENBOT_HARVEST_TARGETS": "0.7,0.7"})

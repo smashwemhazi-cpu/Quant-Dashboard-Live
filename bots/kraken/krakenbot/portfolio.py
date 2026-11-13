@@ -20,10 +20,24 @@ import math
 from .broker import BelowMinimum, BrokerError, assert_tradeable
 from .config import FIAT_AND_STABLES, Config
 from .engine import Engine, State
+from .harvest import HarvestEngine
+from .harvest import targets as harvest_targets
 from .risk import Holding, OrderPlan, check_quote, stop_level
 from .signals import features, target_weights, to_frame
 
 log = logging.getLogger("krakenbot.portfolio")
+
+
+def harvest_report(broker, cfg: Config) -> dict:
+    import os
+    out = {"targets": harvest_targets(cfg), "eur_target": round(1 - sum(cfg.harvest_targets), 4),
+           "rebalance_band": cfg.harvest_band}
+    if os.path.exists(cfg.harvest_state_file):
+        import json
+        with open(cfg.harvest_state_file) as fh:
+            st = json.load(fh)
+        out["last"] = (st.get("history") or [None])[-1]
+    return out
 
 
 def market_report(broker, cfg: Config) -> dict:
@@ -88,8 +102,9 @@ def plan_rebuild(broker, cfg: Config) -> dict:
             "after_rebuild_bot_manages_eur": total}
 
 
-def execute_rebuild(broker, cfg: Config, plan: dict, state_path: str) -> dict:
-    """Sell non-strategy coins, adopt strategy coins, write the ledger and rebalance immediately."""
+def execute_rebuild(broker, cfg: Config, plan: dict, state_path: str, harvest_share: float = 0.0) -> dict:
+    """Sell non-strategy coins, adopt strategy coins, split the EUR between the momentum ledger and the harvest
+    ledger (`harvest_share` of the whole investable value, funded from EUR), then rebalance both at once."""
     state = State(cash=plan["eur_cash"])
     for a in cfg.assets:
         state.holdings[a] = Holding()
@@ -108,7 +123,23 @@ def execute_rebuild(broker, cfg: Config, plan: dict, state_path: str) -> dict:
         vol = float(f["vol"]) if math.isfinite(float(f["vol"])) else float("nan")
         h = Holding(qty=it["qty"], entry=it["price"], high_close=it["price"], stop=stop_level(it["price"], vol, cfg))
         state.holdings[it["asset"]] = h
+    harvest_eur = 0.0
+    if harvest_share > 0:
+        bal = broker.balances() if cfg.mode == "live" else {}
+        eur_now = bal.get(cfg.quote, {}).get("free", state.cash) if bal else state.cash
+        state.cash = min(state.cash, eur_now)
+        total = state.cash + sum(i["value"] for i in plan["adopt"])
+        harvest_eur = min(state.cash, harvest_share * total)
+        state.cash -= harvest_eur
     if cfg.mode != "validate":
         state.save(state_path)
-    result = Engine(cfg, broker, state, state_path).run_once(force_rebalance=True)
+    mom = Engine(cfg, broker, state, state_path)
+    result = {"momentum": mom.run_once(force_rebalance=True)}
+    if harvest_eur > 0:
+        hv = HarvestEngine.load(cfg, broker, harvest_eur)
+        hv.reserved = {a: h.qty for a, h in mom.st.holdings.items()}
+        result["harvest"] = hv.run_once(force_rebalance=True)
+        result["harvest"]["capital"] = harvest_eur
+        if cfg.mode == "validate":
+            result["harvest"]["note"] = "validated, nothing placed"
     return {"rebuild": "done" if cfg.mode != "validate" else "validated (nothing placed)", "first_rebalance": result}

@@ -35,6 +35,23 @@ funding.
 **Where the market stands today (bar of 12 Nov 2026):** nothing qualifies, **gold included**. BTC's score is
 barely positive, but its trend vote is −0.6. Every other asset is negative on both. **The strategy is 100% EUR.**
 
+**Is this "hold a bag and pray"?** No.
+- **The momentum engine is out of the market about half the time** (average 47% invested). It sells anything that
+  stops trending at the next weekly close, and it is 100% EUR today.
+- **The harvest engine (below) trades against volatility.** It sells whatever ran up and buys whatever fell, on
+  rules, not hope.
+
+What the bot deliberately does *not* do is the "trading hub" activity: fast in-and-out trades, grids, pairs or
+scalps. §3b shows why. At retail fees those strategies transfer your money to market makers, who are paid rebates
+for taking the other side.
+
+**Two engines, two ledgers on one account** (split 50/50 by default):
+
+| Engine | Job | Rule |
+|---|---|---|
+| **Momentum** (the two sleeves above) | Ride trends, step aside in bear markets | Weekly ranking; cash when nothing qualifies |
+| **Harvest** | Turn volatility into profit | Hold ⅓ BTC, ⅓ gold, ⅓ EUR. When any weight drifts ±10 points (BTC roughly +50% or −40% against the others), trade back to ⅓ each: sell the winner, buy the loser |
+
 ---
 
 ## 2. Your account: what happened and how to rebuild it
@@ -86,6 +103,30 @@ and fee stress tests. In-sample was used to choose; out-of-sample only to judge.
 
 ---
 
+## 3b. Volatility and arbitrage: every idea I could test on Kraken
+
+All on 4.6 years of hourly and daily Kraken Futures data (funding: the last 12 months, all Kraken serves).
+
+| Idea | What it is | Result | Verdict |
+|---|---|---|---|
+| Funding carry | Long spot + short perp, collect funding | BTC/ETH funding ≈ 4%/yr over the last year. Switching in and out on a funding threshold: **−2% to −22%/yr** after fees. Held the whole year: about +2%/yr | **Out** for now: below a savings rate. It can pay 10–30% in a hot bull market, which this data can't test |
+| Stat-arb on ETH/BTC, SOL/BTC, SOL/ETH | Short the rich coin, buy the cheap one, wait for the ratio to revert | **17 of 18 variants lose**; hourly variants −70% to −99% | **Out**: crypto ratios trend more than they revert |
+| Short-term reversal on perps | Fade big hourly or daily moves | **11 of 12 lose**, up to −94% | **Out**: the APEX failure again |
+| **Volatility harvesting** | Constant BTC/gold/EUR mix, rebalance on drift | +88% to +104% since Sep 2023 (band ±10% to ±20%), drawdown −21% to −22%. In the Sep 2022 – Aug 2023 window where momentum lost 12%, a BTC/EUR harvest **made +14% to +16%** | **In: the harvest engine** |
+| Options (selling volatility) | Collect premium | I don't know of options on Kraken for EU retail clients, so this wasn't tested | n/a |
+| Cross-exchange or triangular arbitrage | Price gaps between venues or pairs | Three legs × 0.25% = 0.75% per loop, against latency-optimised bots | **Out**: you're the slowest participant |
+
+**Why the harvest works.** BTC and gold are both volatile and weakly correlated. Rebalancing between them and cash
+sells strength and buys weakness *and* stays diversified. Holding the same ⅓/⅓/⅓ mix without rebalancing made
++92% with a −32% drawdown; the rebalanced version made more with a smaller drawdown. Bands are wide so it trades
+only a few times a year: 16 trades in 3 years at ±10%. Your 0.2% grid had the same idea with bands smaller than its
+own fees.
+
+**Harvest stop width:** 4σ hurt (+89%, −25% drawdown, because it sold the dips the engine is built to buy). 6–20σ
+were all ≈ +100%. The default is 8σ: about −40% for BTC, −24% for gold.
+
+---
+
 ## 4. The final strategy's results
 
 Through the live code path, with weekly rebalancing, next-day fills, fees, slippage and disaster stops:
@@ -97,6 +138,13 @@ Through the live code path, with weekly rebalancing, next-day fills, fees, slipp
 | Kraken **EUR spot**, May 2025 → Nov 2026 | **+5%, DD −14%** | −24%, DD −52% | +17%, DD −25% | −18%, DD −64% |
 | **Worst case:** Sep 2022 → Aug 2023 (no gold data yet) | **−12%**, DD −17% | +29% | n/a | |
 | Stop width 3σ / 4σ / 6σ / 10σ | +132% / +131% / +151% / +141% | | | |
+
+**Momentum + harvest, 50/50 on separate ledgers** (Sep 2023 → Nov 2026): **≈ 26–28%/yr, max drawdown −15% to
+−16%, Sharpe 1.34–1.39**. Momentum alone: 30%/yr, drawdown −20%, Sharpe 1.35.
+
+The blend gives up a little return for a third less drawdown, and its two halves cover each other's worst windows.
+On Kraken EUR spot since May 2025, the blend made +1% (momentum +5%, harvest −2% to −3%) against −24% for BTC.
+2026 has been bad for both BTC and gold.
 
 How to read it:
 - **It will lag BTC in a raging bull market** (2024: +36% vs +111%).
@@ -127,7 +175,9 @@ How to read it:
 
 ## 6. Growth: what it can realistically be
 
-These figures come from a Monte Carlo that resamples the strategy's own daily returns from Sep 2023 to Nov 2026 in
+These figures come from a Monte Carlo of the **momentum engine alone**. The 50/50 blend's figures are similar but
+tighter: €0/month for 5 years gives a median of €6,000 and a bad case of €3,400; €200/month gives a median of
+€30,600 and a bad case of €20,800. The Monte Carlo resamples the strategy's own daily returns from Sep 2023 to Nov 2026 in
 30-day blocks (3,000 paths), starting from €1,647. **That period was good for both crypto and gold, so treat the
 median as optimistic.** The haircut row halves every return.
 

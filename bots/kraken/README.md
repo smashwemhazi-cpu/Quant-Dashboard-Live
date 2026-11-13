@@ -6,8 +6,14 @@ conversions.
 - **Dual momentum (60%):** BTC or gold (PAXG), whichever is stronger and in an uptrend, otherwise EUR.
 - **Rotation (40%):** the top 2 of BTC, ETH, SOL, XRP, DOGE, LINK and gold, each only if it is in an uptrend.
 
-It rebalances weekly. Every holding gets a disaster stop-loss resting on Kraken. Read [REVIEW.md](REVIEW.md) for
-the evidence, what was rejected, and the limits.
+It rebalances weekly. Every holding gets a disaster stop-loss resting on Kraken.
+
+A second engine, **harvest**, keeps its own ledger. It holds ⅓ BTC, ⅓ gold and ⅓ EUR, and rebalances back whenever
+a weight drifts ±10 points: it sells what ran up and buys what fell. `rebuild` splits the account 50/50 between the
+two engines.
+
+Read [REVIEW.md](REVIEW.md) for the evidence, including every volatility and arbitrage idea that was tested and
+rejected (§3b), and the limits.
 
 ## Install
 ```bash
@@ -33,19 +39,20 @@ KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python -m bots.kraken.krakenbot.run reb
 ```
 5. Execute the plan:
    - sell coins that are not in the strategy to EUR;
-   - adopt BTC, ETH, SOL, XRP, DOGE, LINK and PAXG into the bot's ledger;
-   - rebalance immediately and put stops on Kraken.
+   - adopt BTC, ETH, SOL, XRP, DOGE, LINK and PAXG into the momentum ledger;
+   - fund the harvest ledger with `--harvest-share` (default 0.5) of the account, from EUR;
+   - rebalance both engines immediately and put stops on Kraken.
 ```bash
 KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python -m bots.kraken.krakenbot.run rebuild --i-understand-the-risk
 ```
-6. From then on, run once a day, a few minutes after 00:00 UTC. It rebalances on Mondays, catches up if a
-   rebalance was missed, and checks stops every day.
+6. From then on, run once a day, a few minutes after 00:00 UTC. Momentum rebalances on Mondays and catches up if a
+   week was missed. Harvest rebalances whenever its drift exceeds the band. Both check their stops every day.
 ```bash
 KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python -m bots.kraken.krakenbot.run live --i-understand-the-risk --log krakenbot.log
 ```
 
 `rebuild` never touches USD, USDC, USDT, USDG or anything in Earn/staking. It lists them so you can decide.
-Paper mode (`paper --capital 1600`) runs on live public data with simulated fills.
+Paper mode (`paper --capital 800 --harvest-capital 800`) runs on live public data with simulated fills.
 
 **API key permissions:** Query Funds, Query Open Orders & Trades, Query Closed Orders & Trades, Create & Modify
 Orders, Cancel/Close Orders. **Never enable Withdraw Funds.**
