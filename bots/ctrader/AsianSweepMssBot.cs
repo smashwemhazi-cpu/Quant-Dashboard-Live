@@ -235,13 +235,13 @@ namespace cAlgo.Robots
         public bool ResetHalt { get; set; }
 
         // ---- Session ----
-        [Parameter("Session Time Zone (e.g. UTC, Europe/London)", DefaultValue = "UTC", Group = "Session")]
+        [Parameter("Session Time Zone (e.g. UTC, Europe/London)", DefaultValue = "Europe/London", Group = "Session")]
         public string SessionTimeZone { get; set; }
 
-        [Parameter("Session Start Hour", DefaultValue = 7, MinValue = 0, MaxValue = 23, Group = "Session")]
+        [Parameter("Session Start Hour", DefaultValue = 8, MinValue = 0, MaxValue = 23, Group = "Session")]
         public int SessionStartHour { get; set; }
 
-        [Parameter("Session End Hour", DefaultValue = 19, MinValue = 0, MaxValue = 24, Group = "Session")]
+        [Parameter("Session End Hour", DefaultValue = 20, MinValue = 0, MaxValue = 24, Group = "Session")]
         public int SessionEndHour { get; set; }
 
         [Parameter("Trade Fridays", DefaultValue = true, Group = "Session")]
@@ -299,7 +299,7 @@ namespace cAlgo.Robots
         [Parameter("London: Range Start Hour", DefaultValue = 0, MinValue = 0, MaxValue = 23, Group = "Killzone: London (sweeps Asian range)")]
         public int AsrLonRangeStart { get; set; }
 
-        [Parameter("London: Sweep Start Hour (= range end)", DefaultValue = 7, MinValue = 0, MaxValue = 23, Group = "Killzone: London (sweeps Asian range)")]
+        [Parameter("London: Sweep Start Hour (= range end)", DefaultValue = 8, MinValue = 0, MaxValue = 23, Group = "Killzone: London (sweeps Asian range)")]
         public int AsrLonSweepStart { get; set; }
 
         [Parameter("London: Sweep Window Hours", DefaultValue = 4, MinValue = 1, MaxValue = 12, Group = "Killzone: London (sweeps Asian range)")]
@@ -315,10 +315,10 @@ namespace cAlgo.Robots
         [Parameter("New York: Enabled", DefaultValue = true, Group = "Killzone: New York (sweeps London range)")]
         public bool AsrNyEnabled { get; set; }
 
-        [Parameter("New York: Range Start Hour", DefaultValue = 7, MinValue = 0, MaxValue = 23, Group = "Killzone: New York (sweeps London range)")]
+        [Parameter("New York: Range Start Hour", DefaultValue = 8, MinValue = 0, MaxValue = 23, Group = "Killzone: New York (sweeps London range)")]
         public int AsrNyRangeStart { get; set; }
 
-        [Parameter("New York: Sweep Start Hour (= range end)", DefaultValue = 12, MinValue = 0, MaxValue = 23, Group = "Killzone: New York (sweeps London range)")]
+        [Parameter("New York: Sweep Start Hour (= range end)", DefaultValue = 13, MinValue = 0, MaxValue = 23, Group = "Killzone: New York (sweeps London range)")]
         public int AsrNySweepStart { get; set; }
 
         [Parameter("New York: Sweep Window Hours", DefaultValue = 4, MinValue = 1, MaxValue = 12, Group = "Killzone: New York (sweeps London range)")]
@@ -877,9 +877,11 @@ namespace cAlgo.Robots
     //        session opens, that liquidity is often run and rejected (Judas swing); a close
     //        through the pre-sweep structure (MSS) confirms the reversal. Target = the
     //        opposite side of the swept range (the next pool of liquidity).
-    //  Killzones (hours in the core "Session Time Zone"):
-    //    London   : range 00-07  (Asian session)  -> sweeps hunted 07-11
-    //    New York : range 07-12  (London session) -> sweeps hunted 12-16
+    //  Killzones (hours in the core "Session Time Zone", default Europe/London so the
+    //  London and New York opens follow daylight saving automatically):
+    //    London   : range 00-08  (Asian session)  -> sweeps hunted 08-12 London time
+    //    New York : range 08-13  (London session) -> sweeps hunted 13-17 London time
+    //  If the log warns that the time zone was not found, use "GMT Standard Time" (Windows).
     //  Per killzone, per day: one attempt per side, at most one trade.
     //  Definitions (closed bars only, nothing repaints):
     //    Range      = high/low of bars opening in [range start, sweep start), accepted only
