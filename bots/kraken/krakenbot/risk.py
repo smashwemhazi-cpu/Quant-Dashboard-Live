@@ -3,9 +3,9 @@
 Stop-loss, the whole rule:
   * every holding has a stop-loss order resting ON KRAKEN from the moment it is bought, so it protects you when the
     bot, your PC or the internet is down;
-  * level = price x (1 - stop_sigma x one-week volatility), e.g. ~-17% for BTC, ~-33% for a volatile altcoin at
-    the default 3. It is set at entry and only ever raised, at each weekly rebalance; never lowered, never trailed
-    daily;
+  * level = price x (1 - stop_sigma x one-week volatility): at the default 4 that is ~-22% for BTC (40% vol) and
+    ~-35% to -40% for a volatile altcoin (harvest uses 8). Set at entry, only ever raised at each rebalance; never
+    lowered, never trailed daily;
   * if price is already through the stop when we look, we sell instead of placing a stop that would fire at once.
 Why a disaster brake and not a tight trailing stop: the weekly rotation is the exit. In the backtest every daily
 trailing stop (2-10 ATR) cut returns AND deepened drawdowns, because it sells pullbacks the rotation then buys back

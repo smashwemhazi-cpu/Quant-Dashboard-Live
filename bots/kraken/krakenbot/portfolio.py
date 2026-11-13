@@ -14,8 +14,10 @@ executes, writes the bot's state file and runs the first rebalance immediately.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
 import time
 
 from .broker import BelowMinimum, BrokerError, assert_tradeable
@@ -30,11 +32,9 @@ log = logging.getLogger("krakenbot.portfolio")
 
 
 def harvest_report(broker, cfg: Config) -> dict:
-    import os
     out = {"targets": harvest_targets(cfg), "eur_target": round(1 - sum(cfg.harvest_targets), 4),
            "rebalance_band": cfg.harvest_band}
     if os.path.exists(cfg.harvest_state_file):
-        import json
         with open(cfg.harvest_state_file) as fh:
             st = json.load(fh)
         out["last"] = (st.get("history") or [None])[-1]
