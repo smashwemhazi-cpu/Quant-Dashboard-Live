@@ -9,6 +9,87 @@ with real Kraken candles, and Kraken's live market metadata (pairs, minimums, le
 
 ---
 
+## 0. Update (v2): no conversions, stop-loss logic, regime models, SMC, and BTC/DOGE/SOL
+
+**What changed, in response to your notes**
+
+1. **No currency conversion without your authorisation.** Every order in `krakenbot` passes one gate
+   (`broker.assert_tradeable`). An order between two currencies (EUR, USD, USDC, USDT, USDG…) is refused unless
+   you set `allow_conversions = true` **and** list that exact pair in `authorised_conversions`. Orders in any
+   quote other than EUR are refused. A currency can't be configured as a tradable asset either. The legacy APEX
+   file now skips its boot-time EUR/USD→USDC sweep unless `APEX_AUTHORISE_CONVERSION=YES`.
+   **Your own copy of APEX on your PC still converts until you replace it.**
+2. **Stop-loss logic** (`risk.py`, `engine.py`). Each rule has a test:
+   - The stop is set from structure: just below the last confirmed swing low, never closer than 1 ATR, never
+     further than 3 ATR.
+   - **Position size comes from the stop**: a hit costs at most 2% of equity (1% for range/SMC trades).
+   - The stop rests on Kraken as a `stop-loss` order **immediately after each fill**, so it works when the bot,
+     your PC or the internet is down. A partial sell is re-protected immediately.
+   - Stops only move up: a chandelier trail (highest close − 3.5 ATR) plus each new higher swing low. Never down.
+   - If price is already through the stop, the bot exits rather than placing a stop that fires instantly.
+   - A stop filled while the bot was off is detected and booked, including partial fills. Then a 5-bar cooldown
+     starts, and the trend model needs a new high before it re-enters.
+   - A position that can't get a stop after 3 tries is closed. Dust below Kraken's minimum is written off the
+     ledger instead of carrying a stop Kraken would reject.
+   - Fees charged in the coin reduce the coins the ledger holds.
+   - Bugs found and fixed during this rebuild: protect→sell→protect could recurse forever when an exit kept
+     failing; and after a live stop-out the re-entry block read a high-water mark that had already been reset to 0.
+3. **Regime-adaptive engine** (`signals.py`, `strategy.py`). Every bar is classified as up / down / range, using a
+   100-EMA, its 10-day slope and the Kaufman efficiency ratio. There are three entry models:
+   - **trend**: momentum entry in an uptrend, structural stop, trailing exits;
+   - **range**: buy the swing-low zone of a sideways range, take profit at the swing-high zone, time stop;
+   - **smc**: Smart Money Concepts, coded objectively. A fractal swing is only known k bars after it happens.
+     It covers break of structure (BOS), change of character (CHoCH), liquidity sweep and reclaim, fair value gaps
+     and order blocks. Entry is a sweep of the last swing low plus a reclaim, inside bullish structure. The stop
+     sits under the sweep wick and the target is the last swing high, at reward:risk of 2 or more.
+4. **New commands**:
+   - `report`: a read-only view of regime and SMC structure for any coin.
+   - `protect`: puts Kraken stop-losses under your **existing** coins. It never buys, never converts, never lowers
+     a stop, and refuses a stop above the market.
+
+**Results.** 4.6 years of Kraken Futures daily data (PF_ perps, Mar 2022 → Nov 2026: the 2022 crash, the
+2023–24 bull run and the ranges between). In-sample is to Jun 2024, out-of-sample from Jul 2024. BTC/ETH/SOL,
+fees 0.25% + 0.10% slippage per side.
+
+| Entry models | Full | Max DD | In-sample | Out-of-sample | Verdict |
+|---|---|---|---|---|---|
+| **trend (default)** | **+26.0%** | **−19.9%** | +25.3% | **+0.6%** | Only model positive in both halves |
+| range | −3.1% | −15.6% | +7.1% | −9.5% | Fails out-of-sample |
+| smc | −3.4% | −6.0% | −3.5% | +0.1% | 14 trades in 4.6 yrs; no edge |
+| trend + range | +23.0% | −25.8% | **+38.7%** | **−11.3%** | The overfitting trap: best in-sample, worst out-of-sample |
+| trend + smc | +23.8% | −21.6% | +23.0% | +0.7% | SMC adds nothing |
+| Hold BTC/ETH/SOL | +6.2% | −76.7% | | | |
+| Hold BTC | +66.3% | −66.9% | | | |
+
+Pre-declared variants, each tried once (no data-mining):
+- **SMC**: no structure filter −8.9%; looser sweep (RR 1.5, 5-bar window) −22.6%; more swings (k = 2) −1.1%.
+- **Range**: 30-bar window 0.0%; tighter zones −5.7%; stricter chop filter −6.1%.
+- **Stops**: structural +26.0%, pure 3-ATR +25.8%, wider 2–4 ATR +31.7%. Trailing distance is the fragile part:
+  2.5 ATR gives −1.7% and 5 ATR gives +8.4%, against +26% at 3.5. Expect live results to be less smooth.
+
+On Kraken EUR spot over the last 2 years, v2 made **+7.2%, max drawdown −8.2%** (v1: +4.6%, −19.1%). Holding the
+same coins: −47.7%, max drawdown −62%.
+
+**Verdict on SMC.** Coded honestly on daily bars, it has no edge here. Most SMC content you see is discretionary
+and judged by hindsight: once the rules are fixed in advance and fees are paid, the edge disappears. It's
+implemented, tested and available (`entry_models = ["trend", "smc"]`), but **off by default**. Range trading is
+the same: it looks good in-sample and loses out-of-sample. Sideways markets are handled by **staying in cash**,
+which is where most of the drawdown reduction comes from.
+
+**BTC, DOGE and SOL: my recommendation.** `report` on 13 Nov 2026 (EUR, daily close of 12 Nov):
+
+| Coin | Regime | Structure (SMC) | Momentum 20/60/120d | Holding over 4.6 yrs | Bot on it alone | Call |
+|---|---|---|---|---|---|---|
+| BTC | range, below 100-EMA (€68.3k), EMA flat | **bearish**: CHoCH 29 Oct, BOS down 5 Nov | −10.8% / −2.5% / +14.5% | +66%, max DD −67% | +12%, max DD −7.5% | **Hold as core only with a stop**: `protect` puts it at ~€54.1k (−13.5%, max further loss ~€119). Add only on a daily close above the last swing high (€73.6k = bullish BOS) and above the 100-EMA |
+| SOL | range/down, 14% below its EMA | **bearish**: BOS down 29 Oct | −19.5% / −13.8% / +9.6% | −14%, max DD −93% | +5%, max DD −13% | **Cut or stop out.** It falls hardest in crypto sell-offs, and holding hasn't paid. If you keep it: stop ~€57.1 (−21%, ~€31 further risk) |
+| DOGE | **down**, falling EMA | **bearish**: BOS down 5 Nov | −14.3% / −15.4% / **−6.8%** | +10%, max DD −86% | **−8.6%** | **Exit.** The only coin negative on all three horizons. No model trades it profitably, and adding it to the basket cut returns from +26% to +11% |
+
+Nobody knows where the market goes next; these calls come from the current trend state and history. The data
+says: in a market like today's, a falling 100-EMA plus bearish structure on all three, cash beats hope.
+Re-buying is a rule, not a feeling: let the bot re-enter when the uptrend conditions return.
+
+---
+
 ## 1. Bottom line
 
 1. **The account is not losing money because of bad luck. It is losing money because of the machine and the habits around it.**

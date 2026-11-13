@@ -11,6 +11,39 @@ run**) was replaced, the backtest, and its limits.
 pip install ccxt pandas numpy
 ```
 
+## Safety defaults
+- **No currency conversions.** EUR→USDC, USD→USDC and the like are refused unless you set `allow_conversions = true`
+  and list the exact pair in `authorised_conversions`. Only EUR pairs are traded.
+- **Every position gets a Kraken stop-loss immediately after each fill.** It sits under the last swing low (1–3 ATR),
+  only moves up, and the position size is set so a hit costs at most 2% of equity.
+- Long-only, no margin, 25% drawdown kill switch, one run per day.
+
+## Entry models
+`entry_models` chooses which models may open trades: `trend` (default), `range` and `smc`. Range and SMC are
+implemented and tested but **off by default**, because they failed out-of-sample (see REVIEW.md §0). Try them in
+paper mode:
+```bash
+KRAKENBOT_ENTRY_MODELS=trend,smc python -m bots.kraken.krakenbot.run paper --capital 1000
+```
+
+## Market report and protecting coins you already hold
+```bash
+python -m bots.kraken.krakenbot.run report --assets BTC,ETH,SOL,DOGE
+```
+```bash
+python -m bots.kraken.krakenbot.run protect --hold BTC=0.01414 --hold SOL=2.00989
+```
+```bash
+KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python -m bots.kraken.krakenbot.run protect --hold BTC=0.01414 --validate
+```
+```bash
+KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python -m bots.kraken.krakenbot.run protect --hold BTC=0.01414 --i-understand-the-risk
+```
+The first `protect` call only prints the plan. `--validate` has Kraken check the order without placing it.
+`--i-understand-the-risk` places it. Re-run `protect` daily and the stops ratchet up under new swing lows; they
+never move down. It refuses to place a stop above the current price, because that would be an instant sale, and
+asks you to decide instead.
+
 ## Stages (run them in this order)
 ```bash
 python -m bots.kraken.krakenbot.run backtest --capital 1600

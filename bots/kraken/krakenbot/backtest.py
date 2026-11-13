@@ -1,10 +1,12 @@
-"""Daily-bar event backtest with fees, slippage, exchange-side stops and the SAME risk code the live bot runs.
+"""Daily-bar event backtest with fees, slippage, exchange-side stops and the SAME decision/risk code as live.
 
 Timing (no look-ahead):
-  * signals and trailing stops are computed on bar t's close;
-  * rebalances fill at bar t+1's open (+/- slippage, + fee);
-  * a resting stop triggers inside bar t+1 if its low trades through it, filling at min(open, stop) - slippage
-    (a gap through the stop fills at the open, which is what really happens).
+  * features, stops and decisions use bar t's close;
+  * orders fill at bar t+1's open +/- slippage, + fee; an entry is skipped if that open is already at/below its stop;
+  * a resting stop triggers inside bar t+1 if its low trades through it and fills at min(open, stop) - slippage,
+    so a gap through the stop fills at the (worse) open, as it would in reality;
+  * take-profits are judged on the close and exit at the next open (live: the stop rests on Kraken, the target is
+    checked by the bot each day, because Kraken spot cannot hold a stop and a take-profit on the same coins).
 """
 from __future__ import annotations
 
@@ -15,9 +17,9 @@ import numpy as np
 import pandas as pd
 
 from .config import Config
-from .risk import (DrawdownGuard, PositionState, on_buy_fill, on_sell_fill, on_stopped_out, plan_rebalance,
-                   update_block, update_trail)
-from .signals import ANNUAL, scale_portfolio, target_weight
+from .risk import DrawdownGuard, PositionState, new_bar, on_buy_fill, on_sell_fill, on_stopped_out, plan_rebalance
+from .signals import ANNUAL, features, scale_portfolio
+from .strategy import Decision, decide
 
 
 @dataclass
@@ -27,100 +29,135 @@ class Result:
     fees: float
     stops_hit: int
     halted_on: object = None
+    exposure: float = float("nan")
 
     def stats(self) -> dict:
-        e = self.equity
-        r = e.pct_change().dropna()
-        years = max((e.index[-1] - e.index[0]).days / 365.25, 1e-9)
-        cagr = (e.iloc[-1] / e.iloc[0]) ** (1 / years) - 1
-        dd = (e / e.cummax() - 1).min()
-        sharpe = r.mean() / r.std() * math.sqrt(ANNUAL) if r.std() > 0 else 0.0
-        down = r[r < 0].std()
-        sortino = r.mean() / down * math.sqrt(ANNUAL) if down and down > 0 else 0.0
-        turnover = self.trades["notional"].sum() / e.mean() / years if len(self.trades) else 0.0
-        exposure = float(self.trades.attrs.get("avg_exposure", np.nan))
-        return dict(start=e.index[0].date(), end=e.index[-1].date(), total_return=e.iloc[-1] / e.iloc[0] - 1,
-                    cagr=cagr, max_dd=dd, sharpe=sharpe, sortino=sortino, calmar=cagr / abs(dd) if dd < 0 else np.nan,
-                    trades=len(self.trades), stops=self.stops_hit, fees=self.fees, turnover_x_per_yr=turnover,
-                    avg_exposure=exposure, halted_on=self.halted_on)
+        return perf(self.equity, self.trades, self.fees, self.stops_hit, self.exposure, self.halted_on)
 
 
-def run(data: dict[str, pd.DataFrame], cfg: Config, start_equity: float = 1600.0, slippage: float = 0.001) -> Result:
+def perf(e: pd.Series, trades: pd.DataFrame | None = None, fees: float = 0.0, stops: int = 0,
+         exposure: float = float("nan"), halted_on=None) -> dict:
+    r = e.pct_change().dropna()
+    years = max((e.index[-1] - e.index[0]).days / 365.25, 1e-9)
+    cagr = (e.iloc[-1] / e.iloc[0]) ** (1 / years) - 1
+    dd = (e / e.cummax() - 1).min()
+    sd = r.std()
+    sharpe = r.mean() / sd * math.sqrt(ANNUAL) if sd and sd > 0 else 0.0
+    n = 0 if trades is None else len(trades)
+    return dict(start=e.index[0].date(), end=e.index[-1].date(), total_return=e.iloc[-1] / e.iloc[0] - 1,
+                cagr=cagr, max_dd=dd, sharpe=sharpe, calmar=cagr / abs(dd) if dd < 0 else np.nan,
+                trades=n, stops=stops, fees=fees, avg_exposure=exposure, halted_on=halted_on)
+
+
+def round_trips(trades: pd.DataFrame) -> pd.DataFrame:
+    """Pair entries and exits per asset into round trips with net P&L (fees included)."""
+    rows = []
+    for a, g in trades.groupby("asset"):
+        qty = cost = fees = 0.0
+        sleeve, opened = "", None
+        for _, t in g.iterrows():
+            if t.side == "buy":
+                if qty == 0:
+                    sleeve, opened, cost, fees = t.sleeve, t.ts, 0.0, 0.0
+                qty += t.qty
+                cost += t.notional
+                fees += t.fee
+            else:
+                if qty <= 0:
+                    continue
+                part = min(t.qty, qty) / qty
+                pnl = t.notional - cost * part - fees * part - t.fee
+                rows.append(dict(asset=a, sleeve=sleeve, opened=opened, closed=t.ts, pnl=pnl, why=t.why,
+                                 ret=pnl / (cost * part) if cost else 0.0))
+                qty -= min(t.qty, qty)
+                cost *= 1 - part
+                fees *= 1 - part
+    return pd.DataFrame(rows, columns=["asset", "sleeve", "opened", "closed", "pnl", "why", "ret"])
+
+
+def run(data: dict[str, pd.DataFrame], cfg: Config, start_equity: float = 1600.0, slippage: float = 0.001,
+        start=None) -> Result:
     assets = list(data)
-    sig = {a: target_weight(data[a], cfg) for a in assets}
-    idx = sorted(set.intersection(*[set(d.index) for d in data.values()]))
-    idx = pd.DatetimeIndex(idx)
+    feat = {a: features(data[a], cfg) for a in assets}
+    idx = pd.DatetimeIndex(sorted(set.intersection(*[set(d.index) for d in data.values()])))
+    if start is not None:
+        idx = idx[idx >= pd.Timestamp(start, tz="UTC")]
     cash = start_equity
     pos = {a: PositionState() for a in assets}
     guard = DrawdownGuard()
     eq_curve, trades, fees, stops, exposure = [], [], 0.0, 0, []
     pending: dict[str, float] | None = None
+    decisions: dict[str, Decision] = {}
     halted_on = None
 
-    for i, t in enumerate(idx):
+    def fill(t, a, side, qty, px, why, sleeve):
+        nonlocal cash, fees
+        notional = qty * px
+        fee = notional * cfg.fee_rate
+        cash += -(notional + fee) if side == "buy" else notional - fee
+        fees += fee
+        trades.append(dict(ts=t, asset=a, side=side, qty=qty, px=px, notional=notional, fee=fee, why=why, sleeve=sleeve))
+
+    for t in idx:
         bar = {a: data[a].loc[t] for a in assets}
-        # 1) execute yesterday's plan at today's open
+        # 1) yesterday's decisions fill at today's open
         if pending is not None:
-            equity_open = cash + sum(pos[a].qty * bar[a]["open"] for a in assets)
-            prices = {a: bar[a]["open"] for a in assets}
-            plans = plan_rebalance(equity_open, prices, {a: pos[a].qty for a in assets}, pending, cfg, free_quote=cash)
-            for p in plans:
-                px = prices[p.asset] * (1 + slippage if p.side == "buy" else 1 - slippage)
-                notional = p.qty * px
-                fee = notional * cfg.fee_rate
+            prices = {a: float(bar[a]["open"]) for a in assets}
+            equity_open = cash + sum(pos[a].qty * prices[a] for a in assets)
+            reasons = {a: d.reason for a, d in decisions.items()}
+            for p in plan_rebalance(equity_open, prices, {a: pos[a].qty for a in assets}, pending, cfg,
+                                    free_quote=cash, reasons=reasons):
+                d = decisions.get(p.asset)
                 if p.side == "buy":
-                    if notional + fee > cash:
+                    px = prices[p.asset] * (1 + slippage)
+                    if d is None or prices[p.asset] <= d.stop or p.qty * px * (1 + cfg.fee_rate) > cash:
                         continue
-                    cash -= notional + fee
-                    prev = max(sig[p.asset].index.get_loc(t) - 1, 0)  # ATR known at the decision close
-                    on_buy_fill(pos[p.asset], px, p.qty, sig[p.asset]["atr"].iloc[prev], cfg)
+                    fill(t, p.asset, "buy", p.qty, px, p.reason, d.sleeve)
+                    on_buy_fill(pos[p.asset], px, p.qty, d.stop, d.sleeve, d.take_profit)
                 else:
-                    cash += notional - fee
+                    fill(t, p.asset, "sell", p.qty, prices[p.asset] * (1 - slippage), p.reason, pos[p.asset].sleeve)
                     on_sell_fill(pos[p.asset], p.qty)
-                fees += fee
-                trades.append(dict(ts=t, asset=p.asset, side=p.side, qty=p.qty, px=px, notional=notional, fee=fee, why=p.reason))
             pending = None
         # 2) resting stops trigger intrabar
         for a in assets:
             st = pos[a]
-            if st.qty > 0 and st.stop > 0 and bar[a]["low"] <= st.stop:
-                px = min(bar[a]["open"], st.stop) * (1 - slippage)
-                notional = st.qty * px
-                fee = notional * cfg.fee_rate
-                cash += notional - fee
-                fees += fee
+            if st.qty > 0 and st.stop > 0 and float(bar[a]["low"]) <= st.stop:
+                px = min(float(bar[a]["open"]), st.stop) * (1 - slippage)
+                fill(t, a, "sell", st.qty, px, "stop", st.sleeve)
                 stops += 1
-                trades.append(dict(ts=t, asset=a, side="sell", qty=st.qty, px=px, notional=notional, fee=fee, why="stop"))
-                on_stopped_out(st)
-        # 3) mark to market at the close, update trails and signals
-        equity = cash + sum(pos[a].qty * bar[a]["close"] for a in assets)
+                on_stopped_out(st, cfg)
+        # 3) close: mark to market, then decide for tomorrow
+        closes = {a: float(bar[a]["close"]) for a in assets}
+        equity = cash + sum(pos[a].qty * closes[a] for a in assets)
         eq_curve.append((t, equity))
-        exposure.append(sum(pos[a].qty * bar[a]["close"] for a in assets) / equity if equity > 0 else 0)
+        exposure.append(sum(pos[a].qty * closes[a] for a in assets) / equity if equity > 0 else 0)
         if guard.update(equity, cfg):
-            if halted_on is None:
-                halted_on = t.date()
-            pending = {a: 0.0 for a in assets}  # flatten next open, then stay flat
+            halted_on = halted_on or t.date()
+            pending, decisions = {a: 0.0 for a in assets}, {a: Decision(0.0, reason="drawdown halt") for a in assets}
             continue
         raw = {}
         for a in assets:
-            s = sig[a].loc[t]
-            update_trail(pos[a], bar[a]["close"], s["atr"], cfg)
-            update_block(pos[a], bar[a]["close"], s["weight"])
-            raw[a] = 0.0 if pos[a].blocked else float(s["weight"])
+            row = feat[a].loc[t]
+            new_bar(pos[a], closes[a], float(row["atr"]), float(row["swing_low"]), float(row["trend_w"]), cfg)
+            d = decide(row, pos[a], cfg)
+            decisions[a] = d
+            if pos[a].qty > 0 and not d.is_exit:
+                pos[a].sleeve = d.sleeve or pos[a].sleeve
+                pos[a].take_profit = d.take_profit
+                pos[a].stop = max(pos[a].stop, d.stop)
+            raw[a] = (pos[a].qty * closes[a] / equity) if d.weight is None else d.weight
         pending = scale_portfolio(raw, cfg)
 
     eq = pd.Series(dict(eq_curve)).sort_index()
-    tr = pd.DataFrame(trades, columns=["ts", "asset", "side", "qty", "px", "notional", "fee", "why"])
-    tr.attrs["avg_exposure"] = float(np.mean(exposure)) if exposure else np.nan
-    return Result(eq, tr, fees, stops, halted_on)
+    tr = pd.DataFrame(trades, columns=["ts", "asset", "side", "qty", "px", "notional", "fee", "why", "sleeve"])
+    return Result(eq, tr, fees, stops, halted_on, float(np.mean(exposure)) if exposure else float("nan"))
 
 
 def buy_and_hold(data: dict[str, pd.DataFrame], start_equity: float = 1600.0, fee: float = 0.0025,
                  start=None) -> pd.Series:
-    idx = sorted(set.intersection(*[set(d.index) for d in data.values()]))
-    idx = pd.DatetimeIndex(idx)
+    idx = pd.DatetimeIndex(sorted(set.intersection(*[set(d.index) for d in data.values()])))
     if start is not None:
-        idx = idx[idx >= start]
+        idx = idx[idx >= pd.Timestamp(start, tz="UTC")]
     per = start_equity * (1 - fee) / len(data)
     qty = {a: per / data[a].loc[idx[0], "close"] for a in data}
     return pd.Series({t: sum(qty[a] * data[a].loc[t, "close"] for a in data) for t in idx})

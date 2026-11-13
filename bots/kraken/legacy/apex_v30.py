@@ -6,8 +6,9 @@ from decimal import Decimal, ROUND_DOWN
 # =============================================================================
 # APEX v30.0 — PROP FIRM EDITION (Auto-Cleanse, BB-Width, Dynamic Delta)
 # =============================================================================
-# Kept VERBATIM as received, for the review in bots/kraken/REVIEW.md.
-# DO NOT RUN LIVE. See bots/kraken/kraken_trend.py for the replacement.
+# Kept as received for the review in bots/kraken/REVIEW.md, with ONE change: the boot-time "auto-cleanse"
+# (market-converting EUR/USD/USDT/USDG into USDC) only runs if you authorise it by setting the environment
+# variable APEX_AUTHORISE_CONVERSION=YES. DO NOT RUN LIVE. The replacement is bots/kraken/krakenbot/.
 
 SPOT_API_KEY = os.getenv("KRAKEN_SPOT_KEY", "")
 SPOT_API_SEC = os.getenv("KRAKEN_SPOT_SEC", "")
@@ -183,8 +184,12 @@ async def main():
     await spot.load_markets()
     await fut.load_markets()
     
-    # 1. Cleanse the portfolio on boot
-    await startup_portfolio_cleanse()
+    # 1. Cleanse the portfolio on boot -- ONLY with explicit authorisation (no silent EUR/USD -> USDC conversion)
+    if os.getenv("APEX_AUTHORISE_CONVERSION", "") == "YES":
+        await startup_portfolio_cleanse()
+    else:
+        print("[SYSTEM BOOT] Auto-cleanse SKIPPED: currency conversion not authorised "
+              "(set APEX_AUTHORISE_CONVERSION=YES to allow it).")
     
     cycle = 0
     while True:

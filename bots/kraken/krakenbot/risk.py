@@ -1,4 +1,15 @@
-"""Risk state machine shared by the backtest and the live engine (one code path = no backtest/live drift)."""
+"""Risk state machine shared by the backtest and the live engine (one code path = no backtest/live drift).
+
+Stop-loss rules (the same everywhere):
+  * every position has a protective stop from the moment it exists; live, it rests ON KRAKEN as a stop-loss order,
+    so it protects you even when this bot, your PC or the internet is down;
+  * the initial stop is structural: just below the last confirmed swing low, but never closer than min_stop_atr
+    and never further than hard_stop_atr (ATR = average true range);
+  * position size is derived FROM the stop: (entry - stop) x quantity = the risk budget, so a wide stop means a
+    small position, never a bigger loss;
+  * stops only move up (trend trades: chandelier trail and each new higher swing low); never down;
+  * if price is already through the stop when we look, we exit instead of placing a stop that would fire at once.
+"""
 from __future__ import annotations
 
 import math
@@ -12,9 +23,13 @@ from .config import Config
 class PositionState:
     qty: float = 0.0
     entry: float = 0.0          # average entry price
-    high_close: float = 0.0     # highest close since entry (for the chandelier trail)
-    stop: float = 0.0           # current protective stop; only ever ratchets UP while a position is open
-    blocked: bool = False       # set after a stop-out: no re-entry until the signal resets or price makes a new high
+    high_close: float = 0.0     # highest close since entry (chandelier trail)
+    stop: float = 0.0           # protective stop; only ever ratchets UP while a position is open
+    sleeve: str = ""            # trend | range | smc
+    take_profit: float = 0.0    # range/SMC target (0 = none); judged on the daily close
+    bars_held: int = 0
+    cooldown: int = 0           # bars left before a new entry is allowed after a stop-out
+    blocked: bool = False       # trend re-entry block after a stop until a new high or a signal reset
     block_high: float = 0.0
     stop_order_id: str | None = None
 
@@ -26,15 +41,34 @@ class PositionState:
         return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
 
 
-def on_buy_fill(st: PositionState, px: float, qty: float, atr_now: float, cfg: Config) -> None:
-    new_qty = st.qty + qty
-    st.entry = (st.entry * st.qty + px * qty) / new_qty if new_qty > 0 else 0.0
-    if st.qty <= 0:
-        st.high_close = px
-        st.stop = px - cfg.hard_stop_atr * atr_now
+def structural_stop(ref: float, swing_low: float, atr_now: float, cfg: Config) -> float:
+    """Below the last swing low (+buffer), clamped to [ref - hard_stop_atr*ATR, ref - min_stop_atr*ATR]."""
+    widest = ref - cfg.hard_stop_atr * atr_now
+    tightest = ref - cfg.min_stop_atr * atr_now
+    if swing_low is not None and math.isfinite(swing_low) and swing_low < ref:
+        s = swing_low - cfg.stop_buffer_atr * atr_now
     else:
-        # adding to a winner never loosens the existing stop
-        st.stop = max(st.stop, px - cfg.hard_stop_atr * atr_now) if st.stop else px - cfg.hard_stop_atr * atr_now
+        s = widest
+    return min(max(s, widest), tightest)
+
+
+def risk_weight(ref: float, stop: float, risk: float) -> float:
+    """Fraction of equity such that hitting `stop` from `ref` loses `risk` of equity."""
+    if stop <= 0 or stop >= ref:
+        return 0.0
+    return risk / ((ref - stop) / ref)
+
+
+def on_buy_fill(st: PositionState, px: float, qty: float, stop: float, sleeve: str, take_profit: float = 0.0) -> None:
+    if qty <= 0:
+        return
+    new_qty = st.qty + qty
+    if st.qty <= 0:
+        st.entry, st.high_close, st.stop = px, px, stop
+        st.sleeve, st.take_profit, st.bars_held = sleeve, take_profit, 0
+    else:
+        st.entry = (st.entry * st.qty + px * qty) / new_qty
+        st.stop = max(st.stop, stop)  # adding never loosens the stop
     st.qty = new_qty
 
 
@@ -45,26 +79,30 @@ def on_sell_fill(st: PositionState, qty: float) -> None:
 
 
 def flat(st: PositionState) -> None:
-    st.qty = st.entry = st.high_close = st.stop = 0.0
-    st.stop_order_id = None
+    st.qty = st.entry = st.high_close = st.stop = st.take_profit = 0.0
+    st.sleeve, st.bars_held, st.stop_order_id = "", 0, None
 
 
-def on_stopped_out(st: PositionState) -> None:
-    st.blocked, st.block_high = True, st.high_close
+def on_stopped_out(st: PositionState, cfg: Config, high_close: float | None = None) -> None:
+    """Mark a stop-out: flat, cooldown, trend re-entry blocked until a new high. Pass `high_close` if the
+    position was already flattened by booking the fill (flattening resets it)."""
+    st.blocked, st.block_high = True, st.high_close if high_close is None else high_close
+    st.cooldown = cfg.cooldown_bars
     flat(st)
 
 
-def update_trail(st: PositionState, close: float, atr_now: float, cfg: Config) -> None:
-    """Call once per CLOSED bar. Chandelier exit: highest close since entry minus k*ATR. Never moves down."""
-    if st.qty <= 0 or not math.isfinite(atr_now):
-        return
-    st.high_close = max(st.high_close, close)
-    st.stop = max(st.stop, st.high_close - cfg.trail_atr * atr_now)
-
-
-def update_block(st: PositionState, close: float, weight: float) -> None:
-    """Lift the post-stop re-entry block once the signal has reset to zero or price makes a new high."""
-    if st.blocked and (weight <= 0 or close > st.block_high):
+def new_bar(st: PositionState, close: float, atr_now: float, swing_low: float, trend_w: float, cfg: Config) -> None:
+    """Call exactly once per CLOSED bar, before deciding. Ages the trade, ratchets the stop, lifts blocks."""
+    if st.qty > 0:
+        st.bars_held += 1
+        st.high_close = max(st.high_close, close)
+        if st.sleeve == "trend" and math.isfinite(atr_now):
+            st.stop = max(st.stop, st.high_close - cfg.trail_atr * atr_now)
+            if cfg.trail_swing_lows and swing_low is not None and math.isfinite(swing_low) and swing_low > st.entry:
+                st.stop = max(st.stop, swing_low - cfg.stop_buffer_atr * atr_now)
+    elif st.cooldown > 0:
+        st.cooldown -= 1
+    if st.blocked and (trend_w <= 0 or close > st.block_high):
         st.blocked = False
 
 
@@ -96,8 +134,10 @@ class OrderPlan:
 
 
 def plan_rebalance(equity: float, prices: dict[str, float], holdings: dict[str, float],
-                   targets: dict[str, float], cfg: Config, free_quote: float | None = None) -> list[OrderPlan]:
+                   targets: dict[str, float], cfg: Config, free_quote: float | None = None,
+                   reasons: dict[str, str] | None = None) -> list[OrderPlan]:
     """Turn target weights into orders. Sells come first so their proceeds fund the buys."""
+    reasons = reasons or {}
     sells, buys = [], []
     for a, w in targets.items():
         px = prices[a]
@@ -106,14 +146,14 @@ def plan_rebalance(equity: float, prices: dict[str, float], holdings: dict[str, 
         exiting = w == 0 and cur_val > 0
         if not exiting and abs(diff) < cfg.rebalance_band * equity:
             continue
-        if abs(diff) < cfg.min_order_quote:
+        if abs(diff) < cfg.min_order_quote and not exiting:
             continue
         qty = abs(diff) / px
         if diff < 0:
-            qty = min(qty, holdings.get(a, 0.0))
-            sells.append(OrderPlan(a, "sell", qty, qty * px, "exit" if exiting else "trim"))
+            qty = holdings.get(a, 0.0) if exiting else min(qty, holdings.get(a, 0.0))
+            sells.append(OrderPlan(a, "sell", qty, qty * px, reasons.get(a, "exit" if exiting else "trim")))
         else:
-            buys.append(OrderPlan(a, "buy", qty, qty * px, "enter/add"))
+            buys.append(OrderPlan(a, "buy", qty, qty * px, reasons.get(a, "enter/add")))
     if free_quote is not None and buys:
         budget = free_quote + sum(s.notional * (1 - cfg.fee_rate) for s in sells)
         budget *= 1 - cfg.fee_rate * 2  # leave room for fees and rounding
@@ -147,9 +187,8 @@ def check_quote(bid: float | None, ask: float | None, ts_ms: float | None, cfg: 
 
 
 def limit_price(side: str, bid: float, ask: float, mid: float, attempt: int, cfg: Config) -> tuple[float, bool]:
-    """Price for attempt n. Early attempts join our side of the book post-only (maker fee, zero slippage).
-    The last attempt crosses, but never beyond mid*(1+/-max_slippage): that IS the slippage control.
-    Returns (price, post_only)."""
+    """Early attempts join our side of the book post-only (maker, zero slippage). The last attempt crosses, but
+    never beyond mid*(1 +/- max_slippage): that IS the slippage control. Returns (price, post_only)."""
     if attempt < cfg.post_only_attempts:
         return (bid, True) if side == "buy" else (ask, True)
     cap = mid * (1 + cfg.max_slippage) if side == "buy" else mid * (1 - cfg.max_slippage)

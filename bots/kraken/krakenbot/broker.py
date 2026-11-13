@@ -7,7 +7,10 @@ Resilience rules implemented here (each one maps to a failure seen in the legacy
     ambiguous failure we look the id up first, so a timeout can never turn one order into three
     (October had 49 duplicate fills, ~4,042 USDC of unintended volume);
   * amounts/prices go through the exchange's own precision and minimums (never hard-coded decimals);
-  * mode=validate sends Kraken's `validate=true` flag: the order is checked by Kraken but never placed.
+  * mode=validate sends Kraken's `validate=true` flag: the order is checked by Kraken but never placed;
+  * NO CURRENCY CONVERSIONS: an order between two fiat/stable currencies (EUR->USDC, USD->USDC, USDT->USDC...)
+    is refused unless you set allow_conversions=true AND list that exact pair in authorised_conversions.
+    Orders in any quote currency other than cfg.quote (EUR) are refused too. Enforced on every order path.
 """
 from __future__ import annotations
 
@@ -18,7 +21,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from .config import Config
+from .config import FIAT_AND_STABLES, Config
 
 log = logging.getLogger("krakenbot.broker")
 
@@ -30,8 +33,9 @@ class Fill:
     side: str
     qty: float          # base filled
     avg_px: float
-    fee_quote: float    # fee in quote currency (converted if Kraken charged it in base)
+    fee_quote: float    # fee in quote currency (0 if Kraken charged it in the coin)
     status: str         # closed | canceled | open | validated
+    fee_base: float = 0.0  # fee charged in the coin itself: reduces the coins you actually received
 
 
 def client_id(*parts: str) -> str:
@@ -41,6 +45,27 @@ def client_id(*parts: str) -> str:
 
 class BrokerError(Exception):
     pass
+
+
+class BelowMinimum(BrokerError):
+    pass
+
+
+class ConversionNotAuthorised(BrokerError):
+    pass
+
+
+def assert_tradeable(symbol: str, cfg: Config) -> None:
+    """The single gate every order passes through. Raises instead of trading anything you did not authorise."""
+    base, quote = symbol.split("/")
+    if base in FIAT_AND_STABLES and quote in FIAT_AND_STABLES:
+        if not (cfg.allow_conversions and symbol in cfg.authorised_conversions):
+            raise ConversionNotAuthorised(
+                f"{symbol} is a currency conversion. Refused: set allow_conversions=true and add "
+                f"{symbol!r} to authorised_conversions to authorise it.")
+        return
+    if quote != cfg.quote:
+        raise ConversionNotAuthorised(f"{symbol}: bot only trades against {cfg.quote}; refusing {quote} pair")
 
 
 class KrakenBroker:
@@ -109,8 +134,8 @@ class KrakenBroker:
         lim = self.market(symbol)["limits"]
         min_amt = (lim.get("amount") or {}).get("min") or 0
         min_cost = (lim.get("cost") or {}).get("min") or 0
-        if q < min_amt or q * p < min_cost:
-            raise BrokerError(f"{symbol} order {q}@{p} below Kraken minimum (amount {min_amt}, cost {min_cost})")
+        if q <= 0 or q < min_amt or q * p < min_cost:
+            raise BelowMinimum(f"{symbol} order {q}@{p} below Kraken minimum (amount {min_amt}, cost {min_cost})")
         return q, p
 
     def find_by_client_id(self, symbol: str, cid: str) -> dict | None:
@@ -124,6 +149,7 @@ class KrakenBroker:
         return None
 
     def place_limit(self, symbol: str, side: str, qty: float, price: float, post_only: bool, cid: str) -> dict:
+        assert_tradeable(symbol, self.cfg)
         q, p = self.normalise(symbol, qty, price)
         params = {"clientOrderId": cid}
         if post_only:
@@ -148,6 +174,7 @@ class KrakenBroker:
 
     def place_stop(self, symbol: str, qty: float, trigger: float, cid: str) -> dict:
         """Exchange-side stop-loss (Kraken ordertype `stop-loss`): protects the position even if this bot is down."""
+        assert_tradeable(symbol, self.cfg)
         q, p = self.normalise(symbol, qty, trigger)
         params = {"stopLossPrice": p, "clientOrderId": cid}
         if self.cfg.mode == "validate":
@@ -171,10 +198,11 @@ class KrakenBroker:
         avg = float(o.get("average") or o.get("price") or 0)
         fee = o.get("fee") or {}
         fee_cost = float(fee.get("cost") or 0)
-        base, quote = symbol.split("/")
-        fee_quote = fee_cost * avg if fee.get("currency") == base else fee_cost
+        base, _quote = symbol.split("/")
+        in_base = fee.get("currency") == base
         status = "validated" if self.cfg.mode == "validate" else (o.get("status") or "open")
-        return Fill(str(o.get("id")), cid, o.get("side", ""), filled, avg, fee_quote, status)
+        return Fill(str(o.get("id")), cid, o.get("side", ""), filled, avg, 0.0 if in_base else fee_cost, status,
+                    fee_cost if in_base else 0.0)
 
 
 class PaperBroker:
@@ -197,6 +225,7 @@ class PaperBroker:
         return (self.md.normalise(symbol, qty, price) if hasattr(self.md, "normalise") else (qty, price))
 
     def place_limit(self, symbol, side, qty, price, post_only, cid):
+        assert_tradeable(symbol, self.cfg)
         qty, price = self.normalise(symbol, qty, price)
         bid, ask, _ = self.top_of_book(symbol)
         # Approximation: fills at once at the limit price plus slippage. Real post-only orders can miss;
@@ -208,6 +237,8 @@ class PaperBroker:
         return o
 
     def place_stop(self, symbol, qty, trigger, cid):
+        assert_tradeable(symbol, self.cfg)
+        qty, trigger = self.normalise(symbol, qty, trigger)
         o = {"id": cid, "clientOrderId": cid, "side": "sell", "amount": qty, "filled": 0.0, "status": "open",
              "stopPrice": trigger, "symbol": symbol}
         self.orders[cid] = o
