@@ -2934,6 +2934,9 @@ namespace cAlgo.Robots
             return double.IsNaN(v) || double.IsInfinity(v) ? "" : v.ToString("F2", CultureInfo.InvariantCulture);
         }
 
-        private static string Clean(string s) { return (s ?? "").Replace(",", " "); }
+        private static string Clean(string s)
+        {
+            return (s ?? "").Replace(",", " ");
+        }
     }
 }
