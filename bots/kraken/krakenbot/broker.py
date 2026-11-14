@@ -47,6 +47,28 @@ class BrokerError(Exception):
     pass
 
 
+def consolidate_rewards(balances: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
+    """Merge Kraken Rewards balances (BTC.F, EUR.F...) into their base asset.
+
+    Kraken's API docs (Get Account/Extended Balance): ".F : balances earning automatically in Kraken Rewards ...
+    to interact with your balances in them please use the base asset (e.g. USDT to transact with your USDT and
+    USDT.F balances)". So .F is tradable money and belongs to the base. .S/.M/.B (staked / opt-in / yield
+    products) are NOT tradable and stay separate. Without this, an account with Rewards switched on looks empty:
+    the ledger would be wiped by reconciliation and no EUR would ever be spendable."""
+    out: dict[str, dict[str, float]] = {}
+    for code, bal in balances.items():
+        base = code[:-2] if code.endswith(".F") else code
+        acc = out.setdefault(base, {"free": 0.0, "total": 0.0})
+        acc["free"] += bal.get("free", 0.0)
+        acc["total"] += bal.get("total", 0.0)
+    return out
+
+
+def is_lockout(e: Exception) -> bool:
+    """Kraken 'EGeneral:Temporary lockout' (ccxt maps it to DDoSProtection). Retrying extends the lockout."""
+    return "temporary lockout" in str(e).lower()
+
+
 class BelowMinimum(BrokerError):
     pass
 
@@ -93,6 +115,8 @@ class KrakenBroker:
             except self.permanent:
                 raise
             except self.transient as e:
+                if is_lockout(e):
+                    raise BrokerError(f"Kraken temporary lockout: not retrying (stops stay on Kraken): {e}") from e
                 if attempt == self.cfg.max_retries:
                     raise BrokerError(f"{fn.__name__} failed after {attempt} attempts: {e}") from e
                 sleep = delay * (1 + random.random() * 0.25)
@@ -124,8 +148,9 @@ class KrakenBroker:
     # --- account ----------------------------------------------------------------------------------------
     def balances(self) -> dict[str, dict[str, float]]:
         b = self._call(self.ex.fetch_balance)
-        return {k: {"free": float(v.get("free") or 0), "total": float(v.get("total") or 0)}
-                for k, v in b.items() if isinstance(v, dict) and "free" in v}
+        raw = {k: {"free": float(v.get("free") or 0), "total": float(v.get("total") or 0)}
+               for k, v in b.items() if isinstance(v, dict) and "free" in v}
+        return consolidate_rewards(raw)
 
     # --- orders -----------------------------------------------------------------------------------------
     def normalise(self, symbol: str, qty: float, price: float) -> tuple[float, float]:
@@ -162,13 +187,18 @@ class KrakenBroker:
             o = self.ex.create_order(symbol, "limit", side, q, p, params)
         except self.permanent:
             raise
-        except self.transient as e:
-            # Ambiguous: the order may or may not be live. Look before re-sending.
+        except self.transient + (self.ccxt.ExchangeError,) as e:
+            # Ambiguous: timeouts AND unclassified errors (e.g. 'EService:Deadline elapsed', which ccxt does not map)
+            # may or may not have created the order. Look it up by client id BEFORE anything is re-sent.
+            if is_lockout(e):
+                raise BrokerError(f"Kraken temporary lockout: not retrying: {e}") from e
             log.warning("ambiguous create_order failure (%s); checking client id %s", e, cid)
             time.sleep(2)
             existing = self.find_by_client_id(symbol, cid)
             if existing:
                 return existing
+            if not isinstance(e, self.transient):
+                raise   # unclassified and not found: surface it, never blind-resend
             o = self._call(self.ex.create_order, symbol, "limit", side, q, p, params)
         return o
 

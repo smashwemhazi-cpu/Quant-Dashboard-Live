@@ -43,6 +43,40 @@ def _keys() -> tuple[str, str]:
     return key, sec
 
 
+class _SingleInstance:
+    """Exclusive lock so two krakenbot runs never overlap (overlapping runs can double-trade and send Kraken
+    out-of-order nonces on the same API key). Works on Windows (msvcrt) and Linux/macOS (fcntl)."""
+
+    def __init__(self, path: str = "krakenbot.lock"):
+        self.path, self.fd = path, None
+
+    def __enter__(self):
+        self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR)
+        try:
+            try:
+                import fcntl
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except ImportError:   # Windows
+                import msvcrt
+                msvcrt.locking(self.fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            os.close(self.fd)
+            raise SystemExit(f"Another krakenbot run holds {self.path}; not starting a second one.")
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            try:
+                import fcntl
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+            except ImportError:
+                import msvcrt
+                msvcrt.locking(self.fd, msvcrt.LK_UNLCK, 1)
+        finally:
+            os.close(self.fd)
+        return False
+
+
 def _print(obj) -> None:
     print(json.dumps(obj, indent=2, default=str))
 
@@ -85,7 +119,19 @@ def _futures(cfg, args) -> int:
     return 0
 
 
+PRIVATE_COMMANDS = {"rebuild", "paper", "validate", "live", "harvest", "hedge", "futures-fund", "futures-withdraw"}
+
+
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    command = next((a for a in argv if not a.startswith("-")), "")
+    if command in PRIVATE_COMMANDS:
+        with _SingleInstance(os.environ.get("KRAKENBOT_LOCK_FILE", "krakenbot.lock")):
+            return _main(argv)
+    return _main(argv)
+
+
+def _main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="krakenbot")
     ap.add_argument("command", choices=["report", "backtest", "rebuild", "paper", "validate", "live", "harvest",
                                         "hedge", "futures-check", "futures-fund", "futures-withdraw"])

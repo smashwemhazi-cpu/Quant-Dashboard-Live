@@ -72,8 +72,9 @@ def plan_rebuild(broker, cfg: Config) -> dict:
         total, free = float(b.get("total") or 0), float(b.get("free") or 0)
         if total <= 0 or code == cfg.quote:
             continue
-        if "." in code:
-            locked.append({"asset": code, "qty": total, "note": "in Earn/staking: unstake in the app to include it"})
+        if "." in code:   # .F is merged into its base by the broker; .S/.M/.B/.T are separate products
+            locked.append({"asset": code, "qty": total,
+                           "note": "staked/opt-in/yield/tokenized product (not tradable as is): unstake in the app"})
             continue
         if code in FIAT_AND_STABLES:
             currencies.append({"asset": code, "qty": total,

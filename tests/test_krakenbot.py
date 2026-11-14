@@ -387,12 +387,12 @@ def test_rebuild_plan_classifies_every_balance():
     data["JUNK"] = bars(300, drift=0.0, seed=99)
     bal = {"EUR": {"free": 100.0, "total": 100.0}, "AAA": {"free": 2.0, "total": 2.0},
            "JUNK": {"free": 5.0, "total": 5.0}, "USDC": {"free": 150.0, "total": 150.0},
-           "USDG.F": {"free": 0.0, "total": 29.0}, "BBB": {"free": 0.0000001, "total": 0.0000001},
+           "ETH2.S": {"free": 0.0, "total": 29.0}, "BBB": {"free": 0.0000001, "total": 0.0000001},
            "XYZ": {"free": 3.0, "total": 3.0}}
     p = plan_rebuild(MinBroker(CFG, FakeMarket(data), balances=bal), CFG)
     names = lambda k: {i["asset"] for i in p[k]}
     assert names("adopt") == {"AAA"} and names("sell_to_eur") == {"JUNK"}
-    assert names("currencies_untouched") == {"USDC"} and names("locked_untouched") == {"USDG.F"}
+    assert names("currencies_untouched") == {"USDC"} and names("locked_untouched") == {"ETH2.S"}
     assert names("dust") == {"BBB"} and names("needs_manual") == {"XYZ"}
 
 
@@ -817,3 +817,76 @@ def test_hedge_targets_capped_by_real_balance_and_config_guards(tmp_path):
         with pytest.raises(ValueError):
             Config(**bad).validate()
     assert hg.perp_id("BTC") == "PF_XBTUSD" and hg.perp_id("PAXG") == "PF_PAXGUSD"
+
+
+
+# =============================================================== holes found by reviewing freqtrade / python-kraken-sdk / ccxt
+def test_rewards_dot_f_balances_merge_into_base_and_staked_stay_separate():
+    from bots.kraken.krakenbot.broker import consolidate_rewards
+    out = consolidate_rewards({"BTC": {"free": 0.001, "total": 0.001}, "BTC.F": {"free": 0.013, "total": 0.013},
+                               "EUR.F": {"free": 119.45, "total": 119.45}, "ETH2.S": {"free": 0.0, "total": 1.0},
+                               "USD.M": {"free": 0.0, "total": 5.0}})
+    assert out["BTC"]["total"] == pytest.approx(0.014) and out["EUR"]["free"] == pytest.approx(119.45)
+    assert "BTC.F" not in out and "EUR.F" not in out and out["ETH2.S"]["total"] == 1.0 and "USD.M" in out
+
+
+def test_engine_with_rewards_enabled_does_not_wipe_its_ledger(tmp_path):
+    from bots.kraken.krakenbot.broker import consolidate_rewards
+    cfg, broker, eng = _engine(tmp_path, market())
+    eng.run_once()
+    a = next(k for k, h in eng.st.holdings.items() if h.qty > 0)
+    q = eng.st.holdings[a].qty
+    raw = {f"{a}.F": {"free": q, "total": q}}                  # what Kraken reports with Rewards switched on
+    eng.reconcile(consolidate_rewards(raw))
+    assert eng.st.holdings[a].qty == pytest.approx(q)
+
+
+def test_kraken_temporary_lockout_is_never_retried():
+    ccxt, b = _kb()
+    calls = []
+
+    def locked():
+        calls.append(1)
+        raise ccxt.DDoSProtection('kraken {"error":["EGeneral:Temporary lockout"]}')
+    from bots.kraken.krakenbot.broker import BrokerError
+    with pytest.raises(BrokerError):
+        b._call(locked)
+    assert len(calls) == 1
+
+
+def test_unclassified_order_error_is_looked_up_never_blind_resent(monkeypatch):
+    ccxt, b = _kb()
+    import bots.kraken.krakenbot.broker as mod
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    class Ex(FakeEx):
+        def create_order(self, symbol, type, side, q, p, params):
+            self.params.append(params)
+            if self.accept:
+                self.live.append({"id": "O1", "clientOrderId": params["clientOrderId"], "status": "open"})
+            raise self.ccxt.ExchangeError('kraken {"error":["EService:Deadline elapsed"]}')
+    b.ex = Ex(ccxt); b.ex.accept = True                             # the order DID go live despite the error
+    o = b.place_limit("BTC/EUR", "buy", 0.001, 60000, True, "cid-x")
+    assert o["clientOrderId"] == "cid-x" and len(b.ex.params) == 1
+    b.ex = Ex(ccxt); b.ex.accept = False                            # it did NOT go live: surface the error, no resend
+    with pytest.raises(ccxt.ExchangeError):
+        b.place_limit("BTC/EUR", "buy", 0.001, 60000, True, "cid-y")
+    assert len(b.ex.params) == 1
+
+
+def test_single_instance_lock_blocks_a_second_run(tmp_path, monkeypatch):
+    from bots.kraken.krakenbot import run as runmod
+    lock = str(tmp_path / "k.lock")
+    with runmod._SingleInstance(lock):
+        with pytest.raises(SystemExit, match="Another krakenbot run"):
+            with runmod._SingleInstance(lock):
+                pass
+    with runmod._SingleInstance(lock):                              # released afterwards
+        pass
+
+
+def test_hedge_short_without_saved_levels_gets_exits_from_its_entry(tmp_path):
+    b = FB(DOWN, pos={"PAXG/USD:USD": {"side": "short", "contracts": 0.5, "entryPrice": 90.0}})
+    hg.HedgeEngine(_hcfg(tmp_path), b, execute=True).run_once({"PAXG": 0.5})   # no state file: levels unknown
+    ex = [s for s in b.sent if s[0] == "exits"]
+    assert ex and ex[0][2] == 0.5 and ex[0][4] < 90.0 < ex[0][3]               # TP below, stop above the real entry

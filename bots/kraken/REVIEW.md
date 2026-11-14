@@ -121,7 +121,32 @@ Default settings follow the evidence: the engine is **off**, hedges **gold only*
 
 ---
 
-## 2. Your account: what happened and how to rebuild it
+## 1e. Open-source review: what the established Kraken systems do, and the holes it exposed in ours
+
+**Read (source code, not READMEs), 14 Nov 2026:** freqtrade 2026.10 (GitHub ~56,900★; its `exchange/kraken.py` and
+`exchange/krakenfutures.py`), python-kraken-sdk 3.5.1 (its Kraken error catalogue and nonce handling), jesse 3.6.1
+(Kraken candle driver and fee notes), OctoBot-Trading 2.5.13 and krakenex 2.2.2. Each was cross-checked against
+Kraken's own API docs and against ccxt 4.5.92. hummingbot (~21,200★) is not on PyPI and this session cannot read
+other GitHub repositories, so it was not inspected. Nothing downloaded was executed.
+
+| Finding (source) | Our bot before | Fixed |
+|---|---|---|
+| Kraken reports Rewards balances as `BTC.F`, `EUR.F` (freqtrade merges them; Kraken docs: *"use the base asset to transact with your USDT and USDT.F balances"*). Your screenshots show the Rewards % badge on BTC, EUR and USDG | Your BTC/EUR would read as **0**. Reconciliation would wipe the ledger, no EUR would be spendable, and `rebuild` would call your coins "locked" | `.F` merged into the base; `.S/.M/.B/.T` stay separate (locked products) |
+| `EGeneral:Temporary lockout` → ccxt `DDoSProtection` (verified in ccxt's error map) | Retried 5×, which can extend the lockout | Never retried; the run stops; stops stay on Kraken |
+| `EService:Deadline elapsed` is **unmapped** in ccxt → generic `ExchangeError` | The order loop moved to the next attempt with a new client id: a possible duplicate | Any unclassified order error → look the client id up first; never blind-resend |
+| Nonces must increase per API key (SDK); overlapping processes break that and can trigger lockouts | Nothing stopped two runs (cron overlap) from trading at once, which could double-buy | Exclusive single-instance lock (Windows `msvcrt` and Linux `fcntl`) on every command that can trade |
+| Kraken Futures fills carry no fee amount, and ccxt's average price is unreliable there (freqtrade, ccxt issue #27996) | Hedge already used the position's `entryPrice` and never fill fees | – (confirmed correct) |
+| freqtrade runs Kraken **spot** stop-losses on the exchange (`stoploss_on_exchange`, `stopLossPrice`, spot mode) | Open question | Confirms spot stop-loss orders exist on Kraken without margin |
+| Kraken OHLC = last 720 candles only (jesse: *"regardless of `since`"*; it falls back to Binance) | Already known | We use Kraken's own futures chart history instead of another exchange |
+| ccxt computes Kraken's free balance as `balance − hold_trade` (`BalanceEx`) | – | Correct; no change |
+| Hedge: if the entry succeeded but the response errored, its levels were never saved | **The short would sit with no stop indefinitely** | Missing exits are rebuilt from the live position's entry price |
+| freqtrade sends `trading_agreement: "agree"` on Kraken orders | – | **Not adopted**: not on Kraken's current AddOrder page. No undocumented parameters |
+
+**Fee stress (spot):** jesse notes Kraken's base-tier spot fees at ~0.40% taker / 0.26% maker. Kraken's public API
+no longer lists spot tiers. With 0.10% slippage on top, the momentum + harvest blend makes 25.8%/yr at 0.22%,
+24.6% at 0.40% and 23.1% at 0.60% per side, so it is not fee-fragile.
+
+
 
 **October in numbers.**
 - 242 fills: about 9× the account traded in 10 days.

@@ -246,7 +246,13 @@ class HedgeEngine:
                     self._act(f"cancel leftover exits on {sym}", b.cancel_all, sym)
                     self.state["coins"][coin] = {}
                     return {**info, "status": "hedge closed: no coins left to protect"}
-            if len(b.exit_orders(sym)) < 2 and st.get("stop") and st.get("tp"):
+            if len(b.exit_orders(sym)) < 2:
+                if not (st.get("stop") and st.get("tp")):
+                    # e.g. the entry went through but its response errored before the levels were saved:
+                    # rebuild them from the position's real entry price. A short must never sit unprotected.
+                    entry = float((pos or {}).get("entryPrice") or px)
+                    st["tp"], st["stop"] = exit_levels(closes, entry, cfg)
+                    st["entry"] = entry
                 self._act(f"re-place exits on {sym}", self._replace_exits, sym, short_qty, st["stop"], st["tp"])
             return {**info, "status": "hedged", "stop": st.get("stop"), "take_profit": st.get("tp")}
 
