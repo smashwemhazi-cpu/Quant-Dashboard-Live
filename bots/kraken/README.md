@@ -1,14 +1,14 @@
 # krakenbot
 
-A two-sleeve momentum bot for **Kraken spot, EUR pairs**. Long-only; no perps, futures, margin or currency
-conversions.
+A two-sleeve momentum bot for **Kraken spot, EUR pairs**. Long-only spot; no leverage, margin or currency
+conversions. Futures appear only in the optional hedge engine, which is off by default.
 
 - **Dual momentum (60%):** BTC or gold (PAXG), whichever is stronger and in an uptrend, otherwise EUR.
 - **Rotation (40%):** the top 2 of BTC, ETH, SOL, XRP, DOGE, LINK and gold, each only if it is in an uptrend.
 
 It rebalances weekly. Every holding gets a disaster stop-loss resting on Kraken.
 
-A second engine, **harvest**, keeps its own ledger. It holds ⅓ BTC, ⅓ gold and ⅓ EUR, and rebalances back whenever
+A second engine, **harvest**, keeps its own ledger. Under the default `growth` profile it holds 45% BTC, 45% gold and 10% EUR, and rebalances back whenever
 a weight drifts ±10 points: it sells what ran up and buys what fell. `rebuild` splits the account 50/50 between the
 two engines.
 
@@ -102,7 +102,7 @@ KRAKENBOT_PROFILE=balanced python -m bots.kraken.krakenbot.run report
   pair in `authorised_conversions`. Only EUR pairs are traded.
 - **Disaster stop** on Kraken after every fill: price × (1 − 4 × weekly volatility). It is raised weekly and never
   lowered. If the price is already through it, the bot sells. A holding that can't get a stop is sold.
-- **Kill switch:** a −35% drawdown from the peak sells everything and halts. To resume after reviewing, delete the
+- **Kill switch:** a −45% drawdown from the peak (−35% in the `balanced` profile) sells everything and halts. To resume after reviewing, delete the
   `"guard"` block in `krakenbot_state.json`.
 - **Idempotent:** a crashed run can simply be re-run. Each order has a deterministic `cl_ord_id`, so a timeout
   cannot duplicate it.

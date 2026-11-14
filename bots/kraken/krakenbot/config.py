@@ -5,7 +5,8 @@ Strategy: two momentum sleeves on Kraken SPOT, EUR pairs, rebalanced weekly.
     in an uptrend; otherwise EUR. The anchor: positive in every year tested, max drawdown ~-16%.
   * ROTATION (40%): hold the top 2 of six liquid coins plus gold by the same score, each only if in an uptrend.
     The growth engine: captures crypto bull runs, gold when crypto bleeds.
-No perps, no futures, no margin, no shorts, no currency conversions: see bots/kraken/REVIEW.md for why.
+No leverage, no margin borrowing, no currency conversions (unless authorised). Futures appear only in the optional,
+off-by-default hedge engine (hedge.py), which never shorts more than the coins it protects. See REVIEW.md.
 """
 from __future__ import annotations
 
