@@ -1,0 +1,120 @@
+# krakenbot
+
+A two-sleeve momentum bot for **Kraken spot, EUR pairs**. Long-only spot; no leverage, margin or currency
+conversions. Futures appear only in the optional hedge engine, which is off by default.
+
+- **Dual momentum (60%):** BTC or gold (PAXG), whichever is stronger and in an uptrend, otherwise EUR.
+- **Rotation (40%):** the top 2 of BTC, ETH, SOL, XRP, DOGE, LINK and gold, each only if it is in an uptrend.
+
+It rebalances weekly. Every holding gets a disaster stop-loss resting on Kraken.
+
+A second engine, **harvest**, keeps its own ledger. Under the default `growth` profile it holds 45% BTC, 45% gold and 10% EUR, and rebalances back whenever
+a weight drifts ±10 points: it sells what ran up and buys what fell. `rebuild` splits the account 50/50 between the
+two engines.
+
+Read [REVIEW.md](REVIEW.md) for the evidence, including every volatility and arbitrage idea that was tested and
+rejected (§3b), and the limits.
+
+## Install
+```bash
+pip install ccxt pandas numpy
+```
+
+## Use it in this order
+1. See what the strategy wants today. This is read-only and needs no keys.
+```bash
+python -m bots.kraken.krakenbot.run report
+```
+2. See the backtest on Kraken EUR data.
+```bash
+python -m bots.kraken.krakenbot.run backtest
+```
+3. See how your current account maps onto the strategy. This is only a plan; it needs read-only keys.
+```bash
+KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python -m bots.kraken.krakenbot.run rebuild
+```
+4. Have Kraken validate every order in that plan. Nothing is placed.
+```bash
+KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python -m bots.kraken.krakenbot.run rebuild --validate
+```
+5. Execute the plan:
+   - sell coins that are not in the strategy to EUR;
+   - adopt BTC, ETH, SOL, XRP, DOGE, LINK and PAXG into the momentum ledger;
+   - fund the harvest ledger with `--harvest-share` (default 0.5) of the account, from EUR;
+   - rebalance both engines immediately and put stops on Kraken.
+```bash
+KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python -m bots.kraken.krakenbot.run rebuild --i-understand-the-risk
+```
+6. From then on, run once a day, a few minutes after 00:00 UTC. Momentum rebalances on Mondays and catches up if a
+   week was missed. Harvest rebalances whenever its drift exceeds the band. Both check their stops every day.
+```bash
+KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python -m bots.kraken.krakenbot.run live --i-understand-the-risk --log krakenbot.log
+```
+
+`rebuild` never touches USD, USDC, USDT, USDG or anything in Earn/staking. It lists them so you can decide.
+Paper mode (`paper --capital 800 --harvest-capital 800`) runs on live public data with simulated fills.
+
+**API key permissions:** Query Funds, Query Open Orders & Trades, Query Closed Orders & Trades, Create & Modify
+Orders, Cancel/Close Orders. **Never enable Withdraw Funds.**
+
+Cron example:
+```bash
+5 0 * * * cd /path/to/Quant-Dashboard-Live && KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python3 -m bots.kraken.krakenbot.run live --i-understand-the-risk --log krakenbot.log
+```
+
+## Optional: futures hedge (off by default)
+Shorts Kraken Futures `PF_` perps against coins the harvest ledger holds, by default only gold (`PAXG`). It holds a
+short of 1× the coins while the perp is below its 200-hour average. The stop-loss and take-profit rest on Kraken as
+reduce-only orders. It never moves money, never shorts more than you hold, and refuses to trade if your account is
+on Kraken's 0.25% consumer futures fee schedule.
+
+Kraken Futures keys are separate from spot keys: `KRAKEN_FUTURES_API_KEY` / `KRAKEN_FUTURES_API_SECRET`.
+```bash
+python -m bots.kraken.krakenbot.run futures-check
+```
+```bash
+KRAKENBOT_HEDGE_ENABLED=true python -m bots.kraken.krakenbot.run hedge
+```
+```bash
+KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python -m bots.kraken.krakenbot.run futures-fund --asset EUR --amount 170 --i-understand-the-risk
+```
+```bash
+KRAKENBOT_HEDGE_ENABLED=true KRAKEN_API_KEY=... KRAKEN_API_SECRET=... KRAKEN_FUTURES_API_KEY=... KRAKEN_FUTURES_API_SECRET=... python -m bots.kraken.krakenbot.run hedge --i-understand-the-risk
+```
+- `futures-check` reads fees, the hedge signal and funding from the real exchange. With futures keys it also reads
+  your account's fee schedule, margin and positions.
+- `hedge` without the flag prints its plan and sends nothing. With keys set it also reads your real positions and
+  margin.
+- Run the hedge hourly (cron `7 * * * *`). Kraken's futures demo exchange has been retired, so there is no paper
+  venue.
+
+## Profiles
+- **`growth` (default):** volatility target 0.60, per-asset cap 75%, harvest 45% BTC / 45% gold / 10% EUR, kill
+  switch −45%. This is the highest median compound growth in the actuarial study (REVIEW.md §1f), and still the best
+  with the edge halved. No borrowing.
+- **`balanced`:** the earlier lower-exposure settings.
+```bash
+KRAKENBOT_PROFILE=balanced python -m bots.kraken.krakenbot.run report
+```
+
+## Safety
+- **No currency conversions** (EUR→USDC and similar) unless you set `allow_conversions = true` and list the exact
+  pair in `authorised_conversions`. Only EUR pairs are traded.
+- **Disaster stop** on Kraken after every fill: price × (1 − 4 × weekly volatility). It is raised weekly and never
+  lowered. If the price is already through it, the bot sells. A holding that can't get a stop is sold.
+- **Kill switch:** a −45% drawdown from the peak (−35% in the `balanced` profile) sells everything and halts. To resume after reviewing, delete the
+  `"guard"` block in `krakenbot_state.json`.
+- **Idempotent:** a crashed run can simply be re-run. Each order has a deterministic `cl_ord_id`, so a timeout
+  cannot duplicate it.
+
+## Configuration
+All settings live in `krakenbot/config.py`. Override them with `--config my.toml` or with `KRAKENBOT_<NAME>`
+environment variables, for example:
+```bash
+KRAKENBOT_DUAL_WEIGHT=0.7 KRAKENBOT_ROTATION_WEIGHT=0.3 python -m bots.kraken.krakenbot.run report
+```
+
+## Tests
+```bash
+python -m pytest -q tests/test_krakenbot.py
+```
