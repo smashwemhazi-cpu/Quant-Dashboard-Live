@@ -1,13 +1,13 @@
 """HARVEST engine: volatility harvesting ("rebalancing premium"), with its OWN ledger and state file.
 
-Hold a constant mix, by default 1/3 BTC, 1/3 tokenised gold (PAXG), 1/3 EUR. When any weight drifts more than
+Hold a constant mix: growth profile 45% BTC, 45% tokenised gold (PAXG), 10% EUR (balanced: 1/3 each). When any weight drifts more than
 `harvest_band` (10 percentage points) from its target, trade everything back to target: that sells what ran up
 and buys what fell. With two volatile, weakly correlated assets plus cash, this mechanically buys low and sells
 high. Bands are wide on purpose: only a handful of rebalances happen per year, so fees cannot eat the edge
 (your old 0.2% grid was the same idea with bands far too tight for 0.22% fees).
 
-Risk: it is always ~2/3 invested. The disaster stop is deliberately wide (8 sigma of a weekly move) because a
-tight stop would sell exactly the dips this engine exists to buy; the -35% kill switch sits on top.
+Risk: it is always ~90% invested (growth profile). The disaster stop is deliberately wide (8 sigma of a weekly move) because a
+tight stop would sell exactly the dips this engine exists to buy; the kill switch (-45% growth, -35% balanced) sits on top.
 """
 from __future__ import annotations
 
