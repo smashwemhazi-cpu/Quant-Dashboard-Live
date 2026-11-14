@@ -121,7 +121,8 @@ def test_stop_ratchets_up_only():
 
 def test_drawdown_halt_is_sticky():
     g = DrawdownGuard()
-    assert not g.update(1000, CFG) and g.update(640, CFG) and g.update(2000, CFG)
+    assert not g.update(1000, CFG) and not g.update(600, CFG)            # -40%: inside the growth profile's -45%
+    assert g.update(540, CFG) and g.update(2000, CFG)                     # -46% halts; recovery does not un-halt
 
 
 def test_rebalance_planning():
@@ -890,3 +891,15 @@ def test_hedge_short_without_saved_levels_gets_exits_from_its_entry(tmp_path):
     hg.HedgeEngine(_hcfg(tmp_path), b, execute=True).run_once({"PAXG": 0.5})   # no state file: levels unknown
     ex = [s for s in b.sent if s[0] == "exits"]
     assert ex and ex[0][2] == 0.5 and ex[0][4] < 90.0 < ex[0][3]               # TP below, stop above the real entry
+
+
+
+def test_profiles_growth_is_default_and_balanced_restores_lower_exposure():
+    g, b = load_config(env={}), load_config(env={"KRAKENBOT_PROFILE": "balanced"})
+    assert (g.profile, g.target_vol, g.max_weight, g.harvest_targets, g.max_drawdown_halt) == \
+        ("growth", 0.60, 0.75, (0.45, 0.45), 0.45)
+    assert (b.target_vol, b.max_weight, b.harvest_targets, b.max_drawdown_halt) == (0.40, 0.50, (0.3333, 0.3333), 0.35)
+    assert load_config(env={"KRAKENBOT_PROFILE": "balanced", "KRAKENBOT_MAX_WEIGHT": "0.6"}).max_weight == 0.6
+    with pytest.raises(ValueError):
+        load_config(env={"KRAKENBOT_PROFILE": "yolo"})
+    assert g.dual_weight + g.rotation_weight <= 1 and sum(g.harvest_targets) <= 1

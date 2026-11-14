@@ -19,8 +19,17 @@ FIAT_AND_STABLES = frozenset({"EUR", "USD", "GBP", "CHF", "CAD", "AUD", "JPY", "
 
 
 
+# Profiles. "growth" (default) came out of the actuarial study (REVIEW.md section 1f): highest median compound growth,
+# still best with the measured edge halved, no borrowing. "balanced" is the earlier, lower-exposure setting.
+PROFILES = {
+    "growth": {},   # = the dataclass defaults below
+    "balanced": {"target_vol": 0.40, "max_weight": 0.50, "harvest_targets": (0.3333, 0.3333), "max_drawdown_halt": 0.35},
+}
+
+
 @dataclass(frozen=True)
 class Config:
+    profile: str = "growth"
     quote: str = "EUR"
     timeframe: str = "1d"
 
@@ -34,7 +43,7 @@ class Config:
 
     # --- harvest engine (separate ledger): constant BTC/gold/EUR mix, rebalanced only on big drifts --------
     harvest_assets: tuple[str, ...] = ("BTC", "PAXG")
-    harvest_targets: tuple[float, ...] = (0.3333, 0.3333)   # the rest (~1/3) stays EUR
+    harvest_targets: tuple[float, ...] = (0.45, 0.45)   # 45% BTC, 45% gold, 10% EUR (growth profile)
     harvest_band: float = 0.10                    # rebalance when any weight is this far from its target (pp)
     harvest_stop_sigma: float = 8.0               # disaster stop, much wider: this engine is MEANT to buy dips
     harvest_state_file: str = "krakenbot_harvest_state.json"
@@ -56,14 +65,15 @@ class Config:
     rank_lookbacks: tuple[int, ...] = (30, 60, 90)  # score = mean(return over L / volatility) across L
     trend_lookbacks: tuple[int, ...] = (10, 20, 40, 80, 160)  # asset must be up over most of these to qualify
     vol_window: int = 30
-    target_vol: float = 0.40                      # annualised vol per holding -> weight = target_vol / vol / top_k
-    max_weight: float = 0.50                      # cap per asset within a sleeve
+    target_vol: float = 0.60                      # annualised vol per holding -> weight = target_vol / vol / top_k
+    max_weight: float = 0.75                      # cap per asset within a sleeve
     rebalance_weekday: int = 0                    # 0 = rebalance on Monday's daily close (acted on just after)
 
     # --- risk -----------------------------------------------------------------------------------------
     stop_sigma: float = 4.0                       # disaster stop: price x (1 - k x one-week volatility), on Kraken,
                                                   # reset only at each weekly rebalance, up only
-    max_drawdown_halt: float = 0.35               # flatten and halt: beyond anything seen in the backtest (-20%)
+    max_drawdown_halt: float = 0.45               # flatten and halt. -35% fired in 26-31% of halved-edge paths
+                                                  # for the growth profile and threw recoveries away; -45% ~8%
     cash_reserve: float = 0.03                    # never invested (fees, rounding)
 
     # --- execution ------------------------------------------------------------------------------------
@@ -87,6 +97,8 @@ class Config:
 
     def validate(self) -> "Config":
         p = []
+        if self.profile not in PROFILES:
+            p.append(f"profile must be one of {sorted(PROFILES)}, got {self.profile!r}")
         if self.mode not in {"paper", "validate", "live"}:
             p.append(f"mode must be paper|validate|live, got {self.mode!r}")
         for name, w, assets, k in self.sleeves:
@@ -188,4 +200,7 @@ def load_config(path: str | None = None, env: dict | None = None) -> Config:
         key = f"KRAKENBOT_{f.name.upper()}"
         if key in env:
             over[f.name] = _coerce(env[key], getattr(cfg, f.name))
+    profile = over.get("profile", cfg.profile)
+    for k, v in PROFILES.get(profile, {}).items():   # a profile sets its values unless you override them explicitly
+        over.setdefault(k, v)
     return replace(cfg, **over).validate()
