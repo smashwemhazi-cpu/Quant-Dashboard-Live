@@ -148,6 +148,75 @@ no longer lists spot tiers. With 0.10% slippage on top, the momentum + harvest b
 
 
 
+---
+
+## 1f. Actuarial study: maximising compound growth (the "growth" profile, now the default)
+
+**Objective.** Maximise long-run **compound** growth: the median, log-growth outcome. That is the only
+mathematically coherent version of "growth is the only priority". Past the Kelly point, more exposure *lowers*
+compound growth, because large drawdowns compound against you.
+
+**1. The return distribution** (daily, Sep 2023 → Nov 2026, after fees and slippage):
+
+| | Mean | Vol | Log-growth | Sharpe (95% CI) | Excess kurtosis | Kelly point estimate (95% band) |
+|---|---|---|---|---|---|---|
+| Momentum + harvest blend (old settings) | +24.5% | 18.4% | +22.8% | 1.33 (−0.17 … +2.84) | 5.2 | ×7.25 (×0 … ×15.4) |
+| Hold BTC | +42.6% | 46.6% | +31.8% | 0.91 (−0.39 … +2.22) | 3.5 | ×1.96 (×0 … ×4.8) |
+
+Read this as: **the edge is not statistically pinned down** (the Sharpe interval spans zero, because 3.2 years is a
+short sample), and the tails are fat. The Kelly formula therefore cannot set the bet size; simulated paths have to.
+
+**2. Leverage (borrowed exposure via perps; Kraken BTC funding cost, real + reconstructed).** Block-bootstrap
+Monte Carlo, 3 years:
+- **With the measured edge**, median wealth rises modestly past ×1, while the chance of a −50% drawdown climbs
+  steeply: 2% at ×1.5, 12% at ×2, 59% at ×3.
+- **With half the measured edge**, the growth-optimal exposure is **×1.0**. ×2 loses money, ×4 has a 12.7% chance of
+  losing 90%.
+- On the longer momentum sample, which includes the bad pre-gold year, the optimum is ×1.0–1.25.
+- **Verdict: no leverage.** Funding on levered longs (+12% in 2023, +22% in 2024 for BTC) eats the edge.
+
+**3. Unlevered exposure (your own money, no financing cost).** The old bot sat ~50% in cash even with signals on.
+Sweeping volatility target, per-asset cap and the harvest mix:
+- **Harvest: the ⅓ EUR was the biggest drag.** 45/45/10 lifts log-growth from 18.9% to 26.8% (halved edge: 8.6% →
+  11.8%; out-of-sample 10.7% → 16.2%). The drawdown deepens from −21% to −28%.
+- **Momentum:** volatility target 0.60 with a 75% cap gives 21–22% growth vs 17% at the old setting. Halved-edge
+  growth is flat across sizes, so going further adds drawdown, not growth.
+
+**4. Whole profiles, kill switch modelled in the Monte Carlo (3 years from €1,647):**
+
+| Profile | Log-growth/yr | With halved edge | Median €, kill switch −45% (halved) | P(kill switch fires) −35% / −45%, halved edge |
+|---|---|---|---|---|
+| Old (balanced) | +22.8% | +10.6% | €3,439 (€2,397) | 7% / 1% |
+| **Growth A (default)**: tv 0.60, cap 0.75, harvest 45/45/10, kill switch −45% | **+31.3%** | **+14.1%** | **€4,574 (€2,618)** | 26% / 8% |
+| B / C / D (more aggressive variants) | +30.5 … +32.7% | +13.7 … +14.6% | within noise of A | similar |
+
+A was chosen as the least concentrated of statistically equal profiles. The kill switch moved to −45%: at −35% the
+growth profile would trip it in 26–31% of halved-edge paths and throw away the recoveries. Switching it off gained
+nothing measurable, so it stays as protection against a broken model.
+
+**5. Projections, growth profile, from €1,647** (p10 / median / p90; measured edge, then **halved edge**):
+
+| Deposit/month | 1 year | 3 years | 5 years |
+|---|---|---|---|
+| €0 | €1,662 / €2,288 / €3,260 — **€1,908** | €2,527 / €4,541 / €8,211 — **€2,720** | €4,044 / €8,644 / €19,332 — **€3,519** |
+| €100 | €2,858 / €3,646 / €4,999 — **€3,204** | €6,987 / €10,705 / €17,535 — **€7,224** | €14,088 / €24,713 / €45,336 — **€13,063** |
+| €200 | €4,068 / €5,080 / €6,692 — **€4,500** | €11,228 / €16,756 / €26,215 — **€11,914** | €24,090 / €40,734 / €73,202 — **€22,573** |
+
+Median years to reach (measured | halved edge): **€10,000** = 5.3 | 10.3 (no deposits), 2.8 | 3.8 (€100/month),
+2.1 | 2.5 (€200/month). **€25,000** = 8.1 | not within 15 years (no deposits), 3.8 | 5.3 (€200/month).
+
+**Honest caveats.**
+- On the last 19 months of Kraken EUR spot (a falling market) the growth profile did slightly *worse* than the old
+  one (+0.9% vs +1.7%, drawdown −20.6% vs −15.2%). More exposure costs in falls and pays over a cycle.
+- The study sample is 2023–2026, which includes gold's bull run.
+- Deposits dominate outcomes at this account size.
+- **The bot trades your own money.** Running a brokerage (other people's money) needs a licence (MiFID in the EU),
+  client-money segregation and compliance. No code provides that.
+
+---
+
+## 2. Your account: what happened and how to rebuild it
+
 **October in numbers.**
 - 242 fills: about 9× the account traded in 10 days.
 - €40.56 in fees.

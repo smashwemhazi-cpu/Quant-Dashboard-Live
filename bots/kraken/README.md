@@ -88,6 +88,15 @@ KRAKENBOT_HEDGE_ENABLED=true KRAKEN_API_KEY=... KRAKEN_API_SECRET=... KRAKEN_FUT
 - Run the hedge hourly (cron `7 * * * *`). Kraken's futures demo exchange has been retired, so there is no paper
   venue.
 
+## Profiles
+- **`growth` (default):** volatility target 0.60, per-asset cap 75%, harvest 45% BTC / 45% gold / 10% EUR, kill
+  switch −45%. This is the highest median compound growth in the actuarial study (REVIEW.md §1f), and still the best
+  with the edge halved. No borrowing.
+- **`balanced`:** the earlier lower-exposure settings.
+```bash
+KRAKENBOT_PROFILE=balanced python -m bots.kraken.krakenbot.run report
+```
+
 ## Safety
 - **No currency conversions** (EUR→USDC and similar) unless you set `allow_conversions = true` and list the exact
   pair in `authorised_conversions`. Only EUR pairs are traded.
