@@ -688,3 +688,132 @@ def test_harvest_skips_cleanly_on_a_bad_quote(tmp_path):
     broker.md.top_of_book = lambda symbol: (100.0, 120.0, time.time() * 1000)   # 18% spread: unusable
     r = hv.HarvestEngine.load(cfg, broker, None, sleep=lambda s: None).run_once()
     assert r["status"] == "skipped"
+
+
+# =============================================================== optional futures hedge engine (guards)
+# CI cannot reach Kraken, so these use a stand-in broker; the engine was also run against the live exchange.
+from bots.kraken.krakenbot import hedge as hg
+
+
+class FB:
+    """Stand-in for FuturesBroker with the same method names."""
+    PRO = {"uid": "p", "name": "MTF Linear Rebate Fees", "tiers": [{"makerFee": 0.02, "takerFee": 0.05}]}
+    CONSUMER = {"uid": "c", "name": "Consumer MTF Linear Fees", "tiers": [{"makerFee": 0.25, "takerFee": 0.25}]}
+
+    def __init__(self, closes, margin=10_000.0, account=None, pos=None):
+        self.closes, self.margin, self.account = closes, margin, account
+        self.pos = dict(pos or {})
+        self.sent, self.exits = [], {}
+
+    def symbol(self, coin): return f"{coin}/USD:USD"
+    def hourly_closes(self, sym, n=260): return self.closes
+    def funding_now(self, sym): return 2e-5
+    def instrument_schedule(self, sym): return self.PRO
+    def account_schedules(self): return self.account if self.account is not None else []
+    def available_margin_usd(self): return self.margin
+    def positions(self): return self.pos
+    def exit_orders(self, sym): return self.exits.get(sym, [])
+    def qty(self, sym, q): return math.floor(q * 1000) / 1000
+    def cancel_all(self, sym): self.sent.append(("cancel_all", sym)); self.exits[sym] = []
+    def short(self, sym, q):
+        self.sent.append(("short", sym, q))
+        self.pos[sym] = {"side": "short", "contracts": q, "entryPrice": self.closes[-1]}
+    def buy_back(self, sym, q):
+        self.sent.append(("buy_back", sym, q))
+        p = self.pos[sym]; p["contracts"] = round(p["contracts"] - q, 9)
+        if p["contracts"] <= 0: del self.pos[sym]
+    def place_exits(self, sym, q, stop, tp):
+        self.sent.append(("exits", sym, q, stop, tp)); self.exits[sym] = [{"x": 1}, {"x": 2}]
+
+
+import math  # noqa: E402
+
+DOWN = [100 - i * 0.05 for i in range(260)]          # below its 200h average
+UP = [80 + i * 0.05 for i in range(260)]
+
+
+def _hcfg(tmp_path, **kw):
+    kw.setdefault("hedge_state_file", str(tmp_path / "h.json"))
+    return dc.replace(Config(), hedge_enabled=True, **kw)
+
+
+def test_hedge_is_off_by_default_and_sends_nothing(tmp_path):
+    b = FB(DOWN)
+    r = hg.HedgeEngine(dc.replace(Config(), hedge_state_file=str(tmp_path / "h.json")), b, execute=True).run_once({"PAXG": 1.0})
+    assert "disabled" in r["status"] and b.sent == []
+
+
+def test_hedge_opens_1x_with_exchange_stop_above_and_tp_below(tmp_path):
+    b = FB(DOWN)
+    r = hg.HedgeEngine(_hcfg(tmp_path), b, execute=True).run_once({"PAXG": 0.0782})
+    assert r["PAXG"]["status"] == "hedge opened"
+    kinds = [s[0] for s in b.sent]
+    assert kinds.index("short") < kinds.index("exits")                 # exits placed straight after the entry
+    _, _, q = next(s for s in b.sent if s[0] == "short")
+    _, _, eq, stop, tp = next(s for s in b.sent if s[0] == "exits")
+    assert q == 0.078 <= 0.0782 and eq == q and tp < DOWN[-1] < stop     # never more than held; stop above, TP below
+
+
+def test_hedge_refuses_consumer_fee_schedule_and_halts(tmp_path):
+    b = FB(DOWN, account=[FB.CONSUMER])
+    r = hg.HedgeEngine(_hcfg(tmp_path), b, execute=True).run_once({"PAXG": 1.0})
+    assert r["PAXG"]["status"].startswith("REFUSED") and not any(s[0] == "short" for s in b.sent)
+    again = hg.HedgeEngine(_hcfg(tmp_path), b, execute=True).run_once({"PAXG": 1.0})
+    assert again["status"] == "halted"                                   # sticky until a human resets it
+
+
+def test_hedge_without_margin_moves_no_money_and_sends_nothing(tmp_path):
+    b = FB(DOWN, margin=5.0)
+    r = hg.HedgeEngine(_hcfg(tmp_path), b, execute=True).run_once({"PAXG": 1.0})
+    assert r["PAXG"]["status"].startswith("NOT FUNDED") and b.sent == []
+
+
+def test_hedge_never_stays_larger_than_coins_held(tmp_path):
+    b = FB(DOWN, pos={"PAXG/USD:USD": {"side": "short", "contracts": 1.0, "entryPrice": 90}})
+    st = {"disabled": False, "coins": {"PAXG": {"stop": 95.0, "tp": 85.0}}}
+    json.dump(st, open(tmp_path / "h.json", "w"))
+    hg.HedgeEngine(_hcfg(tmp_path), b, execute=True).run_once({"PAXG": 0.4})   # coins sold: only 0.4 left
+    assert ("buy_back", "PAXG/USD:USD", 0.6) in b.sent
+    b2 = FB(DOWN, pos={"PAXG/USD:USD": {"side": "short", "contracts": 1.0, "entryPrice": 90}})
+    json.dump(st, open(tmp_path / "h.json", "w"))
+    r = hg.HedgeEngine(_hcfg(tmp_path), b2, execute=True).run_once({})          # nothing held any more
+    assert ("buy_back", "PAXG/USD:USD", 1.0) in b2.sent and "closed" in r["PAXG"]["status"]
+
+
+def test_hedge_cooldown_after_stop_and_no_hedge_in_uptrend(tmp_path):
+    json.dump({"disabled": False, "coins": {"PAXG": {"stop": 80.0, "tp": 70.0}}}, open(tmp_path / "h.json", "w"))
+    b = FB(DOWN)                                          # flat now, price (~87) above the old stop -> stop was hit
+    r = hg.HedgeEngine(_hcfg(tmp_path), b, execute=True).run_once({"PAXG": 1.0})
+    assert "cooldown" in r["PAXG"]["status"] and not any(s[0] == "short" for s in b.sent)
+    assert ("cancel_all", "PAXG/USD:USD") in b.sent       # the leftover take-profit is cleared
+    b2 = FB(UP)
+    r2 = hg.HedgeEngine(_hcfg(tmp_path, hedge_state_file=str(tmp_path / "h2.json")), b2, execute=True).run_once({"PAXG": 1.0})
+    assert r2["PAXG"]["status"] == "no hedge needed" and b2.sent == []
+
+
+def test_hedge_re_places_missing_exits_and_refuses_long_positions(tmp_path):
+    json.dump({"disabled": False, "coins": {"PAXG": {"stop": 95.0, "tp": 85.0}}}, open(tmp_path / "h.json", "w"))
+    b = FB(DOWN, pos={"PAXG/USD:USD": {"side": "short", "contracts": 1.0, "entryPrice": 90}})
+    hg.HedgeEngine(_hcfg(tmp_path), b, execute=True).run_once({"PAXG": 1.0})
+    assert ("exits", "PAXG/USD:USD", 1.0, 95.0, 85.0) in b.sent
+    b2 = FB(DOWN, pos={"PAXG/USD:USD": {"side": "long", "contracts": 1.0, "entryPrice": 90}})
+    r = hg.HedgeEngine(_hcfg(tmp_path, hedge_state_file=str(tmp_path / "h3.json")), b2, execute=True).run_once({"PAXG": 1.0})
+    assert r["PAXG"]["status"].startswith("REFUSED") and b2.sent == []
+
+
+def test_hedge_plan_mode_sends_nothing_but_reports_the_plan(tmp_path):
+    b = FB(DOWN)
+    r = hg.HedgeEngine(_hcfg(tmp_path), b, execute=False).run_once({"PAXG": 1.0})
+    assert r["PAXG"]["status"] == "would open hedge" and b.sent == [] and not (tmp_path / "h.json").exists()
+
+
+def test_hedge_targets_capped_by_real_balance_and_config_guards(tmp_path):
+    p = tmp_path / "harv.json"
+    json.dump({"holdings": {"PAXG": {"qty": 0.5}, "BTC": {"qty": 0.01}}}, open(p, "w"))
+    cfg = dc.replace(Config(), hedge_extra=("SOL=2.0",))
+    t = hg.hedge_targets(cfg, str(p), {"PAXG": {"total": 0.3}, "SOL": {"total": 5.0}})
+    assert t == {"PAXG": 0.3, "SOL": 2.0}                 # BTC not in hedge_assets; PAXG capped at what you hold
+    for bad in (dict(hedge_ratio=1.5), dict(hedge_extra=("SOL",))):
+        with pytest.raises(ValueError):
+            Config(**bad).validate()
+    assert hg.perp_id("BTC") == "PF_XBTUSD" and hg.perp_id("PAXG") == "PF_PAXGUSD"

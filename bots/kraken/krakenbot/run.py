@@ -8,6 +8,13 @@
   python -m bots.kraken.krakenbot.run live --i-understand-the-risk # the daily run (cron, 00:05 UTC): both engines
   python -m bots.kraken.krakenbot.run paper --capital 800 --harvest-capital 800   # simulated fills, live data
   python -m bots.kraken.krakenbot.run harvest --capital 500 --i-understand-the-risk # start ONLY a harvest ledger
+  python -m bots.kraken.krakenbot.run futures-check                # real Kraken Futures: fees, signal, funding (+ account with keys)
+  python -m bots.kraken.krakenbot.run hedge                        # OPTIONAL futures hedge: plan only (reads account if keys set)
+  python -m bots.kraken.krakenbot.run hedge --i-understand-the-risk           # ...and send orders (hourly cron)
+  python -m bots.kraken.krakenbot.run futures-fund --asset EUR --amount 100   # plan; add --i-understand-the-risk to send
+  python -m bots.kraken.krakenbot.run futures-withdraw --asset USD --amount 50 # futures -> spot (plan unless flagged)
+
+Futures keys are separate from spot keys on Kraken: KRAKEN_FUTURES_API_KEY / KRAKEN_FUTURES_API_SECRET.
 
 API keys: KRAKEN_API_KEY / KRAKEN_API_SECRET with ONLY Query Funds, Query Open Orders & Trades, Query Closed
 Orders & Trades, Create & Modify Orders, Cancel/Close Orders. NEVER enable Withdraw Funds.
@@ -40,9 +47,50 @@ def _print(obj) -> None:
     print(json.dumps(obj, indent=2, default=str))
 
 
+def _futures_keys() -> tuple[str, str]:
+    return os.environ.get("KRAKEN_FUTURES_API_KEY", ""), os.environ.get("KRAKEN_FUTURES_API_SECRET", "")
+
+
+def _futures(cfg, args) -> int:
+    from .broker import KrakenBroker
+    from .hedge import FuturesBroker, HedgeEngine, fund_futures, futures_check, hedge_targets, withdraw_futures
+    execute = bool(args.i_understand_the_risk)
+    fkey, fsec = _futures_keys()
+    private = bool(fkey and fsec)
+    if execute and not private:
+        raise SystemExit("KRAKEN_FUTURES_API_KEY / KRAKEN_FUTURES_API_SECRET not set (Kraken Futures keys are separate).")
+    if args.command == "futures-fund":
+        if not args.asset or not args.amount or args.amount <= 0:
+            raise SystemExit("futures-fund needs --asset and a positive --amount")
+        spot = KrakenBroker(cfg, *_keys()).ex if execute else None
+        _print(fund_futures(spot, args.asset.upper(), args.amount, execute))
+        return 0
+    fb = FuturesBroker(cfg, fkey, fsec)
+    if args.command == "futures-withdraw":
+        if not args.asset or not args.amount or args.amount <= 0:
+            raise SystemExit("futures-withdraw needs --asset and a positive --amount")
+        _print(withdraw_futures(fb.ex, args.asset.upper(), args.amount, execute))
+        return 0
+    if args.command == "futures-check":
+        _print(futures_check(fb, cfg, private))
+        return 0
+    spot_bal = None
+    key, sec = os.environ.get("KRAKEN_API_KEY", ""), os.environ.get("KRAKEN_API_SECRET", "")
+    if key and sec:
+        spot_bal = KrakenBroker(cfg, key, sec).balances()
+    elif execute:
+        raise SystemExit("hedge needs your spot keys too, to confirm you really hold the coins being hedged.")
+    targets = hedge_targets(cfg, cfg.harvest_state_file, spot_bal)
+    _print({"hedge_targets": targets, "result": HedgeEngine(cfg, fb, execute, private).run_once(targets)})
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="krakenbot")
-    ap.add_argument("command", choices=["report", "backtest", "rebuild", "paper", "validate", "live", "harvest"])
+    ap.add_argument("command", choices=["report", "backtest", "rebuild", "paper", "validate", "live", "harvest",
+                                        "hedge", "futures-check", "futures-fund", "futures-withdraw"])
+    ap.add_argument("--asset", help="futures-fund/withdraw: asset code, e.g. EUR or USD")
+    ap.add_argument("--amount", type=float, help="futures-fund/withdraw: amount")
     ap.add_argument("--config", help="TOML file with overrides")
     ap.add_argument("--capital", type=float, help="paper/live first run without rebuild: EUR the bot may manage")
     ap.add_argument("--validate", action="store_true", help="rebuild/harvest: Kraken validates, nothing is placed")
@@ -55,6 +103,9 @@ def main(argv=None) -> int:
     cfg = load_config(args.config)
 
     from .broker import KrakenBroker, PaperBroker
+
+    if args.command in ("hedge", "futures-check", "futures-fund", "futures-withdraw"):
+        return _futures(cfg, args)
 
     if args.command == "report":
         from .portfolio import harvest_report, market_report

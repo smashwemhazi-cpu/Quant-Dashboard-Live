@@ -85,7 +85,43 @@ BTC and gold both fell, the momentum engine did its job: it stayed mostly in EUR
 stops (its 14 exits were weekly rotations). The harvest engine is the part that bleeds in a year like this, by
 design. It is the engine that earns in sideways-to-up years such as 2025 (+20%).
 
+---
 
+## 1d. Futures hedge engine (optional): verified facts and evidence
+
+**Checked against Kraken itself (14 Nov 2026), not assumed:**
+- **Fees.** Kraken's public futures fee schedules include *MTF Linear Rebate Fees* (0.02% maker / 0.05% taker),
+  which is attached to `PF_XBTUSD`, `PF_SOLUSD`, `PF_DOGEUSD` and `PF_PAXGUSD`. They also include *Consumer MTF Linear
+  Fees* and *Consumer Linear Fees* at **0.25% / 0.25%**. Which one applies to your account only shows through a
+  private endpoint (`feeschedules/volumes`). The engine reads it and refuses to trade on a consumer schedule.
+- **Spot fees.** Kraken's public AssetPairs data no longer lists spot fee tiers. The spot figures here are the ones
+  measured from your October statement (0.22% / 0.30% per fill).
+- **Funding history.** The Kraken API serves only the last 12 months, whatever parameters are sent. Earlier funding
+  was **reconstructed** from Kraken's own hourly mark and index prices (the premium; Kraken's contract specs give
+  funding coefficient 8 and a cap of 0.5%). Fitted on the 12 real months: daily R² 0.69 (BTC), 0.74 (SOL),
+  0.73 (DOGE), 0.87 (gold); the means match exactly. Real funding is used wherever Kraken has it.
+- **Funding the futures wallet.** Kraken's docs: `WalletTransfer` moves funds *"from a Kraken spot wallet to a Kraken
+  Futures wallet. Note that a transfer in the other direction must be requested via the Kraken Futures API
+  endpoint for withdrawals to Spot wallets."* The endpoint is marked deprecated (it still works but receives no
+  updates).
+- **Demo exchange.** `demo-futures.kraken.com` now redirects every API path to kraken.com, so there is no paper venue.
+- **Contracts.** Contract size 1; minimum step 0.001 PAXG, 0.0001 BTC, 0.01 SOL, 1 DOGE; initial margin 1–2%.
+
+**Backtest (hourly, 2022–2026; real + reconstructed funding; exchange-resting stop/TP; +0.05% slippage):**
+
+| | Pro fees (0.02/0.05%) | Consumer fees (0.25%) |
+|---|---|---|
+| Standalone shorts (BTC, SOL, DOGE, gold) | lose money (BTC −69%, SOL −49%); DOGE +59% is one coin's crash | everything loses: −19% to −95% |
+| Hedge BTC you hold (v33-style rule) | worse than holding (+41% vs +71%); loses in 84% of 81 settings | wipes the bag out |
+| **Hedge gold you hold** | **+114% vs +102% holding, drawdown −23% vs −31%**; better return in 85% of 81 settings, shallower drawdown in 98% | worse than holding (+61% vs +102%) |
+| Gold hedge with zero funding | lags holding (11.7% vs 24.7%/yr): the edge **is** the funding shorts receive | – |
+| "Only hedge while funding pays shorts" gate | hurts gold (85% → 44% of settings better), so not used | – |
+
+Default settings follow the evidence: the engine is **off**, hedges **gold only**, and **refuses consumer fees**.
+
+---
+
+## 2. Your account: what happened and how to rebuild it
 
 **October in numbers.**
 - 242 fills: about 9× the account traded in 10 days.

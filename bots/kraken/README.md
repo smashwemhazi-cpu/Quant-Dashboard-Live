@@ -62,6 +62,32 @@ Cron example:
 5 0 * * * cd /path/to/Quant-Dashboard-Live && KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python3 -m bots.kraken.krakenbot.run live --i-understand-the-risk --log krakenbot.log
 ```
 
+## Optional: futures hedge (off by default)
+Shorts Kraken Futures `PF_` perps against coins the harvest ledger holds, by default only gold (`PAXG`). It holds a
+short of 1× the coins while the perp is below its 200-hour average. The stop-loss and take-profit rest on Kraken as
+reduce-only orders. It never moves money, never shorts more than you hold, and refuses to trade if your account is
+on Kraken's 0.25% consumer futures fee schedule.
+
+Kraken Futures keys are separate from spot keys: `KRAKEN_FUTURES_API_KEY` / `KRAKEN_FUTURES_API_SECRET`.
+```bash
+python -m bots.kraken.krakenbot.run futures-check
+```
+```bash
+KRAKENBOT_HEDGE_ENABLED=true python -m bots.kraken.krakenbot.run hedge
+```
+```bash
+KRAKEN_API_KEY=... KRAKEN_API_SECRET=... python -m bots.kraken.krakenbot.run futures-fund --asset EUR --amount 170 --i-understand-the-risk
+```
+```bash
+KRAKENBOT_HEDGE_ENABLED=true KRAKEN_API_KEY=... KRAKEN_API_SECRET=... KRAKEN_FUTURES_API_KEY=... KRAKEN_FUTURES_API_SECRET=... python -m bots.kraken.krakenbot.run hedge --i-understand-the-risk
+```
+- `futures-check` reads fees, the hedge signal and funding from the real exchange. With futures keys it also reads
+  your account's fee schedule, margin and positions.
+- `hedge` without the flag prints its plan and sends nothing. With keys set it also reads your real positions and
+  margin.
+- Run the hedge hourly (cron `7 * * * *`). Kraken's futures demo exchange has been retired, so there is no paper
+  venue.
+
 ## Safety
 - **No currency conversions** (EUR→USDC and similar) unless you set `allow_conversions = true` and list the exact
   pair in `authorised_conversions`. Only EUR pairs are traded.

@@ -39,6 +39,19 @@ class Config:
     harvest_stop_sigma: float = 8.0               # disaster stop, much wider: this engine is MEANT to buy dips
     harvest_state_file: str = "krakenbot_harvest_state.json"
 
+    # --- futures hedge engine (OPTIONAL, OFF): short PF_ perps against coins the harvest ledger holds --------
+    hedge_enabled: bool = False
+    hedge_assets: tuple[str, ...] = ("PAXG",)     # backtest: gold hedge helped; BTC hedge hurt in 84% of settings
+    hedge_extra: tuple[str, ...] = ()             # your own coins outside the bot to hedge, e.g. ("SOL=2.0",)
+    hedge_ratio: float = 1.0                      # 1.0 = net flat while hedged. Never above 1 (no net short bets)
+    hedge_sma_hours: int = 200                    # hedge only while price < its 200-hour average
+    hedge_tp_floor: float = 0.05                  # take-profit at least 5% below entry (rests on Kraken)
+    hedge_sl_floor: float = 0.03                  # stop at least 3% above entry (rests on Kraken)
+    hedge_cooldown_hours: int = 24                # after a stop-out, no new hedge on that coin for 24 h
+    hedge_margin_per_notional: float = 0.6        # require 60% of the short's value as free margin (2x + buffer)
+    hedge_max_taker_fee: float = 0.0006           # refuse to run if the account pays more (consumer schedule = 0.25%)
+    hedge_state_file: str = "krakenbot_hedge_state.json"
+
     # --- ranking (shared by both sleeves) ----------------------------------------------------------------
     rank_lookbacks: tuple[int, ...] = (30, 60, 90)  # score = mean(return over L / volatility) across L
     trend_lookbacks: tuple[int, ...] = (10, 20, 40, 80, 160)  # asset must be up over most of these to qualify
@@ -89,6 +102,16 @@ class Config:
         conv_h = [a for a in self.harvest_assets if a in FIAT_AND_STABLES]
         if conv_h and not self.allow_conversions:
             p.append(f"harvest assets {conv_h} are currencies; set allow_conversions")
+        if not 0 < self.hedge_ratio <= 1.0:
+            p.append("hedge_ratio must be in (0, 1]: a hedge may never exceed the coins it protects")
+        for item in self.hedge_extra:
+            coin, _, qty = item.partition("=")
+            try:
+                ok = bool(coin.strip()) and float(qty) > 0
+            except ValueError:
+                ok = False
+            if not ok:
+                p.append(f"hedge_extra entries must look like 'SOL=2.0', got {item!r}")
         if self.dual_weight + self.rotation_weight > 1 + 1e-9:
             p.append("dual_weight + rotation_weight must not exceed 1 (no leverage)")
         if not 0 < self.max_weight <= 1 or not 0 < self.target_vol <= 2:
